@@ -27,16 +27,19 @@ class Aircraft:
     mass: float = 1.0
     jy: float = 0.15
     wing_area: float = 0.25
+    chord: float = 0.18
     rho: float = 1.225
     gravity: float = 9.81
 
 
 @dataclass(frozen=True)
 class Bounds:
-    theta_lower: tuple[float, ...] = (-0.5, 0.0, 0.0, 0.0, -0.2, -1.0, -1.0, -0.5)
-    theta_upper: tuple[float, ...] = (0.5, 6.0, 0.2, 0.5, 0.2, 0.5, 0.1, 0.5)
-    state_lower: tuple[float, ...] = (5.0, -0.5, -0.45, -2.0)
-    state_upper: tuple[float, ...] = (30.0, 0.5, 0.45, 2.0)
+    theta_lower: tuple[float, ...] = (-0.5, 0.0, 0.0, 0.0, -1.0, -5.0, -50.0, -3.0)
+    theta_upper: tuple[float, ...] = (0.5, 6.0, 0.2, 0.5, 1.0, 3.0, 0.0, 3.0)
+    # outer state box for shooting nodes/initial states; generous envelope so
+    # feasible trajectories are never clipped
+    state_lower: tuple[float, ...] = (3.0, -0.8, -1.25, -3.5)
+    state_upper: tuple[float, ...] = (40.0, 0.8, 1.25, 3.5)
 
 
 @dataclass
@@ -51,15 +54,34 @@ class TestCase:
 
 
 def true_theta() -> np.ndarray:
-    return np.array([0.10, 3.00, 0.030, 0.10, 0.010, -0.100, -0.100, 0.100])
+    # Standard non-dimensional coefficients: M = Cm qbar S cbar with
+    # Cm = Cm0 + Cma a + Cmq (cbar q / 2V) + Cmde de.
+    return np.array([0.10, 3.00, 0.030, 0.10, 0.05, -0.60, -12.0, 0.60])
 
 
 def initial_theta() -> np.ndarray:
-    return np.array([-0.050, 4.800, 0.080, 0.350, 0.060, 0.050, -0.350, 0.020])
+    return np.array([-0.050, 4.800, 0.080, 0.350, 0.300, 0.300, -28.0, 0.120])
 
 
-def trim_state() -> np.ndarray:
-    return np.array([15.0, 0.050, 0.0, 0.0])
+def trim_state(theta: np.ndarray | None = None, aircraft: Aircraft | None = None, speed: float = 15.0) -> np.ndarray:
+    """Level-flight equilibrium: solve the lift equation for alpha.
+
+    Fixed-point iteration includes the thrust component of lift
+    (L + T sin(alpha) = m g with T = D / cos(alpha)), so eom() evaluates to
+    zero at the returned state together with trim_controls().
+    """
+    theta = true_theta() if theta is None else theta
+    aircraft = aircraft or Aircraft()
+    cl0, cla, cd0, k_drag = theta[0], theta[1], theta[2], theta[3]
+    qbar_s = 0.5 * aircraft.rho * speed**2 * aircraft.wing_area
+    weight = aircraft.mass * aircraft.gravity
+    alpha = (weight / qbar_s - cl0) / cla
+    for _ in range(20):
+        cl = cl0 + cla * alpha
+        cd = cd0 + k_drag * cl**2
+        thrust = cd * qbar_s / max(np.cos(alpha), 0.2)
+        alpha = ((weight - thrust * np.sin(alpha)) / qbar_s - cl0) / cla
+    return np.array([speed, alpha, 0.0, 0.0])
 
 
 def trim_controls(theta: np.ndarray, aircraft: Aircraft, x_trim: np.ndarray) -> np.ndarray:
@@ -70,12 +92,18 @@ def trim_controls(theta: np.ndarray, aircraft: Aircraft, x_trim: np.ndarray) -> 
     cd = cd0 + k_drag * cl**2
     drag = cd * qbar * aircraft.wing_area
     thrust = drag / max(np.cos(alpha), 0.2)
-    elevator = -(cm0 + cma * alpha + cmq * q_rate) / cme
+    q_hat = aircraft.chord * q_rate / (2.0 * max(v, 3.0))
+    elevator = -(cm0 + cma * alpha + cmq * q_hat) / cme
     return np.array([thrust, elevator])
 
 
 def make_time(duration: float = 30.0, dt: float = 0.1) -> np.ndarray:
     return np.arange(0.0, duration + 0.5 * dt, dt)
+
+
+# Keeps the benchmark inside the linear-aero envelope (|alpha| < ~20 deg) with
+# the realistic pitch damping of the non-dimensionalized model.
+EXCITATION_SCALE = 0.35
 
 
 def excitation(t: np.ndarray, u_trim: np.ndarray, scale: float = 1.0) -> np.ndarray:
@@ -90,26 +118,34 @@ def excitation(t: np.ndarray, u_trim: np.ndarray, scale: float = 1.0) -> np.ndar
         u_trim[1]
         + scale * 0.070 * np.sin(0.72 * t)
         + scale * 0.035 * np.sin(1.73 * t + 0.5)
+        # short-period coverage (~6.8 rad/s) so the pitch derivatives are identifiable
+        + scale * 0.030 * np.sin(4.5 * t + 0.3)
+        + scale * 0.025 * np.sin(7.0 * t + 0.8)
         - scale * 0.055 * np.where((t > 10.0) & (t < 13.5), 1.0, 0.0)
         + scale * 0.045 * np.where((t > 19.0) & (t < 22.0), 1.0, 0.0)
     )
     return np.column_stack((np.clip(thrust, 0.0, 3.0), np.clip(elevator, -0.35, 0.35)))
 
 
-def validation_excitation(t: np.ndarray, u_trim: np.ndarray) -> np.ndarray:
-    thrust = u_trim[0] + 0.18 * np.sin(0.37 * t + 0.9) + 0.08 * np.sin(1.21 * t)
-    elevator = u_trim[1] + 0.055 * np.sin(0.55 * t + 0.4) - 0.040 * np.sin(1.37 * t)
+def validation_excitation(t: np.ndarray, u_trim: np.ndarray, scale: float = EXCITATION_SCALE) -> np.ndarray:
+    thrust = u_trim[0] + scale * (0.18 * np.sin(0.37 * t + 0.9) + 0.08 * np.sin(1.21 * t))
+    elevator = u_trim[1] + scale * (
+        0.055 * np.sin(0.55 * t + 0.4)
+        - 0.040 * np.sin(1.37 * t)
+        + 0.025 * np.sin(5.3 * t + 0.9)
+    )
     return np.column_stack((np.clip(thrust, 0.0, 3.0), np.clip(elevator, -0.35, 0.35)))
 
 
-def multisine_excitation(t: np.ndarray, u_trim: np.ndarray) -> np.ndarray:
-    thrust = u_trim[0] + 0.10 * np.sin(0.4 * t) + 0.08 * np.sin(0.9 * t + 0.7)
-    elevator = (
-        u_trim[1]
-        + 0.035 * np.sin(0.35 * t)
+def multisine_excitation(t: np.ndarray, u_trim: np.ndarray, scale: float = EXCITATION_SCALE) -> np.ndarray:
+    thrust = u_trim[0] + scale * (0.10 * np.sin(0.4 * t) + 0.08 * np.sin(0.9 * t + 0.7))
+    elevator = u_trim[1] + scale * (
+        0.035 * np.sin(0.35 * t)
         + 0.030 * np.sin(0.75 * t + 0.3)
         + 0.020 * np.sin(1.45 * t + 1.1)
         + 0.015 * np.sin(2.10 * t + 0.5)
+        + 0.015 * np.sin(4.20 * t + 0.2)
+        + 0.012 * np.sin(6.80 * t + 1.3)
     )
     return np.column_stack((np.clip(thrust, 0.0, 3.0), np.clip(elevator, -0.35, 0.35)))
 
@@ -145,12 +181,13 @@ def eom(x: np.ndarray, u: np.ndarray, theta: np.ndarray, aircraft: Aircraft, gus
     v = max(v, 3.0)
     cl0, cla, cd0, k_drag, cm0, cma, cmq, cme = theta
     qbar = 0.5 * aircraft.rho * v**2
+    q_hat = aircraft.chord * q_rate / (2.0 * v)
     cl = cl0 + cla * alpha
     cd = cd0 + k_drag * cl**2
-    cm = cm0 + cma * alpha + cmq * q_rate + cme * elevator
+    cm = cm0 + cma * alpha + cmq * q_hat + cme * elevator
     lift = cl * qbar * aircraft.wing_area
     drag = cd * qbar * aircraft.wing_area
-    moment = cm * qbar * aircraft.wing_area
+    moment = cm * qbar * aircraft.wing_area * aircraft.chord
     v_dot = (-drag + thrust * np.cos(alpha) - aircraft.mass * aircraft.gravity * np.sin(gamma)) / aircraft.mass + gust
     gamma_dot = (lift + thrust * np.sin(alpha) - aircraft.mass * aircraft.gravity * np.cos(gamma)) / (
         aircraft.mass * v
@@ -207,7 +244,7 @@ def make_cases(duration: float, dt: float, seed: int) -> list[TestCase]:
     x0 = trim_state()
     t = make_time(duration, dt)
     u_trim = trim_controls(theta, aircraft, x0)
-    u_cmd = excitation(t, u_trim)
+    u_cmd = excitation(t, u_trim, scale=EXCITATION_SCALE)
     rng = np.random.default_rng(seed)
 
     noise_std = np.array([0.08, 0.0040, 0.0040, 0.0150])

@@ -47,20 +47,28 @@ class Aircraft:
     mass: float = 1.0
     jy: float = 0.15
     wing_area: float = 0.25
+    chord: float = 0.18
     rho: float = 1.225
     gravity: float = 9.81
 
 
 @dataclass(frozen=True)
 class NominalAero:
+    """Standard non-dimensional aerodynamic coefficients.
+
+    Cm = Cm0 + Cma a + Cmq (cbar q / 2V) + Cmde de with M = Cm qbar S cbar.
+    The (cbar q / 2V) rate scaling keeps Cmq dimensionless and makes pitch
+    damping speed-dependent.
+    """
+
     c_l0: float = 0.10
     c_l_alpha: float = 3.00
     c_d0: float = 0.030
     k: float = 0.10
-    c_m0: float = 0.010
-    c_m_alpha: float = -0.100
-    c_m_q: float = -0.100
-    c_m_delta_e: float = 0.100
+    c_m0: float = 0.05
+    c_m_alpha: float = -0.60
+    c_m_q: float = -12.0
+    c_m_delta_e: float = 0.60
 
     def as_array(self) -> np.ndarray:
         return np.array(
@@ -101,7 +109,7 @@ class SimulationConfig:
     mocap_smoothing_window: int = 21
     process_disturbance: bool = False
     aero_variation: float = 0.0
-    max_resample_attempts: int = 30
+    max_resample_attempts: int = 80
 
     def __post_init__(self) -> None:
         if not np.isclose(self.dt, MOCAP_DT):
@@ -145,11 +153,12 @@ def trim_state(aircraft: Aircraft, aero: NominalAero, speed: float = 15.0) -> np
 
 def trim_controls(aircraft: Aircraft, aero: NominalAero, x_trim: np.ndarray) -> np.ndarray:
     v, alpha, _, q_rate = x_trim
-    coeff = nominal_coefficients(x_trim, np.array([0.0, 0.0]), aero)
+    coeff = nominal_coefficients(x_trim, np.array([0.0, 0.0]), aero, aircraft)
     qbar = dynamic_pressure(v, aircraft)
     drag = coeff[1] * qbar * aircraft.wing_area
     thrust = drag / max(np.cos(alpha), 0.25)
-    elevator = -(aero.c_m0 + aero.c_m_alpha * alpha + aero.c_m_q * q_rate) / aero.c_m_delta_e
+    q_hat = pitch_rate_hat(v, q_rate, aircraft)
+    elevator = -(aero.c_m0 + aero.c_m_alpha * alpha + aero.c_m_q * q_hat) / aero.c_m_delta_e
     return np.array([thrust, np.clip(elevator, -0.30, 0.30)])
 
 
@@ -157,12 +166,17 @@ def dynamic_pressure(v: float, aircraft: Aircraft) -> float:
     return 0.5 * aircraft.rho * max(v, 3.0) ** 2
 
 
-def nominal_coefficients(x: np.ndarray, u: np.ndarray, aero: NominalAero) -> np.ndarray:
-    _, alpha, _, q_rate = x
+def pitch_rate_hat(v: float, q_rate: float, aircraft: Aircraft) -> float:
+    return aircraft.chord * q_rate / (2.0 * max(v, 3.0))
+
+
+def nominal_coefficients(x: np.ndarray, u: np.ndarray, aero: NominalAero, aircraft: Aircraft = Aircraft()) -> np.ndarray:
+    v, alpha, _, q_rate = x
     _, elevator = u
+    q_hat = pitch_rate_hat(v, q_rate, aircraft)
     c_l = aero.c_l0 + aero.c_l_alpha * alpha
     c_d = aero.c_d0 + aero.k * c_l**2
-    c_m = aero.c_m0 + aero.c_m_alpha * alpha + aero.c_m_q * q_rate + aero.c_m_delta_e * elevator
+    c_m = aero.c_m0 + aero.c_m_alpha * alpha + aero.c_m_q * q_hat + aero.c_m_delta_e * elevator
     return np.array([c_l, c_d, c_m])
 
 
@@ -206,10 +220,13 @@ def nonlinear_residual_coefficients(
     # The pitching moment has a mild pre-stall residual and a post-stall
     # nose-down break.  For positive alpha this is negative, matching the
     # recovery tendency of a conventional trainer wing/tail combination.
-    d_c_m = -0.006 * a_ref**3 + 0.006 * a_ref * e_ref + 0.004 * np.tanh(q_ref) * abs(a_ref)
-    d_c_m += 0.0025 * np.sin(2.0 * gamma)
-    d_c_m += -stall_gate * (0.075 + 0.55 * alpha_excess) * alpha_sign
-    d_c_m += -0.018 * stall_gate * np.tanh(e_ref)
+    # Values are in the standard Cm normalization (M = Cm qbar S cbar); the
+    # post-stall break must dominate the attached Cma term so held high-alpha
+    # probes recover instead of departing.
+    d_c_m = -0.033 * a_ref**3 + 0.033 * a_ref * e_ref + 0.022 * np.tanh(q_ref) * abs(a_ref)
+    d_c_m += 0.014 * np.sin(2.0 * gamma)
+    d_c_m += -stall_gate * (0.42 + 3.0 * alpha_excess) * alpha_sign
+    d_c_m += -0.10 * stall_gate * np.tanh(e_ref)
 
     d_c_l = c_l_true - c_l_attached
     return scale * np.array([d_c_l, d_c_d, d_c_m])
@@ -221,7 +238,9 @@ def true_coefficients(x: np.ndarray, u: np.ndarray, aero: NominalAero, scale: fl
 
 def loads_from_coefficients(x: np.ndarray, coeff: np.ndarray, aircraft: Aircraft) -> np.ndarray:
     qbar = dynamic_pressure(x[0], aircraft)
-    return coeff * qbar * aircraft.wing_area
+    loads = coeff * qbar * aircraft.wing_area
+    loads[..., 2] *= aircraft.chord
+    return loads
 
 
 def dynamics(
@@ -347,8 +366,14 @@ def random_command(
     elevator = np.full_like(t, u_trim[1])
     freq_scale = 1.0 if split == "train" else 1.18
 
-    for _ in range(4):
-        freq = freq_scale * rng.uniform(0.12, 1.10)
+    # Thrust content avoids the lightly damped phugoid band (~0.67 rad/s):
+    # one slow component below it plus faster components above it, so 40 s
+    # open-loop trials do not resonantly pump the phugoid out of the envelope.
+    freq = freq_scale * rng.uniform(0.08, 0.25)
+    phase = rng.uniform(0.0, 2.0 * np.pi)
+    thrust += rng.uniform(0.025, 0.080) * np.sin(freq * t + phase)
+    for _ in range(3):
+        freq = freq_scale * rng.uniform(1.30, 2.60)
         phase = rng.uniform(0.0, 2.0 * np.pi)
         thrust += rng.uniform(0.025, 0.090) * np.sin(freq * t + phase)
 
@@ -407,7 +432,9 @@ def sine_sweep_command(
     command = open_loop_command(t, u_trim, rng, split=split)
     thrust = command[:, 0].copy()
     elevator = command[:, 1].copy()
-    f0 = rng.uniform(0.04, 0.08)
+    # start frequency adapts to the record length so short flight-test
+    # records still complete their lowest sweep cycle
+    f0 = rng.uniform(max(0.04, 1.0 / duration), max(0.08, 2.0 / duration))
     f1 = rng.uniform(1.80, 3.20) if split == "train" else rng.uniform(2.10, 3.60)
     phase0 = rng.uniform(0.0, 2.0 * np.pi)
     sweep_rate = (f1 - f0) / duration
@@ -417,19 +444,23 @@ def sine_sweep_command(
     elevator += amp * envelope * np.sin(phase)
     elevator += 0.018 * envelope * np.sin(2.0 * phase + rng.uniform(0.0, 2.0 * np.pi))
 
-    # Add deterministic high-alpha dwell segments so the frequency-rich dataset
+    # Add deterministic high-alpha probe segments so the frequency-rich dataset
     # still samples separated-flow behavior instead of remaining a small-signal
-    # linear frequency-response test.
+    # linear frequency-response test. Brief pull-and-release probes sized for
+    # the realistic pitch dynamics (long held deflections would loop out of
+    # the gamma envelope).
     centers = np.linspace(0.16 * duration, 0.82 * duration, 6 if split == "train" else 5)
     centers += rng.uniform(-0.025 * duration, 0.025 * duration, size=len(centers))
     for center in centers:
-        width = rng.uniform(2.8, 5.4)
+        width = rng.uniform(0.8, 1.8)
         pulse = 0.5 * (np.tanh(4.2 * (t - center)) - np.tanh(4.2 * (t - center - width)))
-        elevator += rng.uniform(0.330, 0.460) * pulse
-        thrust -= rng.uniform(0.240, 0.620) * pulse
+        elevator += rng.uniform(0.200, 0.300) * pulse
+        thrust -= rng.uniform(0.100, 0.300) * pulse
 
+    # Slow speed variation below the lightly damped phugoid (~0.107 Hz) to
+    # avoid resonant pumping during the open-loop sweep.
     thrust_phase = rng.uniform(0.0, 2.0 * np.pi)
-    thrust += rng.uniform(0.10, 0.24) * np.sin(2.0 * np.pi * rng.uniform(0.04, 0.14) * t + thrust_phase)
+    thrust += rng.uniform(0.05, 0.12) * np.sin(2.0 * np.pi * rng.uniform(0.015, 0.05) * t + thrust_phase)
     return np.column_stack((np.clip(thrust, 0.08, 2.80), np.clip(elevator, -0.35, 0.35)))
 
 
@@ -484,35 +515,40 @@ def aggressive_command(
 
     # Longer pull-up and pushover pulses move the trajectory away from trim so
     # the residual coefficient model is no longer well approximated by a local
-    # Taylor expansion.
+    # Taylor expansion. Amplitudes are sized for the realistic pitch dynamics:
+    # a held elevator now produces sustained pitch rate, so long large pulses
+    # would loop the aircraft out of the gamma envelope.
     pulse_count = 5 if split == "train" else 4
     centers = np.linspace(0.12 * duration, 0.84 * duration, pulse_count)
     centers += rng.uniform(-0.035 * duration, 0.035 * duration, size=pulse_count)
     for center in centers:
-        width = rng.uniform(0.70, 2.10)
+        width = rng.uniform(0.50, 1.20)
         sign = rng.choice([-1.0, 1.0])
         pulse = 0.5 * (np.tanh(6.0 * (t - center)) - np.tanh(6.0 * (t - center - width)))
-        elevator += sign * rng.uniform(0.130, 0.230) * pulse
-        thrust += -sign * rng.uniform(0.150, 0.360) * pulse
+        elevator += sign * rng.uniform(0.070, 0.130) * pulse
+        thrust += -sign * rng.uniform(0.080, 0.200) * pulse
 
-    # Dedicated high-alpha probes deliberately enter the smooth stall region.
-    # These are separated from the random doublets so the benchmark contains
-    # repeatable off-nominal lift rollover and drag-rise data.
+    # Dedicated high-alpha probes deliberately enter the smooth stall region:
+    # a brief pull to past stall onset followed by release, like a real
+    # stall-probe maneuver, rather than the multi-second held deflections the
+    # old quasi-static pitch model tolerated.
     stall_probe_count = 7 if split == "train" else 6
     centers = np.linspace(0.14 * duration, 0.82 * duration, stall_probe_count)
     centers += rng.uniform(-0.030 * duration, 0.030 * duration, size=stall_probe_count)
     for center in centers:
-        width = rng.uniform(3.0, 6.0)
+        width = rng.uniform(0.8, 1.6)
         pulse = 0.5 * (np.tanh(4.5 * (t - center)) - np.tanh(4.5 * (t - center - width)))
-        elevator += rng.uniform(0.360, 0.520) * pulse
-        thrust -= rng.uniform(0.300, 0.760) * pulse
+        elevator += rng.uniform(0.200, 0.320) * pulse
+        thrust -= rng.uniform(0.100, 0.300) * pulse
 
     # Slow throttle excursions create speed variation, which changes dynamic
-    # pressure and makes coefficient errors translate into different load errors.
+    # pressure and makes coefficient errors translate into different load
+    # errors. Kept well below the lightly damped phugoid (~0.107 Hz) so the
+    # open-loop trial does not resonantly pump it out of the envelope.
     for _ in range(3):
         phase = rng.uniform(0.0, 2.0 * np.pi)
-        freq = rng.uniform(0.035, 0.10)
-        thrust += rng.uniform(0.14, 0.32) * np.sin(2.0 * np.pi * freq * t + phase)
+        freq = rng.uniform(0.015, 0.045)
+        thrust += rng.uniform(0.06, 0.15) * np.sin(2.0 * np.pi * freq * t + phase)
 
     return np.column_stack((np.clip(thrust, 0.08, 2.80), np.clip(elevator, -0.35, 0.35)))
 
@@ -619,13 +655,16 @@ def sample_initial_state(
     split: Literal["train", "validation"],
 ) -> np.ndarray:
     if dataset_mode in {"aggressive", "sine_sweep"}:
+        # Initial regimes sized for the realistic pitch dynamics: large initial
+        # gamma/Q now integrates into a departure before the open-loop command
+        # can counteract it, so the off-trim starts are kept recoverable.
         validation_shift = split == "validation"
         regimes = [
-            ((12.5, 18.0), (-3.0, 8.0), (-8.0, 8.0), (-35.0, 35.0)),
-            ((7.5, 11.5), (11.0, 20.0) if validation_shift else (9.0, 17.0), (-12.0, 16.0), (-30.0, 55.0)),
-            ((9.5, 15.0), (7.0, 16.0) if validation_shift else (5.0, 14.0), (10.0, 32.0), (20.0, 90.0)),
-            ((8.5, 16.0), (-2.0, 10.0), (-35.0, -8.0), (-95.0, -20.0)),
-            ((20.0, 29.0), (-5.0, 4.0), (-28.0, 5.0), (-50.0, 25.0)),
+            ((12.5, 18.0), (-3.0, 8.0), (-8.0, 8.0), (-30.0, 30.0)),
+            ((8.5, 12.0), (10.0, 18.0) if validation_shift else (8.0, 16.0), (-8.0, 10.0), (-25.0, 40.0)),
+            ((10.0, 15.0), (5.0, 13.0) if validation_shift else (4.0, 12.0), (5.0, 18.0), (10.0, 50.0)),
+            ((9.0, 16.0), (-2.0, 8.0), (-20.0, -5.0), (-55.0, -10.0)),
+            ((18.0, 26.0), (-4.0, 4.0), (-15.0, 4.0), (-35.0, 20.0)),
         ]
     elif dataset_mode in {"safe_loop", "sine_sweep_safe", "aggressive_safe", "proprietary_autopilot"}:
         regimes = [

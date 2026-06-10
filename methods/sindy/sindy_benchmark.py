@@ -34,7 +34,12 @@ class SindyModel:
 
 def smooth_and_derivative(y: np.ndarray, dt: float, window: int, polyorder: int) -> tuple[np.ndarray, np.ndarray]:
     window = min(window, len(y) - (1 - len(y) % 2))
-    window = max(window if window % 2 == 1 else window - 1, polyorder + 2 + (polyorder + 2) % 2)
+    if window % 2 == 0:
+        window -= 1
+    min_window = polyorder + 2
+    if min_window % 2 == 0:
+        min_window += 1
+    window = max(window, min_window)
     smoothed = savgol_filter(y, window_length=window, polyorder=polyorder, axis=0, mode="interp")
     derivative = finite_difference_derivative(smoothed, dt)
     return smoothed, derivative
@@ -60,10 +65,13 @@ def library(x: np.ndarray, u: np.ndarray) -> tuple[np.ndarray, list[str]]:
         alpha**2,
         gamma**2,
         q_rate**2,
-        np.sin(alpha),
-        np.sin(gamma),
-        np.cos(alpha),
-        np.cos(gamma),
+        # Trig features carry only the content beyond their low-order Taylor
+        # terms; the raw sin/cos columns are numerically collinear with the
+        # alpha/gamma polynomial features at benchmark angles.
+        np.sin(alpha) - alpha,
+        np.sin(gamma) - gamma,
+        np.cos(alpha) - 1.0 + 0.5 * alpha**2,
+        np.cos(gamma) - 1.0 + 0.5 * gamma**2,
     ]
     names = [
         "1",
@@ -82,10 +90,10 @@ def library(x: np.ndarray, u: np.ndarray) -> tuple[np.ndarray, list[str]]:
         "alpha^2",
         "gamma^2",
         "Q^2",
-        "sin(alpha)",
-        "sin(gamma)",
-        "cos(alpha)",
-        "cos(gamma)",
+        "sin(alpha)-alpha",
+        "sin(gamma)-gamma",
+        "cos(alpha)-1+alpha^2/2",
+        "cos(gamma)-1+gamma^2/2",
     ]
     return np.column_stack(columns), names
 
@@ -121,11 +129,13 @@ def fit_sindy(case: TestCase, dt: float, threshold: float, ridge: float, window:
     x_scale = theta.std(axis=0)
     x_scale[x_scale < 1e-12] = 1.0
     theta_scaled = (theta - x_mean) / x_scale
-    coefficients_scaled, active = sequential_thresholded_ls(theta_scaled, xdot, threshold, ridge, iterations=8)
+    coefficients_scaled, _ = sequential_thresholded_ls(theta_scaled, xdot, threshold, ridge, iterations=8)
     coefficients = coefficients_scaled / x_scale[:, None]
     intercept = -(x_mean / x_scale) @ coefficients_scaled
     coefficients[0, :] += intercept
-    return SindyModel(coefficients=coefficients, active=np.abs(coefficients) > threshold, feature_names=names, x_mean=x_mean, x_scale=x_scale)
+    # Report the terms the simulated model actually uses (exact nonzero
+    # pattern after de-standardization), not a re-threshold in unscaled units.
+    return SindyModel(coefficients=coefficients, active=coefficients != 0.0, feature_names=names, x_mean=x_mean, x_scale=x_scale)
 
 
 def rhs(model: SindyModel, x: np.ndarray, u: np.ndarray) -> np.ndarray:
@@ -209,11 +219,11 @@ def write_coefficients(model_by_case: dict[str, SindyModel]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--duration", type=float, default=30.0)
-    parser.add_argument("--dt", type=float, default=0.1)
+    parser.add_argument("--dt", type=float, default=0.02)
     parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--threshold", type=float, default=0.04)
-    parser.add_argument("--ridge", type=float, default=1e-6)
-    parser.add_argument("--smooth-window", type=int, default=17)
+    parser.add_argument("--threshold", type=float, default=0.15)
+    parser.add_argument("--ridge", type=float, default=1e-3)
+    parser.add_argument("--smooth-window", type=int, default=9)
     parser.add_argument("--polyorder", type=int, default=3)
     args = parser.parse_args()
 

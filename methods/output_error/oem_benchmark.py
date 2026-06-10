@@ -50,16 +50,19 @@ class Aircraft:
     mass: float = 1.0
     jy: float = 0.15
     wing_area: float = 0.25
+    chord: float = 0.18
     rho: float = 1.225
     gravity: float = 9.81
 
 
 @dataclass(frozen=True)
 class Bounds:
-    theta_lower: tuple[float, ...] = (-0.5, 0.0, 0.0, 0.0, -0.2, -1.0, -1.0, -0.5)
-    theta_upper: tuple[float, ...] = (0.5, 6.0, 0.2, 0.5, 0.2, 0.5, 0.1, 0.5)
-    state_lower: tuple[float, ...] = (5.0, -0.5, -0.45, -2.0)
-    state_upper: tuple[float, ...] = (30.0, 0.5, 0.45, 2.0)
+    theta_lower: tuple[float, ...] = (-0.5, 0.0, 0.0, 0.0, -1.0, -5.0, -50.0, -3.0)
+    theta_upper: tuple[float, ...] = (0.5, 6.0, 0.2, 0.5, 1.0, 3.0, 0.0, 3.0)
+    # outer state box for shooting nodes/initial states; generous envelope so
+    # feasible trajectories are never clipped
+    state_lower: tuple[float, ...] = (3.0, -0.8, -1.25, -3.5)
+    state_upper: tuple[float, ...] = (40.0, 0.8, 1.25, 3.5)
 
 
 @dataclass
@@ -87,11 +90,27 @@ class TestCase:
 
 
 def true_theta() -> np.ndarray:
-    return np.array([0.10, 3.00, 0.030, 0.10, 0.010, -0.100, -0.100, 0.100])
+    # Standard non-dimensional coefficients: M = Cm qbar S cbar with
+    # Cm = Cm0 + Cma a + Cmq (cbar q / 2V) + Cmde de.
+    return np.array([0.10, 3.00, 0.030, 0.10, 0.05, -0.60, -12.0, 0.60])
 
 
 def initial_theta() -> np.ndarray:
-    return np.array([-0.050, 4.800, 0.080, 0.350, 0.060, 0.050, -0.350, 0.020])
+    return np.array([-0.050, 4.800, 0.080, 0.350, 0.300, 0.300, -28.0, 0.120])
+
+
+def trim_state(theta: np.ndarray, aircraft: Aircraft, speed: float = 15.0) -> np.ndarray:
+    """Level-flight equilibrium: solve the lift equation for alpha (see common/benchmark.py)."""
+    cl0, cla, cd0, k_drag = theta[0], theta[1], theta[2], theta[3]
+    qbar_s = 0.5 * aircraft.rho * speed**2 * aircraft.wing_area
+    weight = aircraft.mass * aircraft.gravity
+    alpha = (weight / qbar_s - cl0) / cla
+    for _ in range(20):
+        cl = cl0 + cla * alpha
+        cd = cd0 + k_drag * cl**2
+        thrust = cd * qbar_s / max(np.cos(alpha), 0.2)
+        alpha = ((weight - thrust * np.sin(alpha)) / qbar_s - cl0) / cla
+    return np.array([speed, alpha, 0.0, 0.0])
 
 
 def trim_controls(theta: np.ndarray, aircraft: Aircraft, x_trim: np.ndarray) -> np.ndarray:
@@ -102,7 +121,8 @@ def trim_controls(theta: np.ndarray, aircraft: Aircraft, x_trim: np.ndarray) -> 
     cd = cd0 + k_drag * cl**2
     drag = cd * qbar * aircraft.wing_area
     thrust = drag / max(np.cos(alpha), 0.2)
-    elevator = -(cm0 + cma * alpha + cmq * q_rate) / cme
+    q_hat = aircraft.chord * q_rate / (2.0 * max(v, 3.0))
+    elevator = -(cm0 + cma * alpha + cmq * q_hat) / cme
     return np.array([thrust, elevator])
 
 
@@ -110,20 +130,28 @@ def make_time(duration: float = 30.0, dt: float = 0.1) -> np.ndarray:
     return np.arange(0.0, duration + 0.5 * dt, dt)
 
 
-def excitation(t: np.ndarray, u_trim: np.ndarray) -> np.ndarray:
+# Keeps the benchmark inside the linear-aero envelope (|alpha| < ~20 deg) with
+# the realistic pitch damping of the non-dimensionalized model.
+EXCITATION_SCALE = 0.35
+
+
+def excitation(t: np.ndarray, u_trim: np.ndarray, scale: float = EXCITATION_SCALE) -> np.ndarray:
     thrust = (
         u_trim[0]
-        + 0.22 * np.sin(0.23 * t + 0.2)
-        + 0.12 * np.sin(0.91 * t)
-        + 0.10 * np.where((t > 8.0) & (t < 14.0), 1.0, 0.0)
-        - 0.08 * np.where((t > 20.0) & (t < 25.0), 1.0, 0.0)
+        + scale * 0.22 * np.sin(0.23 * t + 0.2)
+        + scale * 0.12 * np.sin(0.91 * t)
+        + scale * 0.10 * np.where((t > 8.0) & (t < 14.0), 1.0, 0.0)
+        - scale * 0.08 * np.where((t > 20.0) & (t < 25.0), 1.0, 0.0)
     )
     elevator = (
         u_trim[1]
-        + 0.070 * np.sin(0.72 * t)
-        + 0.035 * np.sin(1.73 * t + 0.5)
-        - 0.055 * np.where((t > 10.0) & (t < 13.5), 1.0, 0.0)
-        + 0.045 * np.where((t > 19.0) & (t < 22.0), 1.0, 0.0)
+        + scale * 0.070 * np.sin(0.72 * t)
+        + scale * 0.035 * np.sin(1.73 * t + 0.5)
+        # short-period coverage (~6.8 rad/s) so the pitch derivatives are identifiable
+        + scale * 0.030 * np.sin(4.5 * t + 0.3)
+        + scale * 0.025 * np.sin(7.0 * t + 0.8)
+        - scale * 0.055 * np.where((t > 10.0) & (t < 13.5), 1.0, 0.0)
+        + scale * 0.045 * np.where((t > 19.0) & (t < 22.0), 1.0, 0.0)
     )
     return np.column_stack((np.clip(thrust, 0.0, 3.0), np.clip(elevator, -0.35, 0.35)))
 
@@ -159,12 +187,13 @@ def eom(x: np.ndarray, u: np.ndarray, theta: np.ndarray, aircraft: Aircraft, gus
     v = max(v, 3.0)
     cl0, cla, cd0, k_drag, cm0, cma, cmq, cme = theta
     qbar = 0.5 * aircraft.rho * v**2
+    q_hat = aircraft.chord * q_rate / (2.0 * v)
     cl = cl0 + cla * alpha
     cd = cd0 + k_drag * cl**2
-    cm = cm0 + cma * alpha + cmq * q_rate + cme * elevator
+    cm = cm0 + cma * alpha + cmq * q_hat + cme * elevator
     lift = cl * qbar * aircraft.wing_area
     drag = cd * qbar * aircraft.wing_area
-    moment = cm * qbar * aircraft.wing_area
+    moment = cm * qbar * aircraft.wing_area * aircraft.chord
     v_dot = (-drag + thrust * np.cos(alpha) - aircraft.mass * aircraft.gravity * np.sin(gamma)) / aircraft.mass + gust
     gamma_dot = (lift + thrust * np.sin(alpha) - aircraft.mass * aircraft.gravity * np.cos(gamma)) / (
         aircraft.mass * v
@@ -215,10 +244,105 @@ def simulate(
     return x
 
 
+def eom_batch(x: np.ndarray, u: np.ndarray, theta: np.ndarray, aircraft: Aircraft, gust: float = 0.0) -> np.ndarray:
+    """Vectorized eom over a batch: x (B,4), theta (B,8), u (2,) shared."""
+    v = np.maximum(x[:, 0], 3.0)
+    alpha = x[:, 1]
+    gamma = x[:, 2]
+    q_rate = x[:, 3]
+    thrust, elevator = u
+    cl0, cla, cd0, k_drag, cm0, cma, cmq, cme = theta.T
+    qbar = 0.5 * aircraft.rho * v**2
+    q_hat = aircraft.chord * q_rate / (2.0 * v)
+    cl = cl0 + cla * alpha
+    cd = cd0 + k_drag * cl**2
+    cm = cm0 + cma * alpha + cmq * q_hat + cme * elevator
+    lift = cl * qbar * aircraft.wing_area
+    drag = cd * qbar * aircraft.wing_area
+    moment = cm * qbar * aircraft.wing_area * aircraft.chord
+    v_dot = (-drag + thrust * np.cos(alpha) - aircraft.mass * aircraft.gravity * np.sin(gamma)) / aircraft.mass + gust
+    gamma_dot = (lift + thrust * np.sin(alpha) - aircraft.mass * aircraft.gravity * np.cos(gamma)) / (
+        aircraft.mass * v
+    )
+    q_dot = moment / aircraft.jy
+    out = np.empty_like(x)
+    out[:, 0] = v_dot
+    out[:, 1] = q_rate - gamma_dot
+    out[:, 2] = gamma_dot
+    out[:, 3] = q_dot
+    return out
+
+
+def rk4_step_batch(
+    x: np.ndarray,
+    u0: np.ndarray,
+    u1: np.ndarray,
+    theta: np.ndarray,
+    aircraft: Aircraft,
+    dt: float,
+    gust0: float = 0.0,
+    gust1: float = 0.0,
+) -> np.ndarray:
+    umid = 0.5 * (u0 + u1)
+    gmid = 0.5 * (gust0 + gust1)
+    k1 = eom_batch(x, u0, theta, aircraft, gust0)
+    k2 = eom_batch(x + 0.5 * dt * k1, umid, theta, aircraft, gmid)
+    k3 = eom_batch(x + 0.5 * dt * k2, umid, theta, aircraft, gmid)
+    k4 = eom_batch(x + dt * k3, u1, theta, aircraft, gust1)
+    x_next = x + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+    x_next[:, 0] = np.maximum(x_next[:, 0], 3.0)
+    return x_next
+
+
+def simulate_batch(
+    x0: np.ndarray,
+    u: np.ndarray,
+    theta: np.ndarray,
+    aircraft: Aircraft,
+    dt: float,
+    gust: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Simulate a batch of (theta, x0) candidates over a shared input history.
+
+    Used only inside the batched Jacobian, where a diverged candidate's whole
+    residual row is replaced by the 1e6 penalty fill, so no per-step freeze is
+    needed: divergence (non-finite values or the same 1e4 norm guard simulate()
+    uses) is detected in a vectorized post-pass. Returns (trajectories, bad_row).
+    """
+    batch = x0.shape[0]
+    steps = len(u)
+    if gust is None:
+        gust = np.zeros(steps)
+    out = np.empty((batch, steps, 4))
+    out[:, 0] = x0
+    x = x0.copy()
+    with np.errstate(over="ignore", invalid="ignore"):
+        for k in range(steps - 1):
+            x = rk4_step_batch(x, u[k], u[k + 1], theta, aircraft, dt, gust[k], gust[k + 1])
+            out[:, k + 1] = x
+        bad_row = ~np.all(np.isfinite(out), axis=(1, 2)) | np.any(
+            np.linalg.norm(np.nan_to_num(out), axis=2) > 1e4, axis=1
+        )
+    return out, bad_row
+
+
+def make_batched_jacobian(residual_batch):
+    """Two-point forward-difference Jacobian evaluated in one batched rollout."""
+
+    def jac(z: np.ndarray, *args: object) -> np.ndarray:
+        step = np.sqrt(np.finfo(float).eps) * np.maximum(1.0, np.abs(z))
+        candidates = np.tile(z, (len(z) + 1, 1))
+        candidates[np.arange(1, len(z) + 1), np.arange(len(z))] += step
+        residuals = residual_batch(candidates)
+        return (residuals[1:] - residuals[0]).T / step
+
+    return jac
+
+
 def make_cases(duration: float, dt: float, seed: int) -> list[TestCase]:
     aircraft = Aircraft()
     theta = true_theta()
-    x0 = np.array([15.0, 0.050, 0.0, 0.0])
+    x0 = trim_state(theta, aircraft)
     t = make_time(duration, dt)
     u_trim = trim_controls(theta, aircraft, x0)
     u_cmd = excitation(t, u_trim)
@@ -262,6 +386,12 @@ def fit_single_shooting(case: TestCase, aircraft: Aircraft, dt: float, max_nfev:
     upper = np.concatenate((bounds.theta_upper, x0_upper))
     z0 = np.clip(pack_ss(initial_theta(), case.y_meas[0]), lower + 1e-8, upper - 1e-8)
 
+    def residual_batch(candidates: np.ndarray) -> np.ndarray:
+        y_hat, bad = simulate_batch(candidates[:, 8:12], case.u_id, candidates[:, :8], aircraft, dt)
+        residuals = ((y_hat - case.y_meas) / case.noise_std).reshape(candidates.shape[0], -1)
+        residuals[bad] = 1e6
+        return residuals
+
     def residual(z: np.ndarray) -> np.ndarray:
         theta, x0 = unpack_ss(z)
         y_hat = simulate(x0, case.u_id, theta, aircraft, dt)
@@ -273,6 +403,7 @@ def fit_single_shooting(case: TestCase, aircraft: Aircraft, dt: float, max_nfev:
     result = least_squares(
         residual,
         z0,
+        jac=make_batched_jacobian(residual_batch),
         bounds=(lower, upper),
         method="trf",
         x_scale="jac",
@@ -344,6 +475,27 @@ def fit_multiple_shooting(
     z0 = np.clip(pack_ms(initial_theta(), node_guess), lower + 1e-8, upper - 1e-8)
     continuity_scale = np.maximum(0.5 * case.noise_std, np.array([0.02, 0.0015, 0.0015, 0.006]))
 
+    def residual_batch(candidates: np.ndarray) -> np.ndarray:
+        batch = candidates.shape[0]
+        theta = candidates[:, :8]
+        y_hat = np.empty((batch, len(case.t), 4))
+        continuity = []
+        bad = np.zeros(batch, dtype=bool)
+        for i in range(segments):
+            start_idx, stop_idx = indices[i], indices[i + 1]
+            node = candidates[:, 8 + 4 * i : 8 + 4 * (i + 1)]
+            local, local_bad = simulate_batch(node, case.u_id[start_idx : stop_idx + 1], theta, aircraft, dt)
+            bad |= local_bad
+            y_hat[:, start_idx : stop_idx + 1] = local
+            if i < segments - 1:
+                next_node = candidates[:, 8 + 4 * (i + 1) : 8 + 4 * (i + 2)]
+                continuity.append((local[:, -1] - next_node) / continuity_scale)
+        measurement_residual = ((y_hat - case.y_meas) / case.noise_std).reshape(batch, -1)
+        continuity_residual = np.concatenate(continuity, axis=1)
+        residuals = np.concatenate((measurement_residual, continuity_residual), axis=1)
+        residuals[bad] = 1e6
+        return residuals
+
     def residual(z: np.ndarray) -> np.ndarray:
         theta, nodes = unpack_ms(z, segments)
         y_hat, continuity = simulate_segments(nodes, indices, case.u_id, theta, aircraft, dt)
@@ -357,6 +509,7 @@ def fit_multiple_shooting(
     result = least_squares(
         residual,
         z0,
+        jac=make_batched_jacobian(residual_batch),
         bounds=(lower, upper),
         method="trf",
         x_scale="jac",
@@ -602,7 +755,7 @@ def write_metadata(args: argparse.Namespace, cases: list[TestCase], fits: dict[s
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--duration", type=float, default=30.0, help="simulation duration in seconds")
-    parser.add_argument("--dt", type=float, default=0.1, help="fixed integration step in seconds")
+    parser.add_argument("--dt", type=float, default=0.02, help="fixed integration step in seconds")
     parser.add_argument("--segments", type=int, default=6, help="multiple-shooting segment count")
     parser.add_argument("--seed", type=int, default=7, help="random seed for measurement noise and gust")
     parser.add_argument("--max-nfev-ss", type=int, default=80, help="max single-shooting function evaluations")

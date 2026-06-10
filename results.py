@@ -1033,23 +1033,32 @@ def plot_method_score_heatmap() -> None:
         plt.close(fig)
 
 
+def copy_figure(source: Path, target: Path) -> None:
+    # The paper includes generated figures via \includegraphics (no svg
+    # package), so the rasterized sibling must travel with every .svg copy.
+    shutil.copy2(source, target)
+    png_source = source.with_suffix(".png")
+    if source.suffix == ".svg" and png_source.exists():
+        shutil.copy2(png_source, target.with_suffix(".png"))
+
+
 def copy_figures() -> None:
     for source_name, target_name in FIGURE_EXPORTS.items():
         source = METHOD_FIG / source_name
         if not source.exists():
             raise SystemExit(f"missing required figure: {source}")
-        shutil.copy2(source, LATEX_FIG / target_name)
+        copy_figure(source, LATEX_FIG / target_name)
     for mode in available_archived_modes():
         for source_name in ARCHIVED_FIGURES:
             source = METHOD_FIG / f"{mode}_{source_name}"
             if source.exists():
-                shutil.copy2(source, LATEX_FIG / f"generated_{mode}_{source_name}")
+                copy_figure(source, LATEX_FIG / f"generated_{mode}_{source_name}")
         tradeoff = METHOD_FIG / f"{mode}_shared_train_time_accuracy_tradeoff.svg"
         if tradeoff.exists():
-            shutil.copy2(tradeoff, LATEX_FIG / f"generated_{mode}_shared_train_time_accuracy_tradeoff.svg")
+            copy_figure(tradeoff, LATEX_FIG / f"generated_{mode}_shared_train_time_accuracy_tradeoff.svg")
     panel = METHOD_FIG / "dataset_direct_validation_score_panels.svg"
     if panel.exists():
-        shutil.copy2(panel, LATEX_FIG / "generated_dataset_direct_validation_score_panels.svg")
+        copy_figure(panel, LATEX_FIG / "generated_dataset_direct_validation_score_panels.svg")
     for name in [
         "benchmark_problem_matrix.svg",
         "benchmark_maneuver_overview.svg",
@@ -1058,11 +1067,11 @@ def copy_figures() -> None:
     ]:
         source = METHOD_FIG / name
         if source.exists():
-            shutil.copy2(source, LATEX_FIG / f"generated_{name}")
+            copy_figure(source, LATEX_FIG / f"generated_{name}")
     for source_name, target_name in SIX_DOF_FIGURE_EXPORTS.items():
         source = METHOD_FIG / source_name
         if source.exists():
-            shutil.copy2(source, LATEX_FIG / target_name)
+            copy_figure(source, LATEX_FIG / target_name)
 
 
 def latex_assets(_args: argparse.Namespace) -> None:
@@ -1089,8 +1098,16 @@ def latex_assets(_args: argparse.Namespace) -> None:
     print(f"Copied generated figures to {LATEX_FIG}")
 
 
+# Unstabilized high-excitation maneuvers use short flight-test records: with
+# the realistic (lightly damped phugoid) dynamics, long open-loop aggressive
+# or sweep trials leave the flight envelope, exactly like a real aircraft
+# flown hands-off. Stabilized (*_safe / autopilot) modes keep full duration.
+SHORT_RECORD_DURATIONS = {"aggressive": 10.0, "sine_sweep": 10.0}
+
+
 def simulate(args: argparse.Namespace) -> None:
     for mode in args.dataset_modes:
+        duration = min(float(args.duration), SHORT_RECORD_DURATIONS.get(mode, float(args.duration)))
         command = [
             sys.executable,
             str(ROOT / "simulation" / "generate_dataset.py"),
@@ -1103,7 +1120,7 @@ def simulate(args: argparse.Namespace) -> None:
             "--validation-trials",
             str(args.validation_trials),
             "--duration",
-            str(args.duration),
+            str(duration),
         ]
         if args.no_plot:
             command.append("--no-plot")
@@ -1418,7 +1435,9 @@ def export_sportcub_real(args: argparse.Namespace) -> None:
 
 
 def rates(_args: argparse.Namespace) -> None:
-    run([sys.executable, str(ROOT / "observation_rate_study.py")])
+    # use the regenerated open_loop dataset; the unsuffixed default directory
+    # is not produced by `simulate` and can hold stale data
+    run([sys.executable, str(ROOT / "observation_rate_study.py"), "--dataset", str(DATASET_OUTPUTS["open_loop"])])
 
 
 def suite_command(
@@ -1930,7 +1949,7 @@ def serve_site(args: argparse.Namespace) -> None:
     port = _choose_port(args.port)
     print(f"Serving benchmark site at http://127.0.0.1:{port}")
     print("Press Ctrl-C to stop.")
-    run([sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1", "--directory", str(ROOT / "site")])
+    run([sys.executable, str(ROOT / "site" / "serve.py"), "--port", str(port), "--bind", "127.0.0.1", "--directory", str(ROOT / "site")])
 
 
 def all_results(args: argparse.Namespace) -> None:
@@ -1962,7 +1981,7 @@ def add_shared_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-samples", type=int, default=50000)
     parser.add_argument("--max-oem-trials", type=int, default=2)
     parser.add_argument("--oem-stride", type=int, default=10)
-    parser.add_argument("--max-oem-nfev", type=int, default=25)
+    parser.add_argument("--max-oem-nfev", type=int, default=200)
     parser.add_argument("--max-vi-trials", type=int, default=2)
     parser.add_argument("--vi-stride", type=int, default=40)
     parser.add_argument("--max-vi-nfev", type=int, default=25)

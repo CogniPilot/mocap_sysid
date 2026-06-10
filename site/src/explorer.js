@@ -1,0 +1,535 @@
+// Flight explorer: full-flight segmentation viewer with on-the-fly model rollouts.
+//
+// Loads flight_explorer.json (truth, per-sample segmentation labels, full-rate
+// sticks, fitted model parameters) and integrates method predictions in the
+// browser from any clicked segment or time: manual segments use the recorded
+// sticks re-referenced by the per-flight trim bias; stabilized segments close
+// the loop with the identified SAFE inner-loop controller model, because the
+// bare airframe alone cannot represent stabilized flight. Computing rollouts
+// client-side avoids exporting a trace per (segment, method) pair.
+
+const DATA_URL = "./public/data/flight_explorer.json";
+const LABEL_COLORS = { ground: "#8d6e63", ground_effect: "#26a69a", stabilized: "#5c7cfa", manual: "#f08c00" };
+const METHOD_COLORS = { "6DOF-Nominal": "#d62728", "6DOF-LinearSS": "#2ca02c", "6DOF-RidgeResidual": "#9467bd" };
+const MIN_SPEED = 2.5;
+const MAX_SPEED = 12.0;
+
+const ex = {
+  data: null,
+  flightIndex: 0,
+  anchorTimeS: null,
+  selectedMethods: new Set(),
+  predictions: {},
+};
+
+function clamp(v, lo, hi) {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+function normQuat(q) {
+  const n = Math.hypot(q[0], q[1], q[2], q[3]) || 1;
+  return [q[0] / n, q[1] / n, q[2] / n, q[3] / n];
+}
+
+function eulerFromQuat(q) {
+  const [q0, q1, q2, q3] = normQuat(q);
+  return [
+    Math.atan2(2 * (q0 * q1 + q2 * q3), 1 - 2 * (q1 * q1 + q2 * q2)),
+    Math.asin(clamp(2 * (q0 * q2 - q3 * q1), -1, 1)),
+    Math.atan2(2 * (q0 * q3 + q1 * q2), 1 - 2 * (q2 * q2 + q3 * q3)),
+  ];
+}
+
+function rotationBodyToInertial(q) {
+  const [q0, q1, q2, q3] = q;
+  return [
+    [1 - 2 * (q2 * q2 + q3 * q3), 2 * (q1 * q2 - q0 * q3), 2 * (q1 * q3 + q0 * q2)],
+    [2 * (q1 * q2 + q0 * q3), 1 - 2 * (q1 * q1 + q3 * q3), 2 * (q2 * q3 - q0 * q1)],
+    [2 * (q1 * q3 - q0 * q2), 2 * (q2 * q3 + q0 * q1), 1 - 2 * (q1 * q1 + q2 * q2)],
+  ];
+}
+
+function matVec(m, v) {
+  return [m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2], m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2], m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2]];
+}
+
+function matTVec(m, v) {
+  return [m[0][0] * v[0] + m[1][0] * v[1] + m[2][0] * v[2], m[0][1] * v[0] + m[1][1] * v[1] + m[2][1] * v[2], m[0][2] * v[0] + m[1][2] * v[1] + m[2][2] * v[2]];
+}
+
+function cross(a, b) {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+
+// Attached-flow nominal 6DOF dynamics ported from models/aircraft6dof/model.py
+// (the nonlinear=False path: no stall gate, no hidden residual terms).
+function nominalRhs(x, u, cfg) {
+  const vel = [x[3], x[4], x[5]];
+  const quat = normQuat([x[6], x[7], x[8], x[9]]);
+  const rates = [x[10], x[11], x[12]];
+  const speed = Math.max(Math.hypot(...vel), 1e-6);
+  const alpha = Math.atan2(vel[2], Math.max(vel[0], 1e-6));
+  const beta = Math.asin(clamp(vel[1] / speed, -0.98, 0.98));
+  const throttle = clamp(u[0], 0, 1);
+  const [, elevator, aileron, rudder] = u;
+  const rateScale = Math.max(2 * speed, 1e-6);
+  const pHat = (cfg.wing_span * rates[0]) / rateScale;
+  const qHat = (cfg.mean_chord * rates[1]) / rateScale;
+  const rHat = (cfg.wing_span * rates[2]) / rateScale;
+
+  const cl = 0.27 + 5.2 * alpha + 0.36 * elevator + 3.1 * qHat;
+  const cd = 0.045 + 0.075 * cl * cl + 0.42 * beta * beta + 0.018 * (aileron * aileron + rudder * rudder) + 0.01 * elevator * elevator;
+  const cm = 0.03 - 1.05 * alpha - 1.15 * elevator - 9.0 * qHat;
+  const cy = -0.82 * beta + 0.3 * rudder + 0.12 * aileron - 0.35 * rHat;
+  const clRoll = -0.12 * beta + 0.42 * aileron - 0.5 * pHat + 0.1 * rHat;
+  const cn = 0.18 * beta - 0.26 * rudder - 0.08 * aileron - 0.42 * rHat;
+  const cx = -cd * Math.cos(alpha) + cl * Math.sin(alpha);
+  const cz = -cd * Math.sin(alpha) - cl * Math.cos(alpha);
+
+  const qbar = 0.5 * cfg.rho * speed * speed;
+  const propWash = 1 + cfg.prop_wash_gain * throttle;
+  const thrust = cfg.max_thrust * Math.pow(throttle, 1.45);
+  const force = [
+    propWash * qbar * cfg.wing_area * cx + thrust,
+    propWash * qbar * cfg.wing_area * cy,
+    propWash * qbar * cfg.wing_area * cz,
+  ];
+  const moment = [
+    propWash * qbar * cfg.wing_area * cfg.wing_span * clRoll,
+    propWash * qbar * cfg.wing_area * cfg.mean_chord * cm + cfg.prop_arm * thrust,
+    propWash * qbar * cfg.wing_area * cfg.wing_span * cn,
+  ];
+
+  const rot = rotationBodyToInertial(quat);
+  const posDot = matVec(rot, vel);
+  const gravBody = matTVec(rot, [0, 0, cfg.gravity]);
+  const velDot = [
+    force[0] / cfg.mass + gravBody[0] - (rates[1] * vel[2] - rates[2] * vel[1]),
+    force[1] / cfg.mass + gravBody[1] - (rates[2] * vel[0] - rates[0] * vel[2]),
+    force[2] / cfg.mass + gravBody[2] - (rates[0] * vel[1] - rates[1] * vel[0]),
+  ];
+  const [ix, iy, iz] = cfg.inertia;
+  const ixz = cfg.inertia_xz;
+  const h = [ix * rates[0] - ixz * rates[2], iy * rates[1], iz * rates[2] - ixz * rates[0]];
+  const torque = [moment[0] - (rates[1] * h[2] - rates[2] * h[1]), moment[1] - (rates[2] * h[0] - rates[0] * h[2]), moment[2] - (rates[0] * h[1] - rates[1] * h[0])];
+  // Solve [ix,0,-ixz;0,iy,0;-ixz,0,iz] wdot = torque (2x2 block + scalar).
+  const det = ix * iz - ixz * ixz;
+  const ratesDot = [(iz * torque[0] + ixz * torque[2]) / det, torque[1] / iy, (ixz * torque[0] + ix * torque[2]) / det];
+  const [q0, q1, q2, q3] = quat;
+  const [p, qr, r] = rates;
+  const quatDot = [
+    0.5 * (-q1 * p - q2 * qr - q3 * r),
+    0.5 * (q0 * p + q2 * r - q3 * qr),
+    0.5 * (q0 * qr - q1 * r + q3 * p),
+    0.5 * (q0 * r + q1 * qr - q2 * p),
+  ];
+  return [...posDot, ...velDot, ...quatDot, ...ratesDot];
+}
+
+function postStep(x) {
+  const out = x.slice();
+  const q = normQuat([out[6], out[7], out[8], out[9]]);
+  out[6] = q[0]; out[7] = q[1]; out[8] = q[2]; out[9] = q[3];
+  const speed = Math.hypot(out[3], out[4], out[5]);
+  if (speed > MAX_SPEED) {
+    for (let i = 3; i < 6; i++) out[i] *= MAX_SPEED / speed;
+  } else if (speed > 1e-9 && speed < MIN_SPEED) {
+    for (let i = 3; i < 6; i++) out[i] *= MIN_SPEED / speed;
+  }
+  for (let i = 10; i < 13; i++) out[i] = clamp(out[i], -8, 8);
+  return out;
+}
+
+function nominalStep(x, u, dt, cfg) {
+  const k1 = nominalRhs(x, u, cfg);
+  const x2 = x.map((v, i) => v + 0.5 * dt * k1[i]);
+  const k2 = nominalRhs(x2, u, cfg);
+  const x3 = x.map((v, i) => v + 0.5 * dt * k2[i]);
+  const k3 = nominalRhs(x3, u, cfg);
+  const x4 = x.map((v, i) => v + dt * k3[i]);
+  const k4 = nominalRhs(x4, u, cfg);
+  return postStep(x.map((v, i) => v + (dt / 6) * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i])));
+}
+
+function affinePredict(x, u, weights) {
+  const phi = [...x, ...u, 1];
+  const out = new Array(13).fill(0);
+  for (let i = 0; i < phi.length; i++) {
+    const row = weights[i];
+    const value = phi[i];
+    for (let j = 0; j < 13; j++) out[j] += value * row[j];
+  }
+  return out;
+}
+
+// Generic neural-network evaluator for browser-side prediction. NumPy-trained
+// nets (random-feature readouts, MLPs, RBF expansions) deploy as JSON weight
+// specs and run through this forward pass; torch-trained models deploy as
+// ONNX and run through onnxruntime-web instead, with the same integration
+// loop calling the session per step.
+function evalNet(spec, input) {
+  if (spec.type === "rbf") {
+    const z = input.map((v, i) => (v - spec.x_mean[i]) / spec.x_scale[i]);
+    const phi = [1];
+    for (const center of spec.centers) {
+      let d2 = 0;
+      for (let i = 0; i < z.length; i++) d2 += (z[i] - center[i]) ** 2;
+      phi.push(Math.exp(-0.5 * d2 / (spec.length_scale * spec.length_scale)));
+    }
+    return spec.weights[0].map((_, j) => {
+      let acc = 0;
+      for (let i = 0; i < phi.length; i++) acc += phi[i] * spec.weights[i][j];
+      return acc * spec.y_scale[j] + spec.y_mean[j];
+    });
+  }
+  let h = input;
+  for (const layer of spec.layers) {
+    const out = layer.b.slice();
+    for (let i = 0; i < h.length; i++) {
+      const row = layer.w[i];
+      for (let j = 0; j < out.length; j++) out[j] += h[i] * row[j];
+    }
+    if (layer.act === "tanh") h = out.map(Math.tanh);
+    else if (layer.act === "relu") h = out.map((v) => Math.max(0, v));
+    else h = out;
+  }
+  return h;
+}
+
+function makeStepper(method, models, dt) {
+  const cfg = models.config;
+  if (models.nets && models.nets[method]) {
+    const spec = models.nets[method];
+    return (x, u) => {
+      const base = spec.residual ? nominalStep(x, u, dt, cfg) : new Array(13).fill(0);
+      const out = evalNet(spec, [...x, ...u]);
+      return postStep(base.map((v, i) => v + out[i]));
+    };
+  }
+  if (method === "6DOF-Nominal") return (x, u) => nominalStep(x, u, dt, cfg);
+  if (method === "6DOF-LinearSS") return (x, u) => postStep(affinePredict(x, u, models.linear_weights));
+  return (x, u) => {
+    const base = nominalStep(x, u, dt, cfg);
+    const res = affinePredict(x, u, models.residual_weights);
+    return postStep(base.map((v, i) => v + res[i]));
+  };
+}
+
+function safeController(gains) {
+  // SAFE self-level: the stick commands attitude through the envelope clip
+  // ([Kp, cmd_scale, envelope_limit, Kd, offset] per attitude axis), the loop
+  // closes on attitude error with rate damping, and surfaces saturate.
+  return (stick, x) => {
+    const euler = eulerFromQuat([x[6], x[7], x[8], x[9]]);
+    const ge = gains.elevator;
+    const ga = gains.aileron;
+    const gr = gains.rudder;
+    const thetaCmd = clamp(ge[1] * stick[1], -ge[2], ge[2]);
+    const phiCmd = clamp(ga[1] * stick[2], -ga[2], ga[2]);
+    return [
+      stick[0],
+      clamp(ge[0] * (thetaCmd - euler[1]) - ge[3] * x[11] + ge[4], -0.65, 0.65),
+      clamp(ga[0] * (phiCmd - euler[0]) - ga[3] * x[10] + ga[4], -0.75, 0.75),
+      clamp(gr[0] * stick[3] + gr[1] * x[12] + gr[2], -0.65, 0.65),
+    ];
+  };
+}
+
+function estimateInitialState(flight, timeS) {
+  // Local linear fit of the 10 Hz truth in a +/-0.6 s window evaluated at timeS.
+  const t = flight.time;
+  const lo = Math.max(0, t.findIndex((v) => v >= timeS - 0.6));
+  let hi = t.findIndex((v) => v > timeS + 0.6);
+  if (hi < 0) hi = t.length;
+  const n = hi - lo;
+  if (n < 3) return flight.state[Math.max(0, Math.min(t.length - 1, lo))].slice();
+  const x0 = new Array(13).fill(0);
+  let st = 0, stt = 0;
+  for (let k = lo; k < hi; k++) { st += t[k] - timeS; stt += (t[k] - timeS) * (t[k] - timeS); }
+  const mt = st / n;
+  const denom = stt - n * mt * mt || 1e-9;
+  for (let j = 0; j < 13; j++) {
+    let sy = 0, sty = 0;
+    for (let k = lo; k < hi; k++) { sy += flight.state[k][j]; sty += (t[k] - timeS) * flight.state[k][j]; }
+    const slope = (sty - mt * sy) / denom;
+    x0[j] = sy / n - slope * mt;
+  }
+  const q = normQuat([x0[6], x0[7], x0[8], x0[9]]);
+  x0[6] = q[0]; x0[7] = q[1]; x0[8] = q[2]; x0[9] = q[3];
+  return x0;
+}
+
+const Q_NED_TO_ENU = [0, Math.SQRT1_2, Math.SQRT1_2, 0]; // 180 deg about (1,1,0)/sqrt(2)
+
+function quatMul(a, b) {
+  return [
+    a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
+    a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+    a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
+    a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
+  ];
+}
+
+function rolloutFrom(flight, models, method, timeS) {
+  const dt = flight.dt_full;
+  const startIdx = Math.max(0, Math.round(timeS / dt));
+  const sticks = flight.stick_full;
+  const labels = flight.labels_full;
+  // Stop at the next ground contact: the airframe models have no gear model.
+  let endIdx = sticks.length;
+  for (let k = startIdx + Math.round(1 / dt); k < labels.length; k++) {
+    if (labels[k] === 0) { endIdx = k; break; }
+  }
+  const stepper = makeStepper(method, models, dt);
+  const safeStep = models.safe_linear_weights
+    ? (x, stick) => postStep(affinePredict(x, stick, models.safe_linear_weights))
+    : null;
+  const ctrl = safeController(models.safe_gains);
+  const bias = flight.bias;
+  let x = estimateInitialState(flight, timeS);
+  const stride = Math.max(1, Math.round(0.1 / dt));
+  const times = [];
+  const altitude = [];
+  const pitch = [];
+  const posEnu = [];
+  const quatEnu = [];
+  for (let k = startIdx; k < endIdx - 1; k++) {
+    if ((k - startIdx) % stride === 0) {
+      times.push(k * dt);
+      altitude.push(-x[2]);
+      pitch.push(eulerFromQuat([x[6], x[7], x[8], x[9]])[1]);
+      posEnu.push([x[1], x[0], -x[2]]);
+      quatEnu.push(quatMul(Q_NED_TO_ENU, normQuat([x[6], x[7], x[8], x[9]])));
+    }
+    const stick = sticks[k];
+    if (labels[k] === 2 && safeStep) {
+      // Stabilized: the directly identified closed-loop model replaces the
+      // bare airframe + provisional controller decomposition.
+      x = safeStep(x, stick);
+    } else {
+      const u = labels[k] === 2 ? ctrl(stick, x) : stick.map((v, i) => v - bias[i]);
+      x = stepper(x, u);
+    }
+    if (!x.every(Number.isFinite)) break;
+  }
+  return { times, altitude, pitch, posEnu, quatEnu };
+}
+
+function flight() {
+  return ex.data.flights[ex.flightIndex];
+}
+
+function predictionMethods() {
+  // Free-run the leaderboard-selected methods the browser has parameters
+  // for; with no usable selection, fall back to LinearSS so Predict here
+  // always shows something.
+  const usable = Array.from(ex.selectedMethods).filter((m) => ex.data.methods.includes(m));
+  return usable.length ? usable : ["6DOF-LinearSS"];
+}
+
+function recomputePredictions() {
+  ex.predictions = {};
+  if (ex.anchorTimeS == null) return;
+  for (const method of predictionMethods()) {
+    ex.predictions[method] = rolloutFrom(flight(), ex.data.models, method, ex.anchorTimeS);
+  }
+}
+
+function svgEl(tag, attrs) {
+  const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
+
+function renderAll() {
+  const status = document.querySelector("#explorer-status");
+  if (ex.anchorTimeS == null) {
+    status.textContent = "Scrub the colored timeline and press Predict here to set the prediction initial condition.";
+  } else {
+    const used = Object.keys(ex.predictions).map((m) => m.replace("6DOF-", "")).join(", ");
+    const fallback = ex.selectedMethods.size ? "" : " (no browser-runnable method selected in the leaderboard; using LinearSS)";
+    const note = ex.anchorNote ? ` [${ex.anchorNote}]` : "";
+    status.textContent = `Free run from t = ${ex.anchorTimeS.toFixed(2)} s with ${used}${fallback}${note}; SAFE controller closes the loop through stabilized segments.`;
+  }
+}
+
+const METHOD_COLORS_HEX = { "6DOF-Nominal": 0xd62728, "6DOF-LinearSS": 0x2ca02c, "6DOF-RidgeResidual": 0x9467bd };
+
+function publishOverlay(timeS) {
+  // Publish the segmentation-colored full-flight track and the free-run
+  // predictions so the 3D playback can draw them. Selecting a flight (before
+  // any click) publishes the colored track alone.
+  const f = flight();
+  const overlay = {
+    stamp: `${f.name}@${timeS == null ? "none" : timeS.toFixed(2)}#${Array.from(ex.selectedMethods).join("|")}`,
+    track: f.pos,
+    origin: f.pos[0],
+    dtFull: f.dt_full,
+    anchored: timeS != null && ex.anchorTimeS != null,
+    labels: f.labels,
+    tracked: f.tracked || f.labels.map(() => 1),
+    predictions: Object.entries(ex.predictions).map(([method, pred]) => ({
+      color: METHOD_COLORS_HEX[method] ?? 0x444444,
+      points: pred.posEnu,
+      times: pred.times,
+      quats: pred.quatEnu,
+    })),
+  };
+  if (!ex.playbackTrack) ex.playbackTrack = buildPlaybackTrack();
+  window.dispatchEvent(
+    new CustomEvent("explorer-set-ic", {
+      detail: {
+        flight: f.name,
+        flightIndex: ex.flightIndex,
+        timeS: timeS == null ? 0 : timeS,
+        overlay,
+        // Carry the full-flight track with the event so registration can
+        // never be lost to module load order.
+        track: ex.playbackTrack,
+      },
+    }),
+  );
+}
+
+function buildPlaybackTrack() {
+  // Full flights as first-class playback tracks: the 3D animation flies the
+  // whole record (positions re-zeroed per flight; the overlay carries the
+  // matching origin), instead of only the benchmark chunk windows.
+  return {
+    id: "sportcub_flights_5_22",
+    model_family: "aircraft6dof",
+    source: "mocap full record",
+    title: "Sport Cub full flights (2026-05-22)",
+    segments: ex.data.flights.map((f) => ({
+      name: f.name,
+      time_s: f.time,
+      position_enu_m: f.pos.map((p) => [p[0] - f.pos[0][0], p[1] - f.pos[0][1], p[2] - f.pos[0][2]]),
+      quaternion_wxyz: f.quat,
+      labels: f.labels,
+      tracked: f.tracked,
+      mode: f.mode,
+      control_meas: f.stick_full
+        .filter((_, index) => index % Math.max(1, Math.round(0.1 / f.dt_full)) === 0)
+        .map((u) => [u[0], u[2], u[1], u[3]]),
+    })),
+  };
+}
+
+function firstFlyableTime(f, timeS) {
+  // The airframe models have no gear physics and mocap dropouts have no
+  // state: anchor free-runs at the first airborne, tracked sample at or
+  // after the requested time.
+  const dtFull = f.dt_full;
+  let k = Math.max(0, Math.round(timeS / dtFull));
+  const tracked = f.tracked_full || null;
+  const okAt = (index) => f.labels_full[index] !== 0 && (!tracked || tracked[index]);
+  // Require a short run of clean samples so the anchor never sits on a
+  // tracking-reacquisition edge where smoothed attitude is contaminated.
+  const margin = Math.round(0.3 / dtFull);
+  while (k < f.labels_full.length) {
+    let run = 0;
+    while (k + run < f.labels_full.length && okAt(k + run) && run < margin) run += 1;
+    if (run >= margin) return (k + margin) * dtFull;
+    k += run + 1;
+  }
+  return null;
+}
+
+function setAnchor(timeS) {
+  const snapped = firstFlyableTime(flight(), timeS);
+  if (snapped == null) {
+    ex.anchorTimeS = null;
+    ex.predictions = {};
+    ex.anchorNote = "no airborne data after the requested time";
+    renderAll();
+    publishOverlay(null);
+    return;
+  }
+  ex.anchorNote = snapped - timeS > 0.1 ? "anchor moved past ground/dropout to the first airborne sample" : "";
+  ex.anchorTimeS = snapped;
+  recomputePredictions();
+  renderAll();
+  publishOverlay(snapped);
+}
+
+function bind() {
+  const wrap = document.querySelector("#explorer-flight-wrap");
+  if (wrap) wrap.hidden = false;
+  const select = document.querySelector("#explorer-flight");
+  select.innerHTML = ex.data.flights.map((f, i) => `<option value="${i}">${f.name}</option>`).join("");
+  select.value = String(ex.flightIndex);
+  select.addEventListener("change", (event) => {
+    ex.flightIndex = parseInt(event.target.value, 10);
+    ex.anchorTimeS = null;
+    ex.predictions = {};
+    renderAll();
+    publishOverlay(null);
+  });
+}
+
+export async function initExplorer() {
+  const host = document.querySelector("#explorer-flight");
+  if (!host) return;
+  try {
+    const response = await fetch(DATA_URL);
+    if (!response.ok) throw new Error(`${response.status}`);
+    ex.data = await response.json();
+  } catch (error) {
+    const status = document.querySelector("#explorer-status");
+    if (status) status.textContent = `Flight data unavailable (${error.message}).`;
+    return;
+  }
+  // Default to the flight with the cleanest full trajectory.
+  const preferred = ex.data.flights.findIndex((f) => f.name.startsWith("elev3211_2026_05"));
+  if (preferred >= 0) ex.flightIndex = preferred;
+  bind();
+  renderAll();
+  // Handshake with the playback module: announce the full-flight view and
+  // retry until acknowledged, so no module load order or transient error can
+  // leave the 3D viewer on the benchmark-window view.
+  let playbackLinked = false;
+  window.addEventListener("playback-ack", () => {
+    playbackLinked = true;
+    console.debug("explorer: 3D playback linked");
+  });
+  const announce = () => {
+    window.dispatchEvent(new CustomEvent("explorer-flights-ready", { detail: { track: buildPlaybackTrack() } }));
+    publishOverlay(ex.anchorTimeS);
+  };
+  const tryAnnounce = (remaining) => {
+    if (playbackLinked || remaining <= 0) {
+      if (!playbackLinked) {
+        document.querySelector("#explorer-status").textContent =
+          "3D playback link failed; check the browser console for errors.";
+      }
+      return;
+    }
+    announce();
+    setTimeout(() => tryAnnounce(remaining - 1), 500);
+  };
+  tryAnnounce(40);
+  window.addEventListener("playback-ready", () => tryAnnounce(40));
+  // The leaderboard owns method selection; free-run the selected methods the
+  // browser has model parameters for.
+  window.addEventListener("explorer-anchor-request", (event) => {
+    // Clicking Predict here again at (nearly) the same time clears the run.
+    if (ex.anchorTimeS != null && Math.abs(event.detail.timeS - ex.anchorTimeS) < 0.05) {
+      ex.anchorTimeS = null;
+      ex.predictions = {};
+      renderAll();
+      publishOverlay(null);
+      return;
+    }
+    setAnchor(event.detail.timeS);
+  });
+  window.addEventListener("methods-changed", (event) => {
+    const available = new Set(ex.data.methods);
+    ex.selectedMethods = new Set((event.detail.methods || []).filter((m) => available.has(m)));
+    recomputePredictions();
+    renderAll();
+    if (ex.anchorTimeS != null) publishOverlay(ex.anchorTimeS);
+  });
+  window.addEventListener("resize", renderAll);
+}
+
+initExplorer();

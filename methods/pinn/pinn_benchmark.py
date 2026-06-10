@@ -16,7 +16,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from common.benchmark import PARAMETER_NAMES, STATE_LABELS, STATE_NAMES, Aircraft, initial_theta, make_cases, true_theta
+from common.benchmark import PARAMETER_NAMES, STATE_LABELS, STATE_NAMES, Aircraft, Bounds, initial_theta, make_cases, true_theta
 from common.metrics import aggregate_trajectory_score, percent_error, rmse
 from common.paths import FIG_DIR, RESULTS_DIR
 from common.plotting import save_figure
@@ -44,12 +44,13 @@ def torch_eom(x: torch.Tensor, u: torch.Tensor, theta: torch.Tensor, aircraft: A
     elevator = u[:, 1]
     cl0, cla, cd0, k_drag, cm0, cma, cmq, cme = theta
     qbar = 0.5 * aircraft.rho * v**2
+    q_hat = aircraft.chord * q_rate / (2.0 * v)
     cl = cl0 + cla * alpha
     cd = cd0 + k_drag * cl**2
-    cm = cm0 + cma * alpha + cmq * q_rate + cme * elevator
+    cm = cm0 + cma * alpha + cmq * q_hat + cme * elevator
     lift = cl * qbar * aircraft.wing_area
     drag = cd * qbar * aircraft.wing_area
-    moment = cm * qbar * aircraft.wing_area
+    moment = cm * qbar * aircraft.wing_area * aircraft.chord
     v_dot = (-drag + thrust * torch.cos(alpha) - aircraft.mass * aircraft.gravity * torch.sin(gamma)) / aircraft.mass
     gamma_dot = (lift + thrust * torch.sin(alpha) - aircraft.mass * aircraft.gravity * torch.cos(gamma)) / (aircraft.mass * v)
     q_dot = moment / aircraft.jy
@@ -70,10 +71,15 @@ def train_case(case, args, device: torch.device) -> dict[str, object]:
     x_scale = torch.where(x_scale > 1e-6, x_scale, torch.ones_like(x_scale))
 
     net = MLP(args.width, args.depth, 4).to(device)
-    theta = torch.nn.Parameter(torch.tensor(initial_theta(), dtype=torch.float32, device=device))
-    lower = torch.tensor([-0.5, 0.0, 0.0, 0.0, -0.2, -1.0, -1.0, -0.5], dtype=torch.float32, device=device)
-    upper = torch.tensor([0.5, 6.0, 0.2, 0.5, 0.2, 0.5, 0.1, 0.5], dtype=torch.float32, device=device)
-    optimizer = torch.optim.Adam([*net.parameters(), theta], lr=args.lr)
+    bounds = Bounds()
+    lower = torch.tensor(bounds.theta_lower, dtype=torch.float32, device=device)
+    upper = torch.tensor(bounds.theta_upper, dtype=torch.float32, device=device)
+    # optimize a normalized parameter vector so Adam steps are comparable
+    # across parameters whose magnitudes span two orders of magnitude
+    theta_base = torch.tensor(initial_theta(), dtype=torch.float32, device=device)
+    theta_span = 0.5 * (upper - lower)
+    theta_norm = torch.nn.Parameter(torch.zeros(8, dtype=torch.float32, device=device))
+    optimizer = torch.optim.Adam([*net.parameters(), theta_norm], lr=args.lr)
     history = []
     start = time.perf_counter()
     for epoch in range(args.epochs):
@@ -84,12 +90,13 @@ def train_case(case, args, device: torch.device) -> dict[str, object]:
             grad = torch.autograd.grad(x_hat[:, idx].sum(), t_norm, create_graph=True)[0][:, 0] / t_scale
             dx_cols.append(grad)
         dxdt = torch.stack(dx_cols, dim=1)
+        theta = theta_base + theta_span * theta_norm
         theta_clamped = torch.minimum(torch.maximum(theta, lower), upper)
         physics = torch_eom(x_hat, u, theta_clamped, aircraft)
         data_loss = torch.mean(((x_hat - y) / noise_std) ** 2)
         physics_loss = torch.mean(((dxdt - physics) / noise_std) ** 2)
         ic_loss = torch.mean(((x_hat[0] - y[0]) / noise_std) ** 2)
-        bound_loss = torch.mean((theta - theta_clamped) ** 2)
+        bound_loss = torch.mean(((theta - theta_clamped) / theta_span) ** 2)
         loss = args.data_weight * data_loss + args.physics_weight * physics_loss + args.ic_weight * ic_loss + 1e3 * bound_loss
         loss.backward()
         optimizer.step()
@@ -98,6 +105,7 @@ def train_case(case, args, device: torch.device) -> dict[str, object]:
     elapsed = time.perf_counter() - start
     with torch.no_grad():
         x_hat = (net(t_norm) * x_scale + x_mean).detach().cpu().numpy()
+        theta = theta_base + theta_span * theta_norm
         theta_hat = torch.minimum(torch.maximum(theta, lower), upper).detach().cpu().numpy()
     return {
         "case": case.name,
@@ -162,7 +170,7 @@ def plot_loss(results) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--duration", type=float, default=30.0)
-    parser.add_argument("--dt", type=float, default=0.1)
+    parser.add_argument("--dt", type=float, default=0.02)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--epochs", type=int, default=1500)
     parser.add_argument("--width", type=int, default=64)

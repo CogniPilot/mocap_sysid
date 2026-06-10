@@ -26,6 +26,7 @@ from .model import (
     nominal_rk4_step,
     normalize_quaternion,
     quaternion_from_euler,
+    rhs,
     rk4_step,
     rotation_body_to_inertial,
     simulate_smoke,

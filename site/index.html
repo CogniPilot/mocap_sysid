@@ -29,31 +29,16 @@
           Dataset
           <select id="scenario-select"></select>
         </label>
+        <label id="explorer-flight-wrap" hidden>
+          Flight
+          <select id="explorer-flight"></select>
+        </label>
         <div>
           <span class="control-label">State source</span>
           <div class="segmented" id="source-filter">
-            <button type="button" data-source="direct" class="active">Direct</button>
-            <button type="button" data-source="mocap">Mocap</button>
+            <button type="button" data-source="direct">Direct</button>
+            <button type="button" data-source="mocap" class="active">Mocap</button>
           </div>
-        </div>
-      </section>
-
-      <section class="summary-grid" aria-label="Scenario summary">
-        <div class="metric">
-          <span>Best method</span>
-          <strong id="best-method">--</strong>
-        </div>
-        <div class="metric">
-          <span>Best validation score</span>
-          <strong id="best-score">--</strong>
-        </div>
-        <div class="metric">
-          <span>Methods</span>
-          <strong id="method-count">--</strong>
-        </div>
-        <div class="metric">
-          <span>Datasets</span>
-          <strong id="dataset-count">--</strong>
         </div>
       </section>
 
@@ -61,6 +46,7 @@
         <div class="panel-heading">
           <h2>Aircraft Playback</h2>
           <p id="playback-status">Loading trajectory...</p>
+          <p id="explorer-status" class="explorer-status"></p>
         </div>
         <div class="view-tabs" id="playback-tabs" aria-label="Playback view">
           <button type="button" data-playback-view="animation" class="active">Animation</button>
@@ -69,7 +55,9 @@
         <div id="animation-view" class="playback-view">
           <div class="playback-stage">
             <div id="aircraft-playback" class="aircraft-playback" aria-label="Animated aircraft state playback"></div>
+            <button type="button" id="playback-fullscreen" aria-label="Toggle fullscreen">Fullscreen</button>
             <div class="control-hud" aria-label="Control inputs">
+              <div><span>Mode</span><b id="control-mode-value">--</b></div>
               <div><span>Thrust</span><span class="control-bar thrust"><span id="control-thrust" class="control-fill"></span></span><b id="control-thrust-value">0.00</b></div>
               <div><span>Aileron</span><span class="control-bar signed"><span id="control-aileron" class="control-fill"></span></span><b id="control-aileron-value">0.00</b></div>
               <div><span>Elevator</span><span class="control-bar signed"><span id="control-elevator" class="control-fill"></span></span><b id="control-elevator-value">0.00</b></div>
@@ -83,8 +71,14 @@
             <button type="button" id="playback-follow" aria-label="Toggle follow camera" aria-pressed="false">Follow</button>
             <label class="scrub-label">
               Time
-              <input id="playback-scrub" type="range" min="0" max="1" step="0.001" value="0">
+              <div class="scrub-wrap">
+                <input id="playback-scrub" type="range" min="0" max="1" step="0.001" value="0">
+                <div id="trail-window" aria-hidden="true"></div>
+                <div id="trail-past-handle" title="Drag to set how many seconds of past trail to show"></div>
+                <div id="trail-future-handle" title="Drag to set how many seconds of future trail to show"></div>
+              </div>
             </label>
+            <button type="button" id="playback-predict" title="Set the prediction initial condition at the current time">Predict here</button>
             <label class="segment-label">
               Flight
               <select id="playback-segment"></select>
@@ -147,6 +141,25 @@
             <dl class="maneuver-list" id="maneuver-list"></dl>
           </div>
 
+      <section class="summary-grid" aria-label="Scenario summary">
+        <div class="metric">
+          <span>Best method</span>
+          <strong id="best-method">--</strong>
+        </div>
+        <div class="metric">
+          <span>Best validation score</span>
+          <strong id="best-score">--</strong>
+        </div>
+        <div class="metric">
+          <span>Methods</span>
+          <strong id="method-count">--</strong>
+        </div>
+        <div class="metric">
+          <span>Datasets</span>
+          <strong id="dataset-count">--</strong>
+        </div>
+      </section>
+
         </div>
       </section>
 
@@ -190,6 +203,15 @@
       </section>
     </main>
 
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"
+        }
+      }
+    </script>
     <script src="./src/app.js" type="module"></script>
+    <script src="./src/explorer.js" type="module"></script>
   </body>
 </html>

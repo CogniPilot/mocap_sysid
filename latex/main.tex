@@ -204,7 +204,7 @@ Aerodynamic forces and the pitching moment are computed as
     \qquad
     D = C_{D}\,\bar{q}\,S,
     \qquad
-    M = C_{M}\,\bar{q}\,S,
+    M = C_{M}\,\bar{q}\,S\,\bar{c},
     \label{eq:aero_loads}
 \end{equation}
 with conventional coefficient expansions
@@ -216,9 +216,12 @@ with conventional coefficient expansions
     C_{M} &= C_{M_0}
            + C_{M_\alpha}\,\alpha
            + C_{M_{\delta_e}}\,\delta_{e,\mathrm{act}}
-           + C_{M_Q}\,Q.
+           + C_{M_Q}\,\hat{q},
     \label{eq:CM}
 \end{align}
+where $\hat{q} = \bar{c}Q/(2V)$ is the conventional non-dimensional pitch
+rate and $\bar{c}$ is the mean aerodynamic chord, so all pitching-moment
+derivatives are standard non-dimensional stability derivatives.
 
 The nominal parameter vector above is the structure available to the classical
 fixed-form methods. It is an attached-flow model: lift is linear in angle of
@@ -271,12 +274,12 @@ moment use the residual forms
 +g_s\left(0.090+0.95\epsilon_\alpha+4.50\epsilon_\alpha^2\right)
 +0.016g_s\max(-V_r,0),\\
 \Delta C_M &=
--0.006\alpha_r^3
-+0.006\alpha_r\delta_r
-+0.004\tanh(q_r)|\alpha_r|
-+0.0025\sin(2\gamma)
--g_s\left(0.075+0.55\epsilon_\alpha\right)s_\alpha
--0.018g_s\tanh(\delta_r),
+-0.033\alpha_r^3
++0.033\alpha_r\delta_r
++0.022\tanh(q_r)|\alpha_r|
++0.014\sin(2\gamma)
+-g_s\left(0.42+3.0\epsilon_\alpha\right)s_\alpha
+-0.10\,g_s\tanh(\delta_r),
 \end{align}
 with normalized variables
 \[
@@ -297,16 +300,15 @@ the hidden controller commands recovery before the aircraft spends much time in
 the high-$\alpha$ regime.
 
 \paragraph{Note on pitching-moment normalisation.}
-The expression $M = C_{M}\bar{q}S$ in \eqref{eq:aero_loads} omits the
-reference chord $\bar{c}$ that appears in the standard convention ($M_{\mathrm{std}} = C_{M}^{\mathrm{std}}\bar{q}S\bar{c}$).
-The simulation does not define $\bar{c}$ as a separate parameter; all
-pitching-moment derivatives in \eqref{eq:CM} therefore implicitly absorb one
-power of $\bar{c}$ and their numerical values are not directly comparable to
-standard tabulated stability derivatives.
-In particular, $C_{M_Q}$ as used here is a {dimensional} pitch-damping
-derivative with units $\mathrm{s\,rad^{-1}}$, absorbing the factor
-$\bar{c}/(2V)$ from the conventional nondimensional pitch rate
-$\hat{q} = Q\bar{c}/(2V)$.
+The pitching moment uses the standard convention
+$M = C_{M}\bar{q}S\bar{c}$ with the non-dimensional pitch rate
+$\hat{q} = \bar{c}Q/(2V)$, so $C_{M_Q}$ and the other pitching-moment
+derivatives in \eqref{eq:CM} are dimensionless and directly comparable to
+tabulated stability derivatives. The $\bar{c}/(2V)$ rate scaling also gives
+the model its physically correct speed-dependent pitch damping; the resulting
+short-period mode of the nominal aircraft is approximately $1.1$~Hz with
+damping ratio $0.74$ at the $15$~m/s trim condition, above a lightly damped
+phugoid.
 \subsection*{Equations of Motion (3-DoF Longitudinal)}
 The equations governing the pure longitudinal motion are:
 \begin{equation}
@@ -341,14 +343,15 @@ Quantity & Value & Code source or role \\
 Mass $m$ & $1.0$ kg & \texttt{Aircraft.mass} \\
 Pitch inertia $J_y$ & $0.15$ kg m$^2$ & \texttt{Aircraft.jy} \\
 Reference area $S$ & $0.25$ m$^2$ & \texttt{Aircraft.wing\_area} \\
+Mean chord $\bar{c}$ & $0.18$ m & \texttt{Aircraft.chord} \\
 Air density $\rho$ & $1.225$ kg/m$^3$ & \texttt{Aircraft.rho} \\
 Gravity $g$ & $9.81$ m/s$^2$ & \texttt{Aircraft.gravity} \\
 Nominal $C_{L0}, C_{L\alpha}$ & $0.10,\;3.00$ & \texttt{NominalAero} \\
 Nominal $C_{D0}, k$ & $0.030,\;0.10$ & \texttt{NominalAero} \\
-Nominal $C_{M0}, C_{M\alpha}$ & $0.010,\;-0.100$ & \texttt{NominalAero} \\
-Nominal $C_{MQ}, C_{M\delta_e}$ & $-0.100,\;0.100$ & \texttt{NominalAero} \\
+Nominal $C_{M0}, C_{M\alpha}$ & $0.05,\;-0.60$ & \texttt{NominalAero} \\
+Nominal $C_{MQ}, C_{M\delta_e}$ & $-12.0,\;0.60$ & \texttt{NominalAero} \\
 Sample time $\Delta t$ & $0.01$ s & locked 100 Hz mocap rate \\
-Trajectory duration & $40$ s & \texttt{SimulationConfig.duration} \\
+Trajectory duration & $40$ s ($10$ s for unstabilized aggressive/sweep records) & \texttt{SimulationConfig.duration} \\
 Training/validation trials & $64/16$ & \texttt{SimulationConfig} \\
 Direct-state noise std. & $[0.08,0.0035,0.0035,0.012]$ & $[V,\alpha,\gamma,Q]$ \\
 Mocap noise std. & $0.002$ m, $0.0015$ rad & $[p_x,p_z,\theta]$ \\
@@ -542,9 +545,12 @@ models should be competitive. The aggressive sine-sweep and aggressive
 nonlinear datasets use a stratified initial-condition sampler instead of a
 single Gaussian perturbation about trim. SAFE-off aggressive trials are drawn
 from local-trim, low-speed/high-$\alpha$, pull-up, recovery, and fast-dive
-bands: approximately $V\in[7.5,29]$ m/s,
-$\alpha\in[-5^\circ,20^\circ]$, $\gamma\in[-35^\circ,32^\circ]$, and
-$q\in[-95,90]^\circ$/s over the union of regimes. The validation split shifts
+bands: approximately $V\in[8.5,26]$ m/s,
+$\alpha\in[-4^\circ,18^\circ]$, $\gamma\in[-20^\circ,18^\circ]$, and
+$q\in[-55,50]^\circ$/s over the union of regimes; the unstabilized
+aggressive and sweep records are short ($10$~s) flight-test maneuvers because
+the realistic lightly damped phugoid cannot be flown open loop for long
+periods. The validation split shifts
 some high-$\alpha$ bands upward to test interpolation and limited
 extrapolation. SAFE-on trials use a broad but recoverable subset of the same
 idea so that the hidden recovery loop can visibly suppress high-$\alpha$
@@ -724,8 +730,9 @@ from smoothed state derivatives:
     \widehat{M}_k
         &= J_y\dot{\widetilde{Q}}_k,\\
     \widehat{\mathbf{C}}_k
-        &= [\widehat{L}_k,\widehat{D}_k,\widehat{M}_k]^T
-           /(\bar{q}_k S).
+        &= \left[\frac{\widehat{L}_k}{\bar{q}_k S},
+                 \frac{\widehat{D}_k}{\bar{q}_k S},
+                 \frac{\widehat{M}_k}{\bar{q}_k S \bar{c}}\right]^T.
         \label{eq:code_inferred_coefficients}
 \end{align}
 It then solves three ordinary least-squares problems,
@@ -740,22 +747,32 @@ It then solves three ordinary least-squares problems,
      \widehat{C}_{MQ},\widehat{C}_{M\delta_e}]^T
         &= \arg\min_{\beta}\sum_k
         \left(\widehat{C}_{M,k}
-        -[1,\widetilde{\alpha}_k,\widetilde{Q}_k,\delta_{e,k}]\beta\right)^2.
+        -[1,\widetilde{\alpha}_k,\hat{q}_k,\delta_{e,k}]\beta\right)^2,
         \label{eq:code_equation_error}
 \end{align}
+with $\hat{q}_k = \bar{c}\widetilde{Q}_k/(2\widetilde{V}_k)$.
 The fitted vector is clipped to the code bounds
-$[-0.5,0,0,0,-0.2,-1,-1,-0.5]\le\theta\le
-[0.5,6,0.2,0.5,0.2,0.5,0.1,0.5]$. This matches
+$[-0.5,0,0,0,-1,-5,-50,-3]\le\theta\le
+[0.5,6,0.2,0.5,1,3,0,3]$. This matches
 \texttt{infer\_coefficients} and \texttt{fit\_equation\_error}.
 
-\paragraph{Output-error single shooting.}
-The coded single-shooting OEM estimates one global aerodynamic parameter vector
-and one initial state for each selected training trajectory:
+\paragraph{Output-error multiple shooting.}
+The coded OEM estimates one global aerodynamic parameter vector together with
+multiple-shooting node states for each selected training trajectory. Each
+trajectory is split into $N_s$ segments with free node states
+$\{\mathbf{x}_{s}^{(r)}\}$; the objective combines weighted measurement
+residuals along each simulated segment with soft continuity residuals at the
+segment boundaries:
 \begin{equation}
-    \min_{\theta,\{\mathbf{x}_{0}^{(r)}\}}
+    \min_{\theta,\{\mathbf{x}_{s}^{(r)}\}}
     \sum_{r\in\mathcal{R}}\sum_{k\in\mathcal{K}}\sum_{j=1}^{4}
     \left(
     \frac{\hat{x}_{k,j}^{(r)}-y_{k,j}^{(r)}}{\sigma_j}
+    \right)^2
+    +
+    \sum_{r,s,j}
+    \left(
+    \frac{\hat{x}_{\mathrm{end},j}^{(r,s)}-x_{s+1,j}^{(r)}}{\sigma_{c,j}}
     \right)^2,
     \qquad
     \hat{\mathbf{x}}_{k+1}^{(r)}
@@ -767,8 +784,12 @@ and one initial state for each selected training trajectory:
 \end{equation}
 The direct-state noise weights are
 $\sigma=[0.08,0.0035,0.0035,0.012]$. The current comparison uses CasADi/IPOPT,
-bounded parameters, bounded initial states, a selected number of trajectories,
-and a fit stride. This is the implementation in
+bounded parameters, bounded node states, a selected number of trajectories,
+a fit stride, and six segments per trajectory; the IPOPT return status is
+recorded with the result so unconverged solves are flagged rather than
+reported silently. Multiple shooting is required here because the misspecified
+initial guess is statically unstable in pitch and a single-shooting rollout
+diverges over the record length. This is the implementation in
 \texttt{run\_oem\_casadi}.
 
 \paragraph{Mocap-output OEM.}
@@ -1206,8 +1227,8 @@ would make the nominal model match the measured derivatives:
     \delta_{e,\mathrm{eff},k}
     &=
     \frac{
-    J_y\dot{\widetilde{Q}}_k/(\bar{q}_kS)
-    -C_{M0}-C_{M\alpha}\widetilde{\alpha}_k-C_{MQ}\widetilde{Q}_k}
+    J_y\dot{\widetilde{Q}}_k/(\bar{q}_kS\bar{c})
+    -C_{M0}-C_{M\alpha}\widetilde{\alpha}_k-C_{MQ}\hat{q}_k}
     {C_{M\delta_e}}.
 \end{align}
 The target correction is
@@ -1337,8 +1358,8 @@ maneuvers for the benchmark datasets. For each dataset, the plotted trajectory
 is the validation trial with the largest absolute angle of attack, so the figure
 shows the intended excitation envelope rather than an arbitrary mild trial. The
 aggressive sine-sweep and aggressive nonlinear cases deliberately add large
-elevator pulses, throttle excursions, and high-$\alpha$ dwell segments to leave
-the near-trim region. The SAFE-on variants receive similarly aggressive pilot
+elevator pulses, throttle excursions, and brief pull-and-release stall probes
+to leave the near-trim region. The SAFE-on variants receive similarly aggressive pilot
 commands, but the hidden pitch/rate recovery logic reshapes the actuator input
 and suppresses much of the actual high-$\alpha$ response.
 
@@ -1656,6 +1677,215 @@ with $T_{\max}=8.8\,\mathrm{N}$ and $\ell_T=0.035\,\mathrm{m}$. The coded body l
 The dataset stores both the truth coefficients and an attached-flow nominal coefficient set; their difference is the hidden nonlinear aerodynamic residual. Four maneuver families are available in the generator: a near-trim \texttt{open\_loop} small-maneuver case, a \texttt{sine\_sweep} frequency-excitation case, an \texttt{aggressive} nonlinear stall/recovery case, and a \texttt{trim\_grid} case that samples local small-deviation responses across speed, angle of attack, and sideslip. The 6-DOF comparison assigns every method an explicit training split and then validates the trained model across the maneuver family. The local-model methods train on \texttt{trim\_grid} because they require repeated small perturbations near operating points; global nonlinear residual and surrogate methods train on \texttt{aggressive}; the nominal baseline uses no fit. The 6-DOF heatmaps report all validation datasets as separate columns, with the leftmost column giving each method's mean score across the available 6-DOF benchmark conditions.
 
 Two observation assumptions are evaluated. In the direct-state case, the method receives noisy measurements of all 13 states during training and the initial measured state during validation. In the mocap-derived case, the method receives position and quaternion attitude. Body velocity is reconstructed by differentiating mocap position and rotating the result into the body frame, while angular rate is reconstructed by differentiating the quaternion and solving the local quaternion-rate equation. These reconstructed velocity and rate channels are intentionally noisier than the direct-state channel.
+
+\subsection{Real Flight Records: Lead-In Segmentation and Trim-Offset Calibration}
+\label{subsec:real_segmentation}
+
+In addition to the synthetic maneuver families, the 6-DOF benchmark runs the
+same baseline methods on real Sport Cub S2 motion-capture flight records
+collected in the PURT indoor testbed \citep{sribunma2026indoor}. Two
+collections are included. The 2026-04-17 collection consists of short piloted
+maneuvers (elevator and aileron 3-2-1-1 sequences, doublets, and throttle
+steps) tracked at 100\,Hz and packaged as train and validation splits of
+maneuver segments. The 2026-05-22 collection consists of complete piloted
+laps recorded as ROS~2 bags: the aircraft flies a stabilized circuit with the
+SAFE inner loop engaged, the pilot disengages the inner loop mid-facility,
+performs a maneuver on the bare airframe, and re-engages stabilization. The
+transmitter mode channel is recorded alongside the stick channels, so the
+controller state is known at every sample. A converter resamples the mocap
+odometry and 53\,Hz stick stream to a uniform 240\,Hz grid (the native
+Qualisys odometry rate; one autonomous bag streams 100\,Hz) (the stick-to-PWM
+calibration was verified exact, $|r|>0.999$, against the serial echo on every
+manually flown bag) and an automatic segmenter classifies every sample as
+ground, stabilized, or manual: ground samples are detected from motion-capture
+altitude with hysteresis and excluded; stabilized samples are excluded from the
+bare-airframe splits because the hidden inner loop reshapes the surface
+commands; quality-gated manual windows become the identification segments,
+assigned round-robin across flights so one model is learned from all runs.
+Bare-airframe trim is estimated per flight by pooling quasi-steady manual
+samples (low angular rate, low stick rate), because each run can carry a
+different transmitter trim. Real records differ from the synthetic datasets
+in two ways that matter for open-loop scoring. First, each segment begins with
+an input-free dwell of varying length before the pilot applies the maneuver
+input. Because the airframe is open-loop unstable, the rollout error
+accumulated during this dwell grows at the rate of the unstable mode
+regardless of model quality, so the dwell measures initial-condition
+sensitivity rather than identification accuracy. Second, the transmitter trim
+is not exactly zero, so the recorded stick commands carry unknown constant
+offsets relative to the model's neutral control surfaces; left uncorrected,
+these offsets bias every fitted control derivative.
+
+The benchmark therefore decomposes each real record into a \emph{lead-in}
+segment and a \emph{control-actuation} segment, following standard flight-test
+practice in which maneuver records are windowed around the excitation and
+constant bias parameters are estimated as part of data compatibility analysis
+\citep{KleinMorelli2006, jategaonkar2006flight, Tischler1995SystemIM}. The
+lead-in length is detected automatically per segment as the first sample at
+which any command channel departs from its initial level by more than 15\% of
+that channel's range within the record (with an absolute floor to reject
+noise-only channels). The lead-in is used only for trim calibration; the
+control-actuation segment is used for dynamics, providing the fitting data on
+the training split and the open-loop scoring window on the validation split.
+
+The lead-in calibrates two quantities. The validation initial condition is
+estimated by a local linear regression over the lead-in evaluated at the
+actuation onset, rather than read from a single noisy measurement frame.
+Constant input offsets $\mathbf{b}$ are estimated by reconciling the nominal
+model with the quasi-steady lead-in: with $\bar{\mathbf{x}}$ and
+$\bar{\mathbf{u}}$ the lead-in mean state and command and
+$\dot{\mathbf{x}}_{\mathrm{obs}}$ the secant state derivative across the
+lead-in, the offsets solve the regularized least-squares problem
+\begin{equation}
+    \frac{\partial \mathbf{f}}{\partial \mathbf{u}}
+    \Big|_{\bar{\mathbf{x}},\bar{\mathbf{u}}}\,\mathbf{b}
+    \approx \mathbf{f}(\bar{\mathbf{x}},\bar{\mathbf{u}})
+    - \dot{\mathbf{x}}_{\mathrm{obs}},
+    \label{eq:input_bias}
+\end{equation}
+and the corrected commands $\mathbf{u}-\mathbf{b}$ are supplied to all
+methods. The kinematic rows of $\mathbf{f}$ do not depend on the inputs and
+drop out of the normal equations. Because the transmitter trim is a single
+physical setting per flight, the normal equations are pooled per flight
+(across all maneuver segments recorded in that flight), weighted by lead-in
+length, rather than solved per segment; per-segment estimates were observed to
+absorb local model error into the offsets. The estimate is clipped to $\pm0.2$ command units, and the usual
+caveat of data compatibility analysis applies: the recovered offsets are
+\emph{effective} biases that absorb any steady model error (for example,
+thrust-map mismatch appearing as a throttle offset) along with the physical
+transmitter trim \citep{KleinMorelli2006}. Within the benchmark structure the
+fitted-model rows are unaffected by this confounding because their regressors
+include constant columns; the correction primarily re-references the
+physics-based rows to the aircraft's actual trim. Because real maneuver
+records have very different lengths, the actuation segments are
+rectangularized by chunking rather than truncation: a common window length is
+chosen from the shortest usable record (clamped to a benchmark range of
+0.6--1.2\,s) and longer maneuvers contribute several consecutive windows, with
+follow-on window initial conditions estimated from a local fit over the
+trailing samples of the preceding window. No flight data is discarded to the
+shortest segment. The segmentation and calibration are applied identically to
+the training and validation splits, each split using only its own lead-in
+data, and can be disabled with \texttt{--no-onset-trim} and
+\texttt{--no-input-bias} for ablation.
+
+\paragraph{Ground-roll data and rolling-resistance identification.}
+The segmenter also exports the rolling ground data instead of discarding it,
+classified into takeoff rolls (throttle advance to the instant of liftoff),
+landing rollouts, and taxi, plus low passes below approximately one wingspan
+tagged as a (small) ground-effect set. Ground data is highly susceptible to
+floor disturbances — wheel debris, surface seams, handling contact, and the
+taildragger gear's tendency to ground-loop — so every
+sample carries a robust outlier flag before any fitting. Yaw-rate bursts above
+1.5\,rad/s on the ground are flagged as spin-outs, whose wheel-scrub forces
+invalidate the straight-rolling friction model (deliberate taxi turns are
+flagged by the same test, and are equally invalid for that model). Detectors based on
+differentiated quantities fail here: acceleration z-scores flag the legitimate
+acceleration ramp of a takeoff roll, and jerk z-scores flag the resampling
+knots of segments recorded at lower odometry rates. The detector instead
+flags departures of ground speed from a short moving-average fit, using a
+median/MAD modified z-score \emph{with an absolute magnitude floor}
+(0.15\,m/s): rolling contact has a small-amplitude periodic texture from the
+wheels and floor seams that a pure z-score flags wholesale once the robust
+scale collapses, while genuine debris strikes also clear the absolute floor.
+An attitude gate flags departures from the per-window median attitude (the
+taildragger rests nose-up, so absolute pitch is not an anomaly), and flags are
+dilated to cover transient shoulders; about 4\% of rolling samples are
+rejected.
+
+The ground-roll model is $\dot{V} = k_T T(\delta_T)/m - \mu_{\mathrm{eff}} g -
+c_v V^2 - k_{\mathrm{batt}}\,\tau\,T(\delta_T)/m$ with $T(\delta_T) = T_{\max}
+\delta_T^{1.45}$ the nominal thrust map and $\tau$ the session time. In this
+session the pilot held essentially one throttle level on the ground, so $k_T$
+and $\mu_{\mathrm{eff}}$ are not separately identifiable from ground data
+alone; the analysis adopts the nominal map as a stated prior ($k_T = 1$) and
+reports the sensitivity $\partial\mu_{\mathrm{eff}}/\partial k_T$ so the
+assumption is transparent. The $k_{\mathrm{batt}}$ term models battery sag:
+the airframe flies on a 1S LiPo whose prop power visibly decays over the
+session, and because the ground windows span the session at a common throttle
+level, session time provides the thrust contrast that throttle does not.
+A second battery stage separates the effect per flight, and is the physically
+meaningful one: pack endurance is only 5--10 minutes, so batteries are swapped
+or recharged between flights and the session-wide term is at best a crude
+trend across packs rather than one battery discharging. Each flight starts at
+its own pack voltage and the voltage droops within the flight, lowering the
+achievable motor rpm. Voltage is not telemetered, so with
+$\mu_{\mathrm{eff}}$ and $c_v$ anchored by the pooled fit, the thrust-side
+residual is regressed per flight on $[T/m,\; t_{\mathrm{flight}}\,T/m]$,
+giving an initial thrust scale $k_f$ (an initial-voltage proxy) and a
+within-flight decay rate for every flight with sufficient ground samples.
+These per-flight estimates carry two stated caveats: flights whose ground
+data is takeoff-only leave $t\,T/m$ nearly collinear with $T/m$ at the
+session's single throttle level, and landing-rollout samples mix propeller
+windmilling drag into the apparent late-flight thrust loss, so the per-flight
+numbers are meaningful primarily where both takeoff and landing rolls exist. A
+Huber iteratively-reweighted fit over the outlier-screened, yaw-rate-gated
+rolling samples yields $\mu_{\mathrm{eff}} \approx 0.10$ (plausible for small
+rubber wheels on a gymnasium floor; sensitivity $0.16$ per unit $k_T$),
+$c_v \approx 0.005\,\mathrm{m}^{-1}$, and a thrust loss of roughly 7\% per
+30 minutes of session time. Figure~\ref{fig:ground_roll} shows the longest
+takeoff roll with its outlier flags and the pooled fit.
+
+\begin{figure}[htbp]
+    \centering
+    \includesvg[width=0.9\linewidth]{ground_roll_takeoff}
+    \caption{Automatically segmented takeoff roll from the 2026-05-22 Sport
+    Cub session. Top: ground speed and scaled throttle with robust outlier
+    flags (red). Bottom: measured longitudinal acceleration against the pooled
+    Huber ground-roll fit with rolling resistance, quadratic drag, and battery
+    sag under the nominal-thrust prior.}
+    \label{fig:ground_roll}
+\end{figure}
+
+\paragraph{Hidden SAFE inner-loop identification.}
+Free-run prediction through stabilized flight requires a model of the hidden
+Horizon Hobby SAFE inner loop, because in stabilized mode the pilot is not
+commanding surface deflections at all: the stick commands attitude (and
+throttle passes through), with envelope protection limiting the achievable
+attitude and the usual surface saturation. Per attitude axis the controller is
+modeled as
+$\delta = K_p\left(\mathrm{sat}(c\,\delta_{\mathrm{stick}},\pm\ell) -
+\vartheta\right) - K_d\,\omega + b$,
+where $c$ is the stick-to-attitude-command scale, the clip at $\pm\ell$ is the
+envelope protection, $\vartheta$ and $\omega$ are the axis attitude and rate,
+and the output saturates at the surface throws; the rudder is modeled as
+passthrough plus yaw damping. The model is nonlinear only through $(c,\ell)$,
+so identification is staged: a coarse grid over $(c,\ell)$ wraps a
+Huber-robust linear fit of $(K_p, K_d, b)$ given the saturated attitude
+command. The effective surfaces are not measured, but inverse dynamics
+recovers them sample by sample: the observed angular accelerations give the
+aerodynamic moments, the airframe moment model is affine in each surface, and
+inverting that relation yields the deflection the airframe must have seen —
+the 6-DOF analogue of the benchmark's hidden-controller rows. The current
+estimate is provisional: the inversion is conditioned on the nominal
+airframe's surface effectiveness, the double-differentiated motion-capture
+attitude is noisy, and the recorded laps barely probe the envelope limits, so
+the gains improve as the identified airframe replaces the nominal model and as
+envelope-probing stabilized data is collected.
+
+\paragraph{Segment-anchored scoring and free-run prediction.}
+The full-flight explorer view scores each airborne segment with a rollout
+whose initial condition is estimated by a local fit at that segment's start —
+the same convention used during training, so identification cost functions
+never begin from an already-diverged state on an open-loop unstable airframe.
+From any selected segment a free run continues to the next ground contact
+with no further state resets: manual segments use the recorded sticks
+re-referenced by the per-flight trim bias. Stabilized segments use a
+\emph{directly identified closed-loop model} (state and stick to next state,
+ridge-fitted on every tracked stabilized sample of the session) rather than
+composing the bare airframe with the inverse-dynamics controller estimate:
+the closed loop is abundantly excited by the lap data and is exactly what
+stabilized segments replay, and on five-second stabilized free-runs it
+reduces the full-state NRMSE roughly four-fold relative to the
+controller-decomposition route (about 0.3--0.5 versus 1.4--1.7). The
+explicit controller identification of the previous paragraph is retained for
+interpretability and for eventual composition with identified airframes. Model rollouts are computed
+on the fly in the browser from exported model parameters (the attached-flow
+nominal model, affine state-space and residual weights, and controller
+gains), which avoids exporting a trace per segment--method pair and allows
+the initial condition to be placed anywhere in the flight; small
+NumPy-trained networks deploy the same way as JSON weight specifications
+evaluated by a generic forward pass, while torch-trained models deploy as
+ONNX graphs evaluated in-browser, with the same integration loop in either
+case.
 
 \subsection{6-DOF Baseline Methods}
 

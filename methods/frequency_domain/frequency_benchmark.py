@@ -27,7 +27,9 @@ from common.plotting import save_figure
 
 
 def transfer_estimate(input_signal: np.ndarray, output_signal: np.ndarray, fs: float, nperseg: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    freq, pxy = csd(output_signal, input_signal, fs=fs, nperseg=nperseg, detrend="constant")
+    # H1 estimate: scipy csd(x, y) averages conj(X) * Y, so the input must be
+    # the first argument or the returned phase is conjugated.
+    freq, pxy = csd(input_signal, output_signal, fs=fs, nperseg=nperseg, detrend="constant")
     _, pxx = welch(input_signal, fs=fs, nperseg=nperseg, detrend="constant")
     _, coh = coherence(input_signal, output_signal, fs=fs, nperseg=nperseg, detrend="constant")
     return freq, pxy / pxx, coh
