@@ -17,3 +17,7 @@
 /results/suite_orchestration.csv
 
 __pycache__/
+
+# Local development notes and review experiments (not part of the benchmark).
+/dev/
+/data/data_20260522/

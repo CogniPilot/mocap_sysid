@@ -1,14 +1,14 @@
 :root {
-  color-scheme: light;
-  --bg: #f7f8fa;
-  --panel: #ffffff;
-  --ink: #1d2430;
-  --muted: #5f6b7a;
-  --line: #d8dee8;
-  --accent: #1f6feb;
-  --direct: #3b6ea5;
-  --mocap: #d97706;
-  --nominal: #d62728;
+  color-scheme: dark;
+  --bg: #15181c;
+  --panel: #1e2329;
+  --ink: #dbe2ea;
+  --muted: #97a3b1;
+  --line: #353d47;
+  --accent: #6ea8fe;
+  --direct: #7fa8d4;
+  --mocap: #f0a040;
+  --nominal: #e57373;
 }
 
 * {
@@ -293,7 +293,7 @@ button:hover {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #d9dee7;
+  background: #262b31;
 }
 
 .aircraft-playback canvas {
@@ -378,11 +378,23 @@ button:hover {
 }
 
 .playback-controls {
-  display: grid;
-  grid-template-columns: 42px 42px 42px 78px minmax(180px, 1fr) minmax(140px, 0.5fr) 120px;
+  display: flex;
+  flex-wrap: wrap;
   gap: 10px;
-  align-items: end;
+  align-items: flex-end;
   margin-top: 12px;
+}
+
+.playback-controls .scrub-label {
+  flex: 1 1 240px;
+}
+
+.playback-controls .segment-label {
+  flex: 0 1 200px;
+}
+
+.playback-controls .speed-label {
+  width: 120px;
 }
 
 .playback-controls button {
@@ -397,7 +409,17 @@ button:hover {
   min-width: 78px;
 }
 
-#playback-follow.active {
+#playback-predict {
+  width: auto;
+  min-width: 0;
+  padding: 0 14px;
+  height: 34px;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+#playback-follow.active,
+#playback-predict.active {
   border-color: #9ec5fe;
   background: #eaf2ff;
   color: var(--accent);
@@ -477,7 +499,7 @@ button:hover {
 }
 
 .axis-line {
-  stroke: #a9b6c7;
+  stroke: #5d6a79;
   stroke-width: 1.1;
 }
 
@@ -509,8 +531,8 @@ button:hover {
 }
 
 .truth-series {
-  stroke: #111827;
-  stroke-width: 2;
+  stroke: #e4eaf2;
+  stroke-width: 1.7;
 }
 
 .method-series {
@@ -706,10 +728,6 @@ tbody tr {
     width: 100%;
   }
 
-  .playback-controls {
-    grid-template-columns: repeat(3, 42px) 78px minmax(0, 1fr);
-  }
-
   .panel-heading,
   .definition-list div {
     display: grid;
@@ -727,4 +745,178 @@ tbody tr {
   .segment-label {
     grid-column: 1 / -1;
   }
+}
+
+/* Flight explorer */
+.explorer-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.explorer-methods label {
+  margin-right: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.explorer-legend span {
+  margin-right: 0.7rem;
+  font-size: 0.85rem;
+  color: #444;
+}
+.explorer-legend i {
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  margin-right: 0.3em;
+  border-radius: 2px;
+}
+.explorer-timeline,
+.explorer-chart {
+  width: 100%;
+  margin-bottom: 0.4rem;
+}
+.explorer-badge {
+  padding: 0.05rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  color: #fff;
+}
+.explorer-badge.train { background: #444; }
+.explorer-badge.validation { background: #d62728; }
+
+/* Dark is the default theme; these override the hardcoded light surfaces. */
+button:hover {
+  border-color: #4a5868;
+}
+.segmented button.active,
+.view-tabs button.active,
+#playback-follow.active,
+#playback-predict.active,
+.selected-method-row {
+  background: #243043;
+  color: #9ec5fe;
+}
+.segmented button.active,
+.view-tabs button.active,
+#playback-follow.active,
+#playback-predict.active {
+  border-color: #3d5a85;
+}
+.view-tabs {
+  background: var(--panel);
+}
+.control-hud {
+  background: rgba(30, 35, 41, 0.92);
+  color: var(--ink);
+}
+.control-bar {
+  background: #2c333c;
+}
+.timeseries-grid svg {
+  background: #1a1f24;
+}
+svg text {
+  fill: #aab4bf;
+}
+
+
+
+.playback-stage:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  background: #262b31;
+}
+
+.playback-stage:fullscreen .aircraft-playback {
+  height: 100vh;
+  border: none;
+  border-radius: 0;
+}
+
+#playback-fullscreen {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  z-index: 5;
+  opacity: 0.85;
+}
+
+
+/* Segmentation-colored playback scrubber */
+#playback-scrub {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 14px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: #2c333c;
+}
+
+#playback-scrub::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 6px;
+  height: 22px;
+  border-radius: 3px;
+  background: #f1f5f9;
+  border: 1px solid #0d1117;
+  cursor: pointer;
+}
+
+#playback-scrub::-moz-range-thumb {
+  width: 6px;
+  height: 22px;
+  border-radius: 3px;
+  background: #f1f5f9;
+  border: 1px solid #0d1117;
+  cursor: pointer;
+}
+
+
+.explorer-status {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+
+/* Summary metrics live beside the Maneuver panel in the side stack. */
+.side-stack .summary-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 0;
+}
+
+
+/* Qualisys-style trail window on the time bar */
+.scrub-wrap {
+  position: relative;
+}
+
+#trail-window {
+  position: absolute;
+  top: 1px;
+  height: 12px;
+  border: 1px solid rgba(241, 245, 249, 0.75);
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+#trail-past-handle,
+#trail-future-handle {
+  position: absolute;
+  top: -7px;
+  width: 10px;
+  height: 8px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+#trail-past-handle::after,
+#trail-future-handle::after {
+  content: "";
+  display: block;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 7px solid #cbd5e1;
 }

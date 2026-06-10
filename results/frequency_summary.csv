@@ -1,3 +1,3 @@
 output,peak_frequency_hz,peak_magnitude_db,mean_coherence,method,case,elapsed_s
-Q,10.0,84.09676368622102,0.27374343354748765,frequency_welch_etfe,frequency_multisine,1.2957593809987884
-gamma,10.0,74.96233489979724,0.1417668159065476,frequency_welch_etfe,frequency_multisine,1.2957606409981963
+Q,10.0,145.28396669191207,0.26084946813092547,frequency_welch_etfe,frequency_multisine,1.140367433996289
+gamma,9.609375,127.97546354587641,0.23654234591294365,frequency_welch_etfe,frequency_multisine,1.1403689739963738

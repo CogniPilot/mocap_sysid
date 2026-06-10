@@ -1,0 +1,42 @@
+{
+  "id": "sportcub_mocap_5_22_26",
+  "title": "Sport Cub S 2 motion-capture full-lap 6DOF dataset, 2026-05-22",
+  "status": "provisional",
+  "model_family": "aircraft6dof",
+  "source_type": "real_mocap",
+  "observation_type": "mocap_position_attitude",
+  "sample_rate_hz": 240,
+  "collection_date": "2026-05-22",
+  "airframe": "HobbyZone Sport Cub S 2",
+  "inputs": [
+    "throttle",
+    "elevator",
+    "aileron",
+    "rudder"
+  ],
+  "outputs": [
+    "position_enu",
+    "quaternion_wxyz",
+    "flight_mode"
+  ],
+  "temporary_source": {
+    "url": null,
+    "provider": "local rosbag2 MCAP recordings under data/data_20260522 (gitignored)",
+    "accessed_utc": "2026-06-10",
+    "sha256": null,
+    "bytes": null,
+    "provided_by": "PURT indoor testbed flight session"
+  },
+  "canonical_archive": null,
+  "local_data_dir": "data",
+  "local_data_files": {
+    "flights": "data/sportcub_mocap_5_22_26_flights.npz",
+    "train": "data/sportcub_mocap_5_22_26_train.npz",
+    "validation": "data/sportcub_mocap_5_22_26_validation.npz"
+  },
+  "processing": {
+    "convert": "dataset_tools/sportcub_mocap_5_22_26/convert.py",
+    "segment": "dataset_tools/sportcub_mocap_5_22_26/segment.py"
+  },
+  "notes": "Full piloted laps: stabilized circuits (SAFE inner loop on, flight_mode=1) with the inner loop switched off mid-facility for maneuvers (flight_mode=0). The transmitter mode channel is recorded, so maneuver windows are exact. The segmenter classifies ground/stabilized/manual via mocap altitude and the mode channel, quality-gates manual windows, estimates per-flight bare-airframe trim from quasi-steady manual samples, and exports cross-flight train/validation splits. Resampled at the native ~240 Hz Qualisys odometry rate (the auto bag streams 100 Hz natively). Mirror raw bags to a durable archive before treating this as canonical."
+}

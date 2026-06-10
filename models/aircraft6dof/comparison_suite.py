@@ -27,6 +27,7 @@ from .greybox import (
     airdata,
     nominal_rk4_step,
     normalize_quaternion,
+    rhs,
     rotation_body_to_inertial,
 )
 
@@ -46,6 +47,7 @@ SCENARIO_TITLES = {
     "aircraft_6dof_aggressive": "Aggressive",
     "aircraft_6dof_trim_grid": "Trim grid",
     SPORTCUB_DATASET_ID: "Sport Cub MoCap 4/17/26",
+    "sportcub_mocap_5_22_26": "Sport Cub Laps 5/22/26",
 }
 SCENARIO_ORDER = tuple(SCENARIO_TITLES)
 METHOD_TRAINING_SCENARIOS = {
@@ -83,6 +85,9 @@ class Split6DOF:
     u_act: np.ndarray
     x0: np.ndarray
     mocap_frame: str = "ned"
+    x0_estimate: np.ndarray | None = None
+    input_bias: np.ndarray | None = None
+    segment_names: np.ndarray | None = None
 
     @property
     def dt(self) -> float:
@@ -110,6 +115,8 @@ class Result6DOF:
     rmse_mocap_quaternion: float
     notes: str
     training_scenario: str = ""
+    implementation_status: str = "implemented"
+    diverged: bool = False
     x_pred: np.ndarray | None = None
     y_pred: np.ndarray | None = None
 
@@ -155,6 +162,9 @@ def load_split(path: Path) -> Split6DOF:
         u_cmd = np.asarray(data["u_cmd"], dtype=float)
         u_act = np.asarray(data["u_act"], dtype=float)
         mocap_frame = "ned"
+    segment_names = None
+    if "segment_names" in data.files:
+        segment_names = np.asarray([str(name) for name in data["segment_names"]])
     return Split6DOF(
         t=t,
         x_true=x_ref,
@@ -165,6 +175,7 @@ def load_split(path: Path) -> Split6DOF:
         u_act=u_act,
         x0=x_ref[:, 0, :],
         mocap_frame=mocap_frame,
+        segment_names=segment_names,
     )
 
 
@@ -290,6 +301,248 @@ def derive_state_from_mocap(mocap: np.ndarray, t: np.ndarray) -> np.ndarray:
             )
             x[trial, index, 10:13] = np.linalg.lstsq(qmat, quat_dot[trial, index], rcond=None)[0]
     return x
+
+
+ONSET_THRESHOLD_FRACTION = 0.15
+ONSET_ABSOLUTE_FLOOR = 0.02
+ONSET_REFERENCE_SAMPLES = 10
+MAX_INPUT_BIAS = 0.2
+
+
+def detect_input_onset(u: np.ndarray, threshold_fraction: float = ONSET_THRESHOLD_FRACTION) -> int:
+    """Index of the first significant command deviation in a (time, channel) record.
+
+    A channel is considered active once it leaves its initial level by more than
+    threshold_fraction of its own range; the absolute floor keeps flat or
+    noise-only channels from triggering.
+    """
+    reference = np.median(u[: min(ONSET_REFERENCE_SAMPLES, len(u))], axis=0)
+    deviation = np.abs(u - reference)
+    span = np.ptp(u, axis=0)
+    active = deviation > np.maximum(threshold_fraction * span, ONSET_ABSOLUTE_FLOOR)
+    hits = np.flatnonzero(active.any(axis=1))
+    return int(hits[0]) if hits.size else 0
+
+
+MIN_ACTUATION_S = 0.6
+MAX_ACTUATION_S = 1.2
+
+
+def load_segments(path: Path) -> tuple[list[dict[str, np.ndarray | str]], float]:
+    """Load a canonical ragged real-flight file as per-segment arrays.
+
+    The rectangular Split6DOF view truncates every segment to the shortest one,
+    which discards most of the data once segments have very different lengths;
+    real-flight preprocessing therefore operates on the ragged segments and
+    rectangularizes only after onset alignment.
+    """
+    data = np.load(path, allow_pickle=False)
+    if "valid_mask" not in data.files or "time_s" not in data.files:
+        raise ValueError(f"{path}: expected the canonical ragged real-flight layout")
+    dt = float(data["sample_period_s"]) if "sample_period_s" in data.files else float(np.nanmedian(np.diff(data["time_s"][0])))
+    names = [str(name) for name in data["segment_names"]]
+    if "mocap_meas" in data.files:
+        mocap_key, mocap_frame = "mocap_meas", "ned"
+    else:
+        mocap_key, mocap_frame = "pose_meas", "enu"
+    segments: list[dict[str, np.ndarray | str]] = []
+    for index, name in enumerate(names):
+        mask = np.asarray(data["valid_mask"][index], dtype=bool)
+        tracked = (
+            np.asarray(data["mocap_tracked"][index][mask]) != 0
+            if "mocap_tracked" in data.files
+            else np.ones(int(mask.sum()), dtype=bool)
+        )
+        segments.append(
+            {
+                "name": name,
+                "x": np.asarray(data["direct_state_meas"][index][mask], dtype=float),
+                "mocap": np.asarray(data[mocap_key][index][mask], dtype=float),
+                "u": np.asarray(data["u_cmd"][index][mask], dtype=float),
+                "tracked": tracked,
+                "mocap_frame": mocap_frame,
+            }
+        )
+    return segments, dt
+
+
+def local_state_estimate(x: np.ndarray, dt: float, start: int, window: int = 12) -> np.ndarray:
+    """State at sample `start` from a local linear fit instead of one noisy frame.
+
+    For the first chunk of a maneuver the window is the lead-in; for later
+    chunks it is the trailing samples of the previous chunk.
+    """
+    lo = max(0, start - window)
+    hi = max(start + 1, lo + 3)
+    hi = min(hi, len(x))
+    samples = x[lo:hi]
+    if len(samples) < 3:
+        estimate = x[min(start, len(x) - 1)].copy()
+    else:
+        time = (np.arange(lo, hi) - start) * dt
+        basis = np.column_stack((np.ones(len(samples)), time))
+        coef, *_ = np.linalg.lstsq(basis, samples, rcond=None)
+        estimate = coef[0]
+    estimate[6:10] /= max(np.linalg.norm(estimate[6:10]), 1e-12)
+    return estimate
+
+
+def estimate_input_bias(
+    segments: list[dict[str, np.ndarray | str]],
+    onsets: list[int],
+    dt: float,
+    config: Aircraft6DOFConfig,
+) -> np.ndarray:
+    """Shared constant input offsets from the quasi-steady lead-in segments.
+
+    Real transmitter trims are rarely zero, so recorded stick values carry an
+    unknown offset relative to the model's neutral surfaces. This is the
+    classical data-compatibility bias estimate: solve J_u b = f(x_bar, u_bar) -
+    x_dot_obs over the input-free lead-in, where the kinematic rows drop out
+    because they do not depend on the inputs. The trim setting is one physical
+    quantity per flight, so the normal equations are pooled across segments
+    (weighted by lead-in length) instead of fitted per segment — per-segment
+    estimates absorb local model error into the offsets.
+    """
+    n_channels = segments[0]["u"].shape[1]
+    lhs = 1e-3 * np.eye(n_channels)
+    rhs_acc = np.zeros(n_channels)
+    pooled = 0
+    for segment, onset in zip(segments, onsets):
+        dwell = int(onset)
+        if dwell < 5:
+            continue
+        tracked = segment.get("tracked")
+        if tracked is not None and not bool(np.all(tracked[:dwell])):
+            continue  # mocap dropout inside the lead-in: interpolated, not measured
+        x = segment["x"]
+        u = segment["u"]
+        x_bar = x[:dwell].mean(axis=0)
+        x_bar[6:10] = normalize_quaternion(x_bar[6:10])
+        u_bar = u[:dwell].mean(axis=0)
+        elapsed = (dwell - 1) * dt
+        if elapsed <= 1e-9:
+            continue
+        x_dot_obs = (x[dwell - 1] - x[0]) / elapsed
+        f0 = rhs(x_bar, u_bar, config)
+        jac = np.zeros((len(f0), n_channels))
+        eps = 1e-4
+        for channel in range(n_channels):
+            du = np.zeros(n_channels)
+            du[channel] = eps
+            jac[:, channel] = (rhs(x_bar, u_bar + du, config) - rhs(x_bar, u_bar - du, config)) / (2.0 * eps)
+        weight = float(dwell)
+        lhs += weight * (jac.T @ jac)
+        rhs_acc += weight * (jac.T @ (f0 - x_dot_obs))
+        pooled += 1
+    if pooled == 0:
+        return np.zeros(n_channels)
+    return np.clip(np.linalg.solve(lhs, rhs_acc), -MAX_INPUT_BIAS, MAX_INPUT_BIAS)
+
+
+def trim_to_input_onset(
+    segments: list[dict[str, np.ndarray | str]],
+    dt: float,
+    *,
+    estimate_bias: bool = True,
+    label: str = "",
+) -> Split6DOF:
+    """Split each real flight record into lead-in and control-actuation segments.
+
+    On an open-loop unstable airframe, input-free dwell at the start of a record
+    measures initial-condition sensitivity rather than model quality. The
+    lead-in length is detected per segment from the command record itself: the
+    lead-in segment calibrates the trim (initial state and input offsets), and
+    only the control-actuation segment is used for dynamics — fitting on the
+    training split, open-loop scoring on the validation split.
+
+    Actuation windows are rectangularized by chunking: a common window length is
+    chosen from the shortest usable record (clamped to a benchmark range) and
+    longer maneuvers contribute several consecutive windows, so no flight data
+    is discarded to the shortest segment. Initial states for follow-on chunks
+    come from a local fit over the trailing samples of the previous chunk.
+    """
+    onsets = [detect_input_onset(np.asarray(segment["u"])) for segment in segments]
+
+    input_bias = {}
+    flights = [str(segment["name"]).split("__")[0] for segment in segments]
+    if estimate_bias:
+        # The trim setting is one physical quantity per flight, so pool the
+        # bias normal equations per flight (segment-name prefix before "__").
+        for flight in sorted(set(flights)):
+            members = [index for index, name in enumerate(flights) if name == flight]
+            input_bias[flight] = estimate_input_bias(
+                [segments[index] for index in members],
+                [onsets[index] for index in members],
+                dt,
+                Aircraft6DOFConfig(),
+            )
+
+    min_actuation = int(round(MIN_ACTUATION_S / dt))
+    max_actuation = int(round(MAX_ACTUATION_S / dt))
+    usable = [len(np.asarray(segment["u"])) - onset for segment, onset in zip(segments, onsets)]
+    keep = [index for index, count in enumerate(usable) if count >= min_actuation]
+    dropped = [segments[index]["name"] for index in range(len(segments)) if index not in keep]
+    if not keep:
+        raise ValueError(f"{label}: no segment retains {MIN_ACTUATION_S} s of actuation after onset trimming")
+    window = int(np.clip(min(usable[index] for index in keep), min_actuation, max_actuation))
+
+    chunks_x, chunks_mocap, chunks_u, chunk_x0, chunk_names, chunk_bias = [], [], [], [], [], []
+    for index in keep:
+        segment = segments[index]
+        x = np.asarray(segment["x"])
+        mocap = np.asarray(segment["mocap"])
+        u = np.asarray(segment["u"]).copy()
+        bias = input_bias.get(flights[index])
+        if bias is not None:
+            u = u - bias
+        onset = onsets[index]
+        tracked = segments[index].get("tracked")
+        n_chunks = (len(x) - onset) // window
+        for chunk in range(n_chunks):
+            start = onset + chunk * window
+            if tracked is not None and not bool(np.all(tracked[start : start + window])):
+                continue  # window touches a mocap dropout: never train or score on it
+            chunks_x.append(x[start : start + window])
+            chunks_mocap.append(mocap[start : start + window])
+            chunks_u.append(u[start : start + window])
+            fit_window = max(int(round(0.12 / dt)), 3)
+            chunk_x0.append(local_state_estimate(x, dt, start, window=fit_window if chunk else max(fit_window, onset)))
+            chunk_names.append(f"{segment['name']}_w{chunk}")
+            chunk_bias.append(bias if bias is not None else np.zeros(u.shape[1]))
+
+    t = np.arange(window) * dt
+    x_arr = np.stack(chunks_x)
+    mocap_arr = np.stack(chunks_mocap)
+    u_arr = np.stack(chunks_u)
+    x0_estimate = np.stack(chunk_x0)
+    if label:
+        onset_desc = ", ".join(f"{onset * dt:.2f}" for onset in onsets)
+        bias_desc = "off"
+        if estimate_bias and input_bias:
+            bias_desc = "; ".join(
+                f"{flight.split('_')[0]}: " + ",".join(f"{value:+.2f}" for value in bias)
+                for flight, bias in sorted(input_bias.items())
+            )
+        print(
+            f"[onset-trim] {label}: {len(chunks_x)} windows of {window} samples from {len(keep)} maneuvers "
+            f"(dropped {dropped if dropped else 'none'}), lead-in (s): {onset_desc}, input bias {bias_desc}",
+            flush=True,
+        )
+    return Split6DOF(
+        t=t,
+        x_true=x_arr,
+        y_meas=x_arr,
+        mocap_true=mocap_arr,
+        mocap_meas=mocap_arr,
+        u_cmd=u_arr,
+        u_act=u_arr,
+        x0=x0_estimate,
+        mocap_frame=str(segments[0]["mocap_frame"]),
+        x0_estimate=x0_estimate,
+        input_bias=np.stack(chunk_bias),
+        segment_names=np.asarray(chunk_names),
+    )
 
 
 def design_matrix(x: np.ndarray, u: np.ndarray) -> np.ndarray:
@@ -696,10 +949,12 @@ def score_state_method(
     pred: np.ndarray,
     validation: Split6DOF,
     notes: str,
+    implementation_status: str = "implemented",
 ) -> Result6DOF:
     pred_aligned = align_quaternion_signs(pred, validation.x_true)
     score = nrmse_score(pred_aligned, validation.x_true)
     metrics = rmse_group(pred_aligned, validation.x_true)
+    diverged = bool(not np.all(np.isfinite(pred_aligned)) or np.nanmax(np.abs(pred_aligned[..., 0:3])) > 1.0e3)
     return Result6DOF(
         method=method,
         description=description,
@@ -713,6 +968,8 @@ def score_state_method(
         train_samples=train_samples,
         decision_variables=decision_variables,
         notes=notes,
+        implementation_status=implementation_status,
+        diverged=diverged,
         x_pred=pred_aligned,
         y_pred=None,
         **metrics,
@@ -729,9 +986,10 @@ def run_methods(
 ) -> list[Result6DOF]:
     config = Aircraft6DOFConfig(duration=float(validation.t[-1] - validation.t[0]), dt=validation.dt)
     if state_source == "direct":
-        validation_x0 = validation.y_meas[:, 0, :]
+        validation_x0 = validation.x0_estimate if validation.x0_estimate is not None else validation.y_meas[:, 0, :]
     elif state_source == "mocap":
-        validation_x0 = derive_state_from_mocap(validation.mocap_meas[:, : min(21, len(validation.t)), :], validation.t[: min(21, len(validation.t))])[:, 0, :]
+        x0_window = min(max(int(round(0.2 / max(validation.dt, 1e-6))), 5), len(validation.t))
+        validation_x0 = derive_state_from_mocap(validation.mocap_meas[:, :x0_window, :], validation.t[:x0_window])[:, 0, :]
     else:
         raise ValueError(f"unsupported state source: {state_source}")
 
@@ -887,6 +1145,7 @@ def run_methods(
             pred,
             validation,
             "Placeholder 6DOF frequency row: uses an identified realization rather than CIFER/SIDPAC tooling.",
+            implementation_status="placeholder",
         )
     )
 
@@ -915,7 +1174,9 @@ def run_methods(
             int(sum(weight.size for weight in local_residual_weights) + centers.size),
             pred,
             validation,
-            "6DOF counterpart to local frequency/model stitching; trained from the selected 6DOF dataset.",
+            "6DOF counterpart to local frequency/model stitching; trained from the selected 6DOF dataset. "
+            "Not a frequency-domain method: local affine residual fits scheduled on airdata.",
+            implementation_status="placeholder",
         )
     )
 
@@ -943,7 +1204,9 @@ def run_methods(
             int(weights_ekf.size),
             pred,
             validation,
-            "The validation phase is open loop and receives only pilot commands after initialization.",
+            "The validation phase is open loop and receives only pilot commands after initialization. "
+            "No recursive filter is run: this row is a ridge-fitted affine residual model.",
+            implementation_status="placeholder",
         )
     )
 
@@ -960,7 +1223,8 @@ def run_methods(
             int(weights_ekf.size),
             pred,
             validation,
-            "Point prediction matches the EKF-style parameter estimate; uncertainty diagnostics are reported in the CSV metadata only.",
+            "Duplicate of the 6DOF-EKF-ParamID fit (same weights and prediction); no Fisher-information analysis is computed for 6DOF.",
+            implementation_status="placeholder",
         )
     )
 
@@ -977,7 +1241,8 @@ def run_methods(
             int(weights_ekf.size),
             pred,
             validation,
-            "Lightweight 6DOF OEM analogue; validation is open loop, but the training solve is one-step residual ridge rather than a full multiple-shooting NLP.",
+            "Duplicate of the 6DOF-EKF-ParamID fit (same weights and prediction); no output-error optimization is run for 6DOF.",
+            implementation_status="placeholder",
         )
     )
 
@@ -1049,6 +1314,7 @@ def run_methods(
             pred,
             validation,
             "Approximates the variational idea by smoothing trajectories before derivative regression.",
+            implementation_status="placeholder",
         )
     )
 
@@ -1178,7 +1444,8 @@ def run_methods(
             int(np.count_nonzero(weights_pinn)),
             pred,
             validation,
-            "Tractable PINN-style row: the rigid-body equations are fixed and only a sparse closure is learned.",
+            "Tractable PINN-style row: sparsified copy of the 6DOF-UDE-Residual ridge weights; no physics-informed training is run.",
+            implementation_status="placeholder",
         )
     )
 
@@ -1282,7 +1549,8 @@ def run_methods(
             int(weights_nn.size + nn_centers.size + length_scale.size),
             pred,
             validation,
-            "Closed-form random-feature surrogate used as a lightweight 6DOF neural baseline.",
+            "Closed-form random-feature surrogate used as a lightweight 6DOF neural baseline; no neural network is trained.",
+            implementation_status="placeholder",
         )
     )
 
@@ -1310,6 +1578,8 @@ def run_methods(
                 description="Lagged affine open-loop predictor on mocap position/quaternion outputs.",
                 backend="numpy-lagged-ridge",
                 state_source=state_source,
+                implementation_status="placeholder",
+                diverged=bool(not np.all(np.isfinite(y_pred)) or np.nanmax(np.abs(y_pred[..., 0:3])) > 1.0e3),
                 validation_score=score,
                 train_elapsed_s=train_elapsed,
                 train_cpu_s=train_cpu,
@@ -1376,7 +1646,8 @@ def result_to_row(result: Result6DOF, validation_scenario: str) -> dict[str, obj
     return {
         "method": result.method,
         "description": result.description,
-        "implementation_status": "implemented",
+        "implementation_status": result.implementation_status,
+        "diverged": result.diverged,
         "backend": result.backend,
         "model_family": "aircraft6dof",
         "state_source": result.state_source,
@@ -1516,6 +1787,14 @@ def pose_segment_to_web(t: np.ndarray, pose: np.ndarray, u_cmd: np.ndarray, name
     }
 
 
+def segment_label(validation: Split6DOF, index: int) -> str:
+    """Real-flight windows keep their chunk names so the viewer can place
+    traces within a flight; synthetic trials keep the generic label."""
+    if validation.segment_names is not None and index < len(validation.segment_names):
+        return str(validation.segment_names[index])
+    return f"validation_trial_{index + 1}"
+
+
 def write_method_traces(results: list[Result6DOF], validation: Split6DOF, scenario: str, path: Path) -> None:
     traces: list[dict[str, object]] = []
     selected_results: list[Result6DOF] = []
@@ -1529,20 +1808,22 @@ def write_method_traces(results: list[Result6DOF], validation: Split6DOF, scenar
             if "Nominal" in result.method:
                 keep[result.method] = result
         selected_results.extend(keep.values())
-    segment_limit = validation.u_cmd.shape[0] if scenario == SPORTCUB_DATASET_ID else 1
+    # Real-flight scenarios export every validation window so the viewer can
+    # overlay traces anywhere in a flight; synthetic scenarios keep one.
+    segment_limit = validation.u_cmd.shape[0] if not scenario.startswith("aircraft_6dof_") else 1
     for result in selected_results:
         if result.x_pred is None and result.y_pred is None:
             continue
         if result.x_pred is not None:
             segment_count = min(result.x_pred.shape[0], validation.u_cmd.shape[0], segment_limit)
             segments = [
-                state_segment_to_web(validation.t, result.x_pred[index], validation.u_cmd[index], f"validation_trial_{index + 1}")
+                state_segment_to_web(validation.t, result.x_pred[index], validation.u_cmd[index], segment_label(validation, index))
                 for index in range(segment_count)
             ]
         else:
             segment_count = min(result.y_pred.shape[0], validation.u_cmd.shape[0], segment_limit)
             segments = [
-                pose_segment_to_web(validation.t, result.y_pred[index], validation.u_cmd[index], f"validation_trial_{index + 1}", validation.mocap_frame)
+                pose_segment_to_web(validation.t, result.y_pred[index], validation.u_cmd[index], segment_label(validation, index), validation.mocap_frame)
                 for index in range(segment_count)
             ]
         traces.append(
@@ -1916,6 +2197,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ridge", type=float, default=1e-5)
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS, help="parallel rollout worker processes")
     parser.add_argument("--no-plot", action="store_true")
+    parser.add_argument("--no-onset-trim", action="store_true", help="disable lead-in/actuation segmentation for real flight datasets")
+    parser.add_argument("--no-input-bias", action="store_true", help="disable lead-in input trim-offset estimation for real flight datasets")
     return parser.parse_args()
 
 
@@ -1947,14 +2230,32 @@ def main() -> int:
         training_scenario_override = None
         dataset_train_file, dataset_validation_file = dataset_split_files(dataset)
         if dataset_train_file.exists() and not scenario.startswith("aircraft_6dof_"):
-            dataset_train = load_split(dataset_train_file)
+            if args.no_onset_trim:
+                dataset_train = load_split(dataset_train_file)
+            else:
+                train_segments, train_dt = load_segments(dataset_train_file)
+                dataset_train = trim_to_input_onset(
+                    train_segments,
+                    train_dt,
+                    estimate_bias=not args.no_input_bias,
+                    label=f"{scenario} train",
+                )
             active_train_splits = {training_scenario: dataset_train for training_scenario in required_training}
             active_train_splits[scenario] = dataset_train
             active_train_splits["aircraft_6dof_open_loop"] = dataset_train
             training_scenario_override = scenario
         else:
             active_train_splits = synthetic_train_splits()
-        validation = load_split(dataset_validation_file)
+        if training_scenario_override is not None and not args.no_onset_trim:
+            validation_segments, validation_dt = load_segments(dataset_validation_file)
+            validation = trim_to_input_onset(
+                validation_segments,
+                validation_dt,
+                estimate_bias=not args.no_input_bias,
+                label=f"{scenario} validation",
+            )
+        else:
+            validation = load_split(dataset_validation_file)
         dataset_results: list[Result6DOF] = []
         for source in sources:
             print(f"running 6DOF {source} methods on {scenario} with {args.workers} rollout workers", flush=True)

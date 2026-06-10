@@ -1,4 +1,5 @@
-import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js";
+import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
 const DATA_DIR = "./public/data";
 const AIRCRAFT_MODEL_SCALE = 0.6 / 2.2;
@@ -19,9 +20,13 @@ const state = {
   playbackView: "animation",
   playbackFollow: true,
   selectedMethods: new Set(),
+  explorerOverlay: null,
+  playbackTrackOverride: null,
+  trailPastS: 10,
+  trailFutureS: 0,
   tradeoffZoom: null,
   modelFamily: "aircraft6dof",
-  scenario: "sportcub_mocap_4_17_26",
+  scenario: "sportcub_mocap_5_22_26",
   source: "mocap",
 };
 
@@ -92,6 +97,10 @@ function matchingManeuver() {
 }
 
 function selectedPlayback() {
+  if (state.playbackTrackOverride) {
+    const override = state.playback.find((track) => track.id === state.playbackTrackOverride);
+    if (override) return override;
+  }
   return state.playback.find((track) => track.id === state.scenario) || state.playback.find((track) => track.model_family === state.modelFamily) || null;
 }
 
@@ -111,12 +120,48 @@ function traceSegmentForMethod(key) {
 }
 
 function methodHasTrace(key) {
+  if (state.playbackTrackOverride && state.explorerOverlay) {
+    return traceSegmentsForFlight(key).length > 0;
+  }
   return Boolean(traceSegmentForMethod(key));
+}
+
+function traceSegmentsForFlight(key) {
+  // Benchmark chunk traces for the flight shown in the full-flight view,
+  // shifted into the flight frame via each chunk's encoded start sample.
+  const flightName = activeSegment(selectedPlayback())?.name || "";
+  const overlay = state.explorerOverlay;
+  const trace = state.methodTraces.find((item) =>
+    item.scenario === state.scenario && item.state_source === state.source && methodKey(item.method) === key
+  );
+  if (!trace || !overlay) return [];
+  const out = [];
+  for (const segment of trace.segments || []) {
+    const name = segment.name || "";
+    const match = /__manual_(\d+)(?:_w(\d+))?/.exec(name);
+    if (!match || !name.startsWith(flightName)) continue;
+    const dtFull = overlay.dtFull || 0.01;
+    const duration = (segment.time_s?.at(-1) || 0) + dtFull;
+    const offsetS = parseInt(match[1], 10) * dtFull + (match[2] ? parseInt(match[2], 10) * duration : 0);
+    const index = Math.min(overlay.track.length - 1, Math.round(offsetS * 10));
+    const anchor = overlay.track[index];
+    const shift = [anchor[0] - overlay.origin[0], anchor[1] - overlay.origin[1], anchor[2] - overlay.origin[2]];
+    out.push({
+      ...segment,
+      method: key,
+      flightOffsetS: offsetS,
+      position_enu_m: segment.position_enu_m.map((point) => [point[0] + shift[0], point[1] + shift[1], point[2] + shift[2]]),
+    });
+  }
+  return out;
 }
 
 function selectedTraceSegments() {
   const keys = state.selectedMethods;
   if (!keys.size) return [];
+  if (state.playbackTrackOverride && state.explorerOverlay) {
+    return Array.from(keys).flatMap((key) => traceSegmentsForFlight(key));
+  }
   return Array.from(keys).map((key) => traceSegmentForMethod(key)).filter(Boolean);
 }
 
@@ -175,10 +220,49 @@ function renderScenarioSelect() {
 }
 
 function bindControls() {
+  // The explorer registers full flights as a first-class playback track so
+  // the 3D viewer animates the entire record, not just benchmark windows.
+  window.addEventListener("explorer-flights-ready", (event) => {
+    state.playback = state.playback.filter((track) => track.id !== event.detail.track.id);
+    state.playback.push(event.detail.track);
+  });
+
+  // Flight explorer selections drive the 3D viewer: fly the selected full
+  // flight and jump the animation to the clicked time.
+  window.addEventListener("explorer-set-ic", (event) => {
+    const { flightIndex, timeS } = event.detail;
+    state.explorerOverlay = event.detail.overlay || null;
+    document.querySelector("#playback-predict")?.classList.toggle("active", Boolean(event.detail.overlay?.anchored));
+    if (event.detail.track) {
+      state.playback = state.playback.filter((track) => track.id !== event.detail.track.id);
+      state.playback.push(event.detail.track);
+    }
+    state.playbackTrackOverride = "sportcub_flights_5_22";
+    state.modelFamily = "aircraft6dof";
+    state.scenario = "sportcub_mocap_5_22_26";
+    state.playbackSegmentIndex = flightIndex;
+    state.playbackTimeS = timeS || 0;
+    state.playbackLastMs = null;
+    // Keep the global dataset selector in sync so the two pickers agree.
+    renderModelTabs();
+    renderScenarioSelect();
+    const scenarioSelect = document.querySelector("#scenario-select");
+    if (scenarioSelect) scenarioSelect.value = state.scenario;
+    render();
+    // setPlaybackTrack resets the clock when the track changes; restore the
+    // clicked time so the animation jumps to the selected moment.
+    state.playbackTimeS = timeS || 0;
+    state.playbackLastMs = null;
+    // Acknowledge so the explorer stops re-announcing.
+    window.dispatchEvent(new CustomEvent("playback-ack"));
+  });
+
   document.querySelector("#scenario-select").addEventListener("change", (event) => {
     state.scenario = event.target.value;
     state.playbackSegmentIndex = 0;
     state.selectedMethods.clear();
+    state.playbackTrackOverride = null;
+    state.explorerOverlay = null;
     resetTradeoffZoom();
     render();
   });
@@ -214,6 +298,73 @@ function bindControls() {
     state.playbackFollow = !state.playbackFollow;
     renderPlaybackControls(selectedPlayback());
   });
+  document.querySelector("#playback-scrub").addEventListener("mousemove", (event) => {
+    const segment = activeSegment(selectedPlayback());
+    if (!segment?.labels || !segment.time_s?.length) {
+      event.target.title = "";
+      return;
+    }
+    const rect = event.target.getBoundingClientRect();
+    const total = segment.time_s[segment.time_s.length - 1] || 1;
+    const t = clamp(((event.clientX - rect.left) / rect.width) * total, 0, total);
+    let index = 0;
+    while (index < segment.time_s.length - 1 && segment.time_s[index + 1] < t) index += 1;
+    const names = ["ground", "ground effect", "stabilized", "manual"];
+    const dropped = segment.tracked && !segment.tracked[index];
+    event.target.title = `${dropped ? "mocap dropout" : names[segment.labels[index]] || ""} | t = ${t.toFixed(1)} s`;
+  });
+
+  for (const [handleId, kind] of [["#trail-past-handle", "past"], ["#trail-future-handle", "future"]]) {
+    const handle = document.querySelector(handleId);
+    if (!handle) continue;
+    handle.addEventListener("dblclick", () => {
+      // Double-click resets the handle onto the playhead (zero span).
+      if (kind === "past") state.trailPastS = 0;
+      else state.trailFutureS = 0;
+      updateTrailHandles(playbackDuration(activeSegment(selectedPlayback())));
+    });
+    handle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      handle.setPointerCapture(event.pointerId);
+      const wrap = document.querySelector(".scrub-wrap");
+      const move = (ev) => {
+        const rect = wrap.getBoundingClientRect();
+        const duration = playbackDuration(activeSegment(selectedPlayback())) || 1;
+        const t = clamp(((ev.clientX - rect.left) / rect.width) * duration, 0, duration);
+        const snapS = (14 / rect.width) * duration;
+        if (kind === "past") {
+          const past = clamp(state.playbackTimeS - t, 0, duration);
+          state.trailPastS = past < snapS ? 0 : past;
+        } else {
+          // Snap to the playhead when close so "no future" lines up exactly.
+          const future = clamp(t - state.playbackTimeS, 0, duration);
+          state.trailFutureS = future < snapS ? 0 : future;
+        }
+        updateTrailHandles(duration);
+      };
+      const stop = () => {
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", stop);
+      };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", stop);
+    });
+  }
+
+  document.querySelector("#playback-predict").addEventListener("click", () => {
+    window.dispatchEvent(new CustomEvent("explorer-anchor-request", { detail: { timeS: state.playbackTimeS } }));
+  });
+  document.querySelector("#playback-fullscreen").addEventListener("click", () => {
+    const stage = document.querySelector(".playback-stage");
+    if (document.fullscreenElement) document.exitFullscreen();
+    else stage.requestFullscreen();
+  });
+  document.addEventListener("fullscreenchange", () => {
+    const button = document.querySelector("#playback-fullscreen");
+    if (button) button.textContent = document.fullscreenElement ? "Exit fullscreen" : "Fullscreen";
+    resizePlayback();
+  });
+
   document.querySelector("#playback-speed").addEventListener("change", (event) => {
     state.playbackSpeed = Number.parseFloat(event.target.value) || 1;
   });
@@ -563,6 +714,7 @@ function toggleMethodSelection(key) {
     state.selectedMethods.clear();
     state.selectedMethods.add(key);
   }
+  window.dispatchEvent(new CustomEvent("methods-changed", { detail: { methods: Array.from(state.selectedMethods) } }));
   render();
 }
 
@@ -707,11 +859,114 @@ function makeWingPanelGeometry(rootChord, tipChord, span, thickness, side) {
   return geometry;
 }
 
-function makeAircraftMesh() {
+// Detailed Sport Cub model: loaded once, cloned per aircraft instance, with
+// the procedural mesh as a fallback until (or in case) the asset loads.
+const aircraftInstances = [];
+let aircraftTemplate = null;
+new GLTFLoader().load(
+  "./public/assets/airplane.glb",
+  (gltf) => {
+    const scene = gltf.scene;
+    // The asset authors pivots as hinge-location empties that are siblings of
+    // the surface meshes; re-parent each mesh under its pivot (preserving
+    // world transforms) so rotating the pivot articulates the surface.
+    for (const [meshName, pivotName] of [
+      ["Elevator", "ElevatorPivot"],
+      ["Rudder", "RudderPivot"],
+      ["LeftAileron", "LeftAileronPivot"],
+      ["RightAileron", "RightAileronPivot"],
+      ["LeftFlap", "LeftFlapPivot"],
+      ["RightFlap", "RightFlapPivot"],
+      ["Prop", "PropPivot"],
+      ["LeftWheel", "LeftWheelPivot"],
+      ["RightWheel", "RightWheelPivot"],
+      ["NoseWheel", "NoseWheelPivot"],
+    ]) {
+      const mesh = findNamedPart(scene, meshName);
+      const pivot = findNamedPart(scene, pivotName);
+      if (mesh && pivot) pivot.attach(mesh);
+    }
+    const box = new THREE.Box3().setFromObject(scene);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    scene.position.sub(center);
+    const wrapper = new THREE.Group();
+    wrapper.add(scene);
+    // glTF assets face +Z with +Y up; the playback body frame is x-forward.
+    wrapper.rotation.y = Math.PI / 2;
+    // Normalize the span to the procedural model's 2.2 units so the existing
+    // AIRCRAFT_MODEL_SCALE still yields the Sport Cub's 0.6 m wingspan.
+    wrapper.scale.setScalar(2.2 / Math.max(size.x, size.z, 1e-6));
+    aircraftTemplate = wrapper;
+    for (const instance of aircraftInstances) {
+      if (instance.group.parent) refreshAircraftInstance(instance);
+    }
+  },
+  undefined,
+  (error) => console.warn("airplane.glb unavailable, keeping procedural aircraft", error),
+);
+
+function findNamedPart(root, name) {
+  let found = null;
+  root.traverse((node) => {
+    if (!found && node.name === name) found = node;
+  });
+  return found;
+}
+
+function refreshAircraftInstance(instance) {
+  if (!aircraftTemplate) return;
+  instance.model.clear();
+  const clone = aircraftTemplate.clone(true);
+  instance.model.add(clone);
+  if (instance.color != null) {
+    clone.traverse((child) => {
+      if (!child.isMesh || !child.material) return;
+      const material = child.material.clone();
+      if (material.color) material.color.set(instance.color);
+      material.transparent = true;
+      material.opacity = 0.34;
+      material.depthWrite = false;
+      child.material = material;
+      child.renderOrder = 10;
+    });
+  }
+  const parts = {
+    glb: true,
+    leftAileron: findNamedPart(clone, "LeftAileronPivot"),
+    rightAileron: findNamedPart(clone, "RightAileronPivot"),
+    elevator: findNamedPart(clone, "ElevatorPivot"),
+    rudder: findNamedPart(clone, "RudderPivot"),
+    prop: findNamedPart(clone, "PropPivot"),
+  };
+  // Pivots carry authored base orientations (the hinge alignment); store them
+  // so control deflections compose with the base instead of overwriting it.
+  for (const part of Object.values(parts)) {
+    if (part && part.isObject3D) part.userData.baseQuat = part.quaternion.clone();
+  }
+  instance.group.userData = parts;
+}
+
+const HINGE_X = new THREE.Vector3(1, 0, 0);
+const HINGE_Y = new THREE.Vector3(0, 1, 0);
+const SPIN_Z = new THREE.Vector3(0, 0, 1);
+
+function setHinge(part, axis, angle) {
+  if (!part || !part.userData.baseQuat) return;
+  part.quaternion.copy(part.userData.baseQuat).multiply(new THREE.Quaternion().setFromAxisAngle(axis, angle));
+}
+
+function makeAircraftMesh(tintColor = null) {
   const group = new THREE.Group();
   const model = new THREE.Group();
   model.scale.setScalar(AIRCRAFT_MODEL_SCALE);
   group.add(model);
+  const instance = { group, model, color: tintColor };
+  aircraftInstances.push(instance);
+  if (aircraftTemplate) {
+    refreshAircraftInstance(instance);
+    return group;
+  }
   const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x2f5f9f, roughness: 0.46, metalness: 0.08 });
   const wingMaterial = new THREE.MeshStandardMaterial({ color: 0xd9e2ef, roughness: 0.55, metalness: 0.04 });
   const accentMaterial = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.5, metalness: 0.02 });
@@ -781,7 +1036,8 @@ function makeAircraftMesh() {
 }
 
 function makeTransparentAircraftMesh(color) {
-  const aircraft = makeAircraftMesh();
+  const aircraft = makeAircraftMesh(color);
+  if (aircraft.userData.glb) return aircraft;
   aircraft.traverse((child) => {
     if (!child.isMesh || !child.material) return;
     const material = child.material.clone();
@@ -802,6 +1058,20 @@ function updateAircraftControls(aircraft, controls, deltaS) {
   const aileron = clamp(controls[1] ?? 0, -1, 1);
   const elevator = clamp(controls[2] ?? 0, -1, 1);
   const rudder = clamp(controls[3] ?? 0, -1, 1);
+  if (parts.glb) {
+    // The GLB pivots map local Z to the spanwise hinge line, local Y to the
+    // fin line, and local X to the fuselage axis (verified from the authored
+    // pivot orientations in the asset).
+    setHinge(parts.leftAileron, SPIN_Z, -0.6 * aileron);
+    setHinge(parts.rightAileron, SPIN_Z, 0.6 * aileron);
+    setHinge(parts.elevator, SPIN_Z, -0.7 * elevator);
+    setHinge(parts.rudder, HINGE_Y, 0.7 * rudder);
+    if (parts.prop && parts.prop.userData.baseQuat) {
+      parts.prop.userData.spin = (parts.prop.userData.spin || 0) + deltaS * (22 + 90 * thrust);
+      setHinge(parts.prop, HINGE_X, parts.prop.userData.spin);
+    }
+    return;
+  }
   if (parts.leftAileron) parts.leftAileron.rotation.z = -0.95 * aileron;
   if (parts.rightAileron) parts.rightAileron.rotation.z = 0.95 * aileron;
   if (parts.elevator) parts.elevator.rotation.z = -1.0 * elevator;
@@ -810,7 +1080,20 @@ function updateAircraftControls(aircraft, controls, deltaS) {
   if (parts.propDisk) parts.propDisk.material.opacity = 0.08 + 0.22 * thrust;
 }
 
-function updateControlHud(controls) {
+function updateControlHud(controls, mode = null) {
+  const modeLabel = document.querySelector("#control-mode-value");
+  if (modeLabel) {
+    if (mode === 1) {
+      modeLabel.textContent = "SAFE";
+      modeLabel.style.color = "#5c7cfa";
+    } else if (mode === 0) {
+      modeLabel.textContent = "Manual";
+      modeLabel.style.color = "#f08c00";
+    } else {
+      modeLabel.textContent = "--";
+      modeLabel.style.color = "";
+    }
+  }
   const ids = ["thrust", "aileron", "elevator", "rudder"];
   const values = [
     clamp(controls[0] ?? 0, 0, 1),
@@ -987,16 +1270,16 @@ function ensurePlaybackScene() {
   }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setSize(host.clientWidth || 900, host.clientHeight || 360);
-  renderer.setClearColor(0xd9dee7, 1);
+  renderer.setClearColor(0x262b31, 1);
   host.append(renderer.domElement);
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 1000);
-  scene.add(new THREE.HemisphereLight(0xffffff, 0xc8d1dd, 2.2));
-  const sun = new THREE.DirectionalLight(0xffffff, 1.8);
+  scene.add(new THREE.HemisphereLight(0xdfe6ee, 0x3a4148, 1.0));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.4);
   sun.position.set(6, 10, 8);
   scene.add(sun);
-  const grid = new THREE.GridHelper(18, 18, 0x9aa8ba, 0xc2cad6);
+  const grid = new THREE.GridHelper(18, 18, 0x59636f, 0x39414b);
   scene.add(grid);
   const aircraft = makeAircraftMesh();
   scene.add(aircraft);
@@ -1052,11 +1335,13 @@ function setPlaybackTrack(track, force = false) {
   const segment = activeSegment(track);
   const segmentName = segment?.name || "segment";
   const methodSignature = Array.from(state.selectedMethods).sort().join("|");
+  const overlaySignature = state.explorerOverlay?.stamp || "";
   const trackChanged = playback.track?.id !== track?.id || playback.segmentName !== segmentName;
-  if (!force && !trackChanged && playback.methodSignature === methodSignature) return;
+  if (!force && !trackChanged && playback.methodSignature === methodSignature && playback.overlaySignature === overlaySignature) return;
   playback.track = track;
   playback.segmentName = segmentName;
   playback.methodSignature = methodSignature;
+  playback.overlaySignature = overlaySignature;
   if (force || trackChanged) {
     state.playbackTimeS = 0;
     state.playbackLastMs = null;
@@ -1078,10 +1363,83 @@ function setPlaybackTrack(track, force = false) {
   playback.methodAircraft = [];
   if (!track || !segment) return;
   const points = segment.position_enu_m.map(enuToThree);
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
-  const material = new THREE.LineBasicMaterial({ color: 0x1f6feb, linewidth: 2 });
-  playback.trackLine = new THREE.Line(geometry, material);
-  playback.scene.add(playback.trackLine);
+  if (!state.explorerOverlay) {
+    // The segmentation-colored overlay replaces the plain blue track line.
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const material = new THREE.LineBasicMaterial({ color: 0x1f6feb, linewidth: 2 });
+    playback.trackLine = new THREE.Line(geometry, material);
+    const segTimes = segment.time_s;
+    playback.trackLine.userData.times = {
+      t0: segTimes[0],
+      dt: (segTimes[segTimes.length - 1] - segTimes[0]) / Math.max(segTimes.length - 1, 1),
+      count: points.length,
+    };
+    playback.scene.add(playback.trackLine);
+  }
+  if (state.explorerOverlay) {
+    // Full-flight track colored by segmentation class, plus the explorer's
+    // on-the-fly free-run predictions, published by the flight explorer.
+    // The playback track is re-zeroed to its flight start while the overlay
+    // is in absolute facility coordinates: shift by the flight origin.
+    const overlay = state.explorerOverlay;
+    const shift = overlay.origin || [0, 0, 0];
+    const shifted = (p) => enuToThree([p[0] - shift[0], p[1] - shift[1], p[2] - shift[2]]);
+    const labelColors = [0x8d6e63, 0x26a69a, 0x5c7cfa, 0xf08c00];
+    const trackedFlags = overlay.tracked || overlay.labels.map(() => 1);
+    let runStart = 0;
+    for (let k = 1; k <= overlay.labels.length; k++) {
+      const boundary =
+        k === overlay.labels.length || overlay.labels[k] !== overlay.labels[runStart] || trackedFlags[k] !== trackedFlags[runStart];
+      if (!boundary) continue;
+      if (trackedFlags[runStart]) {
+        const runPoints = overlay.track.slice(runStart, Math.min(k + 1, overlay.track.length)).map(shifted);
+        if (runPoints.length > 1) {
+          const runLine = new THREE.Line(
+            new THREE.BufferGeometry().setFromPoints(runPoints),
+            new THREE.LineBasicMaterial({ color: labelColors[overlay.labels[runStart]] ?? 0x999999, linewidth: 2 }),
+          );
+          runLine.userData.times = { t0: runStart * 0.1, dt: 0.1, count: runPoints.length };
+          playback.methodLines.push(runLine);
+          playback.scene.add(runLine);
+        }
+      } else if (k < overlay.track.length) {
+        // Mocap dropout: bridge the gap with a dashed gray connector instead
+        // of plotting interpolated samples as if they were measurements.
+        const gapLine = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([shifted(overlay.track[Math.max(0, runStart - 1)]), shifted(overlay.track[k])]),
+          new THREE.LineDashedMaterial({ color: 0x888888, dashSize: 0.25, gapSize: 0.18, transparent: true, opacity: 0.8 }),
+        );
+        gapLine.userData.times = { t0: Math.max(0, runStart - 1) * 0.1, dt: Math.max((k - runStart + 1) * 0.1, 0.1), count: 2 };
+        gapLine.computeLineDistances();
+        playback.methodLines.push(gapLine);
+        playback.scene.add(gapLine);
+      }
+      runStart = k;
+    }
+    for (const prediction of overlay.predictions) {
+      const predPoints = prediction.points.map(shifted);
+      if (predPoints.length < 2) continue;
+      const predLine = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(predPoints),
+        new THREE.LineBasicMaterial({ color: prediction.color, linewidth: 2, transparent: true, opacity: 0.85 }),
+      );
+      playback.methodLines.push(predLine);
+      playback.scene.add(predLine);
+      if (prediction.times && prediction.quats) {
+        // Ghost aircraft flies the on-the-fly free-run prediction.
+        const ghost = makeTransparentAircraftMesh(prediction.color);
+        playback.methodAircraft.push({
+          mesh: ghost,
+          segment: {
+            time_s: prediction.times,
+            position_enu_m: prediction.points.map((p) => [p[0] - shift[0], p[1] - shift[1], p[2] - shift[2]]),
+            quaternion_wxyz: prediction.quats,
+          },
+        });
+        playback.scene.add(ghost);
+      }
+    }
+  }
   const methodColors = [0x111827, 0x7c3aed, 0x059669, 0xb45309, 0xbe123c];
   selectedTraceSegments().forEach((trace, index) => {
     if (!trace.position_enu_m?.length) return;
@@ -1101,12 +1459,23 @@ function setPlaybackTrack(track, force = false) {
     playback.methodAircraft.push({ mesh: traceAircraft, segment: trace });
     playback.scene.add(traceAircraft);
   });
-  const box = new THREE.Box3().setFromPoints(points);
+  let framePoints = points;
+  if (state.explorerOverlay) {
+    const overlay = state.explorerOverlay;
+    const shift = overlay.origin || [0, 0, 0];
+    framePoints = overlay.track.map((p) => enuToThree([p[0] - shift[0], p[1] - shift[1], p[2] - shift[2]]));
+  }
+  const box = new THREE.Box3().setFromPoints(framePoints);
   const center = box.getCenter(new THREE.Vector3());
   const extents = box.getSize(new THREE.Vector3());
   const size = Math.max(extents.x, extents.y, extents.z, 1);
-  playback.controls.target.copy(center);
-  playback.controls.distance = clamp(size * 2.2, 4, 120);
+  if (force || trackChanged) {
+    // Only re-home the camera when the displayed flight actually changes;
+    // overlay updates (Predict here, method toggles) keep the current view.
+    // Start close to the aircraft rather than fitted to the whole flight.
+    playback.controls.target.copy(points[0] || center);
+    playback.controls.distance = 2.5;
+  }
   playback.controls.minDistance = 0.25;
   playback.controls.maxDistance = Math.max(size * 8, 20);
   if (playback.grid) {
@@ -1115,7 +1484,7 @@ function setPlaybackTrack(track, force = false) {
     disposeMaterial(playback.grid.material);
   }
   const gridSize = Math.max(10, Math.ceil(size * 1.5));
-  playback.grid = new THREE.GridHelper(gridSize, 20, 0x9aa8ba, 0xc2cad6);
+  playback.grid = new THREE.GridHelper(gridSize, 20, 0x59636f, 0x39414b);
   playback.grid.position.copy(center);
   playback.grid.position.y = Math.min(...points.map((point) => point.y));
   playback.scene.add(playback.grid);
@@ -1151,13 +1520,114 @@ function sampleTrack(trackOrSegment, elapsedS, options = {}) {
   const c0 = track.control_meas?.[index] || [0.45, 0, 0, 0];
   const c1 = track.control_meas?.[index + 1] || c0;
   const controls = c0.map((value, controlIndex) => value + (c1[controlIndex] - value) * ratio);
-  return { position: p0.lerp(p1, ratio), quaternion: quat0.slerp(quat1, ratio), controls };
+  const nominalDt = (times[times.length - 1] - times[0]) / Math.max(times.length - 1, 1);
+  const inGap =
+    (track.tracked && (!track.tracked[index] || !track.tracked[index + 1])) ||
+    t1 - t0 > 3 * Math.max(nominalDt, 1e-6);
+  const mode = track.mode ? track.mode[index] : null;
+  return { position: p0.lerp(p1, ratio), quaternion: quat0.slerp(quat1, ratio), controls, tracked: !inGap, mode };
 }
+
+function applyTrailWindow(playback, segment) {
+  // Qualisys-style trail: only the measured track within [t - past, t + future]
+  // is drawn; predictions stay fully visible.
+  const tNow = state.playbackTimeS;
+  const a = tNow - state.trailPastS;
+  const b = tNow + state.trailFutureS;
+  const overlay = state.explorerOverlay;
+  // With no future span the line must end exactly at the aircraft: the
+  // static geometry stops at the last sample behind it and a dynamic head
+  // segment bridges to the aircraft's interpolated position every frame.
+  const headExact = Boolean(overlay) && state.trailFutureS < 0.1;
+  const lines = playback.trackLine ? [playback.trackLine, ...playback.methodLines] : playback.methodLines;
+  for (const line of lines) {
+    const meta = line.userData?.times;
+    if (!meta) continue;
+    const lo = clamp(Math.floor((a - meta.t0) / meta.dt), 0, meta.count - 1);
+    const hi = headExact
+      ? clamp(Math.floor((tNow - meta.t0) / meta.dt), 0, meta.count - 1)
+      : clamp(Math.ceil((b - meta.t0) / meta.dt), 0, meta.count - 1);
+    if (hi <= lo) {
+      line.visible = false;
+      continue;
+    }
+    line.visible = true;
+    line.geometry.setDrawRange(lo, hi - lo + 1);
+  }
+  if (!playback.trailHead) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(new Float32Array(6), 3));
+    playback.trailHead = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: 0x5c7cfa, linewidth: 2 }));
+    playback.scene.add(playback.trailHead);
+  }
+  const head = playback.trailHead;
+  if (headExact && playback.aircraft.visible && overlay.track?.length) {
+    const labelColors = [0x8d6e63, 0x26a69a, 0x5c7cfa, 0xf08c00];
+    const index = clamp(Math.floor(tNow / 0.1), 0, overlay.track.length - 1);
+    const shift = overlay.origin || [0, 0, 0];
+    const point = overlay.track[index];
+    const v0 = enuToThree([point[0] - shift[0], point[1] - shift[1], point[2] - shift[2]]);
+    const positions = head.geometry.attributes.position;
+    positions.setXYZ(0, v0.x, v0.y, v0.z);
+    positions.setXYZ(1, playback.aircraft.position.x, playback.aircraft.position.y, playback.aircraft.position.z);
+    positions.needsUpdate = true;
+    head.geometry.computeBoundingSphere();
+    head.material.color.setHex(labelColors[overlay.labels?.[index]] ?? 0x5c7cfa);
+    head.visible = true;
+  } else {
+    head.visible = false;
+  }
+}
+
+function updateTrailHandles(duration) {
+  const wrap = document.querySelector(".scrub-wrap");
+  if (!wrap || !duration) return;
+  const tNow = state.playbackTimeS;
+  const left = clamp((tNow - state.trailPastS) / duration, 0, 1) * 100;
+  const right = clamp((tNow + state.trailFutureS) / duration, 0, 1) * 100;
+  const past = document.querySelector("#trail-past-handle");
+  const future = document.querySelector("#trail-future-handle");
+  const windowBar = document.querySelector("#trail-window");
+  if (past) past.style.left = `calc(${left}% - 5px)`;
+  if (future) future.style.left = `calc(${right}% - 5px)`;
+  if (windowBar) {
+    windowBar.style.left = `${left}%`;
+    windowBar.style.width = `${Math.max(right - left, 0)}%`;
+  }
+}
+
+const SCRUB_LABEL_COLORS = ["#8d6e63", "#26a69a", "#5c7cfa", "#f08c00"];
 
 function updatePlaybackScrub(track) {
   const scrub = document.querySelector("#playback-scrub");
-  if (!scrub || state.playbackScrubbing) return;
+  if (!scrub) return;
+  paintScrubSegmentation(scrub, track);
+  updateTrailHandles(playbackDuration(track));
+  if (state.playbackScrubbing) return;
   scrub.value = String(clamp(state.playbackTimeS / playbackDuration(track), 0, 1));
+}
+
+function paintScrubSegmentation(scrub, track) {
+  const signature = track?.name || "";
+  if (scrub.dataset.paintedFor === signature) return;
+  scrub.dataset.paintedFor = signature;
+  if (!track?.labels || !track.time_s?.length) {
+    scrub.style.background = "";
+    return;
+  }
+  const total = track.time_s[track.time_s.length - 1] || 1;
+  const stops = [];
+  let runStart = 0;
+  const colorAt = (k) => (track.tracked && !track.tracked[k] ? "#4a5159" : SCRUB_LABEL_COLORS[track.labels[k]] || "#666");
+  for (let k = 1; k <= track.labels.length; k += 1) {
+    if (k === track.labels.length || colorAt(k) !== colorAt(runStart)) {
+      const a = ((track.time_s[runStart] / total) * 100).toFixed(2);
+      const b = ((track.time_s[Math.min(k, track.time_s.length - 1)] / total) * 100).toFixed(2);
+      stops.push(`${colorAt(runStart)} ${a}% ${b}%`);
+      runStart = k;
+    }
+  }
+  scrub.style.background = `linear-gradient(to right, ${stops.join(", ")})`;
 }
 
 function renderPlaybackControls(track) {
@@ -1174,7 +1644,14 @@ function renderPlaybackControls(track) {
     follow.setAttribute("aria-pressed", String(state.playbackFollow));
   }
   if (speed) speed.value = String(state.playbackSpeed);
-  if (segmentSelect && track) {
+  if (segmentSelect) {
+    // The flight explorer is the single flight selector while it drives the
+    // playback; the playback's own picker only appears for datasets without
+    // full-flight records (synthetic trials, 4/17 windows).
+    const wrapper = segmentSelect.closest("label");
+    if (wrapper) wrapper.style.display = state.playbackTrackOverride ? "none" : "";
+  }
+  if (segmentSelect && track && !state.playbackTrackOverride) {
     const segments = track.segments?.length ? track.segments : [track];
     segmentSelect.innerHTML = "";
     segments.forEach((segment, index) => {
@@ -1201,23 +1678,35 @@ function tickPlayback(nowMs) {
     }
     const sample = sampleTrack(segment, state.playbackTimeS, { loop: true });
     if (sample) {
-      playback.aircraft.position.copy(sample.position);
-      playback.aircraft.quaternion.copy(sample.quaternion);
+      // During a mocap dropout there is no data for where the aircraft is:
+      // hide it and leave it (and therefore the follow camera) at the last
+      // measured pose instead of flying interpolated positions.
+      playback.aircraft.visible = sample.tracked !== false;
+      if (sample.tracked !== false) {
+        playback.aircraft.position.copy(sample.position);
+        playback.aircraft.quaternion.copy(sample.quaternion);
+      }
       updateAircraftControls(playback.aircraft, sample.controls, deltaS);
-      updateControlHud(sample.controls);
+      updateControlHud(sample.controls, sample.mode);
       for (const overlay of playback.methodAircraft) {
-        const methodSample = sampleTrack(overlay.segment, state.playbackTimeS);
-        overlay.mesh.visible = Boolean(methodSample);
+        const methodSample = sampleTrack(overlay.segment, state.playbackTimeS - (overlay.segment.flightOffsetS || 0));
+        // Ghosts hide during dropouts too: a prediction with no measurement
+        // to compare against just looks like a stray aircraft.
+        overlay.mesh.visible = Boolean(methodSample) && sample.tracked !== false;
         if (!methodSample) continue;
         overlay.mesh.position.copy(methodSample.position);
         overlay.mesh.quaternion.copy(methodSample.quaternion);
         updateAircraftControls(overlay.mesh, methodSample.controls, deltaS);
       }
       if (state.playbackFollow) {
-        playback.controls.target.copy(sample.position);
+        // Follow the (frozen-during-dropout) aircraft, not the raw sample:
+        // the sample path is interpolation during gaps and the camera would
+        // glide along it with no aircraft in view.
+        playback.controls.target.copy(playback.aircraft.position);
         updatePlaybackCamera(playback);
       }
     }
+    applyTrailWindow(playback, segment);
     updatePlaybackScrub(segment);
     playback.renderer.render(playback.scene, playback.camera);
   }
@@ -1232,7 +1721,7 @@ function renderPlayback() {
     return;
   }
   const segment = activeSegment(track);
-  status.textContent = `${track.title} | ${track.source}${segment?.name ? ` | ${segment.name}` : ""}`;
+  status.textContent = [track.title, track.source, segment?.name].filter(Boolean).join(" | ");
   setPlaybackTrack(track);
   renderPlaybackControls(track);
 }
@@ -1250,7 +1739,7 @@ function linearExtent(values) {
   return [min - pad, max + pad];
 }
 
-function renderMiniSeries(title, series, traces) {
+function renderMiniSeries(title, series, traces, bands = []) {
   const width = 520;
   const height = 170;
   const margin = { top: 28, right: 18, bottom: 34, left: 58 };
@@ -1269,6 +1758,19 @@ function renderMiniSeries(title, series, traces) {
     return node;
   };
   add("text", { x: margin.left, y: 16, class: "series-title" }, title);
+  for (const band of bands) {
+    const x0 = xScale(Math.max(band.start, xExtent[0]));
+    const x1 = xScale(Math.min(band.stop, xExtent[1]));
+    if (x1 <= x0) continue;
+    add("rect", {
+      x: x0.toFixed(2),
+      y: margin.top,
+      width: (x1 - x0).toFixed(2),
+      height: height - margin.top - margin.bottom,
+      fill: band.color,
+      opacity: band.opacity ?? 0.85,
+    });
+  }
   for (let i = 0; i <= 3; i += 1) {
     const fraction = i / 3;
     const value = yExtent[1] - fraction * (yExtent[1] - yExtent[0]);
@@ -1284,7 +1786,26 @@ function renderMiniSeries(title, series, traces) {
   add("line", { x1: margin.left, y1: height - margin.bottom, x2: width - margin.right, y2: height - margin.bottom, class: "axis-line" });
   add("line", { x1: margin.left, y1: margin.top, x2: margin.left, y2: height - margin.bottom, class: "axis-line" });
   const path = (time, data) => time.map((t, index) => `${index ? "L" : "M"}${xScale(t).toFixed(2)},${yScale(data[index]).toFixed(2)}`).join(" ");
-  add("path", { d: path(series.time, series.values), class: "truth-series" });
+  if (series.tracked) {
+    // Break the measured line at mocap dropouts instead of plotting the
+    // interpolated span as if it were data.
+    let chunk = { time: [], values: [] };
+    const flushChunk = () => {
+      if (chunk.time.length > 1) add("path", { d: path(chunk.time, chunk.values), class: "truth-series" });
+      chunk = { time: [], values: [] };
+    };
+    for (let index = 0; index < series.time.length; index += 1) {
+      if (!series.tracked[index]) {
+        flushChunk();
+        continue;
+      }
+      chunk.time.push(series.time[index]);
+      chunk.values.push(series.values[index]);
+    }
+    flushChunk();
+  } else {
+    add("path", { d: path(series.time, series.values), class: "truth-series" });
+  }
   for (const trace of traces) {
     const pairs = trace.time
       .map((timeValue, index) => [timeValue, trace.values[index]])
@@ -1327,11 +1848,31 @@ function renderTimeseries() {
     ["Elevator command [-]", controls.map((row) => row[2] ?? 0), (trace) => trace.control_meas?.map((row) => row[2] ?? 0)],
     ["Rudder command [-]", controls.map((row) => row[3] ?? 0), (trace) => trace.control_meas?.map((row) => row[3] ?? 0)],
   ].filter((item) => item[1].length);
+  const labelBandColors = ["#8d6e63", "#26a69a", "#5c7cfa", "#f08c00"];
+  const tracked = segment.tracked || null;
+  const bands = [];
+  if (segment.labels) {
+    let runStart = 0;
+    for (let k = 1; k <= segment.labels.length; k += 1) {
+      const runTracked = tracked ? tracked[runStart] : 1;
+      const boundary =
+        k === segment.labels.length ||
+        segment.labels[k] !== segment.labels[runStart] ||
+        (tracked ? tracked[k] : 1) !== runTracked;
+      if (!boundary) continue;
+      bands.push(
+        runTracked
+          ? { start: time[runStart], stop: time[Math.min(k, time.length - 1)], color: labelBandColors[segment.labels[runStart]] || "#666" }
+          : { start: time[runStart], stop: time[Math.min(k, time.length - 1)], color: "#6b7280", opacity: 0.25 },
+      );
+      runStart = k;
+    }
+  }
   for (const [title, values, traceAccessor] of definitions) {
     const traces = traceSegments
       .map((trace) => ({ method: trace.method, time: trace.time_s, values: traceAccessor(trace) }))
       .filter((trace) => trace.values?.length === trace.time?.length);
-    host.append(renderMiniSeries(title, { time, values }, traces));
+    host.append(renderMiniSeries(title, { time, values, tracked }, traces, bands));
   }
   const selected = state.selectedMethods.size ? `${Array.from(state.selectedMethods)[0]} selected` : "select one method to overlay its exported model trajectory";
   const available = traceSegments.length ? "model trajectories shown" : "no exported model trajectories for this dataset yet";
@@ -1369,6 +1910,9 @@ async function init() {
   bindControls();
   renderMeta();
   render();
+  // The explorer module may have announced its flight tracks and overlay
+  // before our listeners existed (module load race); ask it to re-publish.
+  window.dispatchEvent(new CustomEvent("playback-ready"));
 }
 
 init().catch((error) => {

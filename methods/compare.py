@@ -41,9 +41,8 @@ def value(row: dict[str, str], key: str, default: float = np.nan) -> float:
 
 def normalize_row(row: dict[str, str]) -> dict[str, object]:
     rmse = np.array([value(row, f"rmse_{name}") for name in ["V", "alpha", "gamma", "Q"]])
+    # No fallback: averaging raw RMSEs would mix m/s with radians.
     score = value(row, "train_score")
-    if not np.isfinite(score):
-        score = float(np.nanmean(rmse))
     err_keys = [key for key in row if key.startswith("errpct_")]
     parameter_error = float(np.nanmean([value(row, key) for key in err_keys])) if err_keys else np.nan
     return {

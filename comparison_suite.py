@@ -46,6 +46,12 @@ def default_stitch_train_dataset(dataset: Path) -> Path:
         )
     return candidate
 STATE_NOISE = np.array([0.08, 0.0035, 0.0035, 0.012])
+THETA_LOWER = np.array([-0.5, 0.0, 0.0, 0.0, -1.0, -5.0, -50.0, -3.0])
+THETA_UPPER = np.array([0.5, 6.0, 0.2, 0.5, 1.0, 3.0, 0.0, 3.0])
+# Outer state box for shooting nodes/initial states; matches the simulator's
+# MAX_ENVELOPE_* limits so feasible trajectories are never clipped.
+STATE_BOX_LOWER = np.array([3.0, -0.8, -1.25, -3.5])
+STATE_BOX_UPPER = np.array([40.0, 0.8, 1.25, 3.5])
 
 
 @dataclass
@@ -67,6 +73,7 @@ class MethodResult:
     backend: str = "numpy"
     implementation_status: str = "implemented"
     evaluation_mode: str = "open_loop"
+    diverged: bool = False
 
 
 class MLP(torch.nn.Module):
@@ -87,13 +94,14 @@ def nominal_theta() -> np.ndarray:
     return aero.as_array()
 
 
-def theta_coefficients(x: np.ndarray, u: np.ndarray, theta: np.ndarray) -> np.ndarray:
-    _, alpha, _, q_rate = x
+def theta_coefficients(x: np.ndarray, u: np.ndarray, theta: np.ndarray, aircraft: Aircraft = Aircraft()) -> np.ndarray:
+    v, alpha, _, q_rate = x
     _, elevator = u
     cl0, cla, cd0, k_drag, cm0, cma, cmq, cme = theta
+    q_hat = aircraft.chord * q_rate / (2.0 * max(v, 3.0))
     c_l = cl0 + cla * alpha
     c_d = cd0 + k_drag * c_l**2
-    c_m = cm0 + cma * alpha + cmq * q_rate + cme * elevator
+    c_m = cm0 + cma * alpha + cmq * q_hat + cme * elevator
     return np.array([c_l, c_d, c_m])
 
 
@@ -103,6 +111,7 @@ def dynamics_from_coefficients(x: np.ndarray, u: np.ndarray, coeff: np.ndarray, 
     v_safe = max(v, 3.0)
     qbar = 0.5 * aircraft.rho * v_safe**2
     lift, drag, moment = coeff * qbar * aircraft.wing_area
+    moment *= aircraft.chord
     v_dot = (-drag + thrust * np.cos(alpha) - aircraft.mass * aircraft.gravity * np.sin(gamma)) / aircraft.mass
     gamma_dot = (lift + thrust * np.sin(alpha) - aircraft.mass * aircraft.gravity * np.cos(gamma)) / (
         aircraft.mass * v_safe
@@ -120,7 +129,7 @@ def casadi_dynamics_from_coefficients(x, u: np.ndarray, coeff, aircraft: Aircraf
     qbar = 0.5 * aircraft.rho * v**2
     lift = coeff[0] * qbar * aircraft.wing_area
     drag = coeff[1] * qbar * aircraft.wing_area
-    moment = coeff[2] * qbar * aircraft.wing_area
+    moment = coeff[2] * qbar * aircraft.wing_area * aircraft.chord
     v_dot = (-drag + thrust * ca.cos(alpha) - aircraft.mass * aircraft.gravity * ca.sin(gamma)) / aircraft.mass
     gamma_dot = (lift + thrust * ca.sin(alpha) - aircraft.mass * aircraft.gravity * ca.cos(gamma)) / (
         aircraft.mass * v
@@ -143,11 +152,12 @@ def casadi_theta_dynamics(x, u: np.ndarray, theta, aircraft: Aircraft):
     elevator = u[1]
     cl = theta[0] + theta[1] * alpha
     cd = theta[2] + theta[3] * cl**2
-    cm = theta[4] + theta[5] * alpha + theta[6] * q_rate + theta[7] * elevator
+    q_hat = aircraft.chord * q_rate / (2.0 * v)
+    cm = theta[4] + theta[5] * alpha + theta[6] * q_hat + theta[7] * elevator
     qbar = 0.5 * aircraft.rho * v**2
     lift = cl * qbar * aircraft.wing_area
     drag = cd * qbar * aircraft.wing_area
-    moment = cm * qbar * aircraft.wing_area
+    moment = cm * qbar * aircraft.wing_area * aircraft.chord
     v_dot = (-drag + thrust * ca.cos(alpha) - aircraft.mass * aircraft.gravity * ca.sin(gamma)) / aircraft.mass
     gamma_dot = (lift + thrust * ca.sin(alpha) - aircraft.mass * aircraft.gravity * ca.cos(gamma)) / (
         aircraft.mass * v
@@ -364,7 +374,7 @@ def infer_coefficients(x: np.ndarray, u: np.ndarray, dxdt: np.ndarray, aircraft:
     drag = thrust * np.cos(alpha) - aircraft.mass * aircraft.gravity * np.sin(gamma) - aircraft.mass * dxdt[:, 0]
     lift = aircraft.mass * v * dxdt[:, 2] - thrust * np.sin(alpha) + aircraft.mass * aircraft.gravity * np.cos(gamma)
     moment = aircraft.jy * dxdt[:, 3]
-    return np.column_stack((lift / qbar_s, drag / qbar_s, moment / qbar_s))
+    return np.column_stack((lift / qbar_s, drag / qbar_s, moment / (qbar_s * aircraft.chord)))
 
 
 def infer_input_correction(xu: np.ndarray, dxdt: np.ndarray, theta: np.ndarray, aircraft: Aircraft) -> np.ndarray:
@@ -380,8 +390,9 @@ def infer_input_correction(xu: np.ndarray, dxdt: np.ndarray, theta: np.ndarray, 
         np.cos(alpha),
         0.25,
     )
-    cm_eff = aircraft.jy * dxdt[:, 3] / qbar_s
-    elevator_eff = (cm_eff - theta[4] - theta[5] * alpha - theta[6] * x[:, 3]) / max(abs(theta[7]), 1e-6)
+    cm_eff = aircraft.jy * dxdt[:, 3] / (qbar_s * aircraft.chord)
+    q_hat = aircraft.chord * x[:, 3] / (2.0 * v)
+    elevator_eff = (cm_eff - theta[4] - theta[5] * alpha - theta[6] * q_hat) / max(abs(theta[7]), 1e-6)
     correction = np.column_stack((thrust_eff - u[:, 0], elevator_eff - u[:, 1]))
     correction[:, 0] = np.clip(correction[:, 0], -0.45, 0.45)
     correction[:, 1] = np.clip(correction[:, 1], -0.22, 0.22)
@@ -394,15 +405,13 @@ def fit_equation_error(xu: np.ndarray, dxdt: np.ndarray) -> np.ndarray:
     u = xu[:, 4:]
     coeff = infer_coefficients(x, u, dxdt, aircraft)
     alpha = x[:, 1]
-    q_rate = x[:, 3]
+    q_hat = aircraft.chord * x[:, 3] / (2.0 * np.maximum(x[:, 0], 3.0))
     elevator = u[:, 1]
     cl_theta = np.linalg.lstsq(np.column_stack((np.ones_like(alpha), alpha)), coeff[:, 0], rcond=None)[0]
     cd_theta = np.linalg.lstsq(np.column_stack((np.ones_like(alpha), coeff[:, 0] ** 2)), coeff[:, 1], rcond=None)[0]
-    cm_theta = np.linalg.lstsq(np.column_stack((np.ones_like(alpha), alpha, q_rate, elevator)), coeff[:, 2], rcond=None)[0]
+    cm_theta = np.linalg.lstsq(np.column_stack((np.ones_like(alpha), alpha, q_hat, elevator)), coeff[:, 2], rcond=None)[0]
     theta = np.array([cl_theta[0], cl_theta[1], cd_theta[0], cd_theta[1], *cm_theta])
-    lower = np.array([-0.5, 0.0, 0.0, 0.0, -0.2, -1.0, -1.0, -0.5])
-    upper = np.array([0.5, 6.0, 0.2, 0.5, 0.2, 0.5, 0.1, 0.5])
-    return np.clip(theta, lower, upper)
+    return np.clip(theta, THETA_LOWER, THETA_UPPER)
 
 
 def sindy_library(xu: np.ndarray) -> tuple[np.ndarray, list[str]]:
@@ -455,7 +464,10 @@ def sindy_library(xu: np.ndarray) -> tuple[np.ndarray, list[str]]:
 
 
 def structured_sindy_feature_blocks(xu: np.ndarray) -> list[tuple[np.ndarray, list[str], np.ndarray]]:
-    _, alpha, _, q_rate, _, elevator = xu.T
+    v, alpha, _, q_rate, _, elevator = xu.T
+    aircraft = Aircraft()
+    # base pitch-rate feature matches the parametric model's non-dimensional q_hat
+    q_hat = aircraft.chord * q_rate / (2.0 * np.maximum(v, 3.0))
     residual_library, residual_names = sindy_library(xu)
     blocks = [
         (
@@ -469,8 +481,8 @@ def structured_sindy_feature_blocks(xu: np.ndarray) -> list[tuple[np.ndarray, li
             np.array([True, True, True, *([False] * 16)]),
         ),
         (
-            np.column_stack((np.ones_like(alpha), alpha, q_rate, elevator, residual_library[:, [1, 3, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19]])),
-            ["base:1", "base:alpha", "base:Q", "base:delta_e", *[f"res:{residual_names[idx]}" for idx in [1, 3, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19]]],
+            np.column_stack((np.ones_like(alpha), alpha, q_hat, elevator, residual_library[:, [1, 3, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19]])),
+            ["base:1", "base:alpha", "base:Q_hat", "base:delta_e", *[f"res:{residual_names[idx]}" for idx in [1, 3, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19]]],
             np.array([True, True, True, True, *([False] * 14)]),
         ),
     ]
@@ -533,6 +545,7 @@ def structured_sindy_coefficients_casadi(x, u, coeffs: list) -> ca.MX:
     q_rate = x[3]
     thrust = u[0]
     elevator = u[1]
+    q_hat = Aircraft().chord * q_rate / (2.0 * ca.fmax(v, 3.0))
     cl_features = ca.vertcat(
         1,
         alpha,
@@ -578,7 +591,7 @@ def structured_sindy_coefficients_casadi(x, u, coeffs: list) -> ca.MX:
     cm_features = ca.vertcat(
         1,
         alpha,
-        q_rate,
+        q_hat,
         elevator,
         v,
         gamma,
@@ -862,6 +875,12 @@ def evaluate_method(
     start = time.perf_counter()
     trajectories = simulate_trials(validation, rhs_factory)
     rollout_elapsed = time.perf_counter() - start
+    # The rollout freezes a trial once its state norm exceeds 1e4; flag such
+    # trials so divergence is reported instead of masquerading as a huge score.
+    diverged = bool(
+        not np.all(np.isfinite(trajectories))
+        or np.max(np.linalg.norm(trajectories, axis=-1)) >= 1.0e4
+    )
     coeff_pred = None
     if coeff_residual_factory is not None:
         coeff_pred = np.empty_like(validation.coeff_residual)
@@ -880,6 +899,7 @@ def evaluate_method(
         decision_variables=decision_variables,
         train_samples=train_samples,
         notes=notes,
+        diverged=diverged,
     )
 
 
@@ -928,8 +948,8 @@ def run_filter_error_ekf(
     theta = fit_equation_error(xu, dxdt)
     aircraft = Aircraft()
     step_jacobian = make_casadi_rk4_step_parameter_jacobian(aircraft)
-    theta_lower = np.array([-0.5, 0.0, 0.0, 0.0, -0.2, -1.0, -1.0, -0.5])
-    theta_upper = np.array([0.5, 6.0, 0.2, 0.5, 0.2, 0.5, 0.1, 0.5])
+    theta_lower = THETA_LOWER
+    theta_upper = THETA_UPPER
     process_cov = np.diag(np.square(np.asarray(args.ekf_process_std, dtype=float)))
     theta_process_cov = np.diag(np.square(np.asarray(args.ekf_theta_process_std, dtype=float)))
     measurement_cov = np.diag(np.square(np.asarray(args.ekf_measurement_std, dtype=float)))
@@ -994,34 +1014,46 @@ def run_filter_error_ekf(
 
 def run_oem_casadi(train: SplitData, validation: SplitData, args: argparse.Namespace) -> MethodResult:
     theta0 = nominal_theta()
-    theta_lower = np.array([-0.5, 0.0, 0.0, 0.0, -0.2, -1.0, -1.0, -0.5])
-    theta_upper = np.array([0.5, 6.0, 0.2, 0.5, 0.2, 0.5, 0.1, 0.5])
-    state_lower = np.array([5.0, -0.5, -0.45, -2.0])
-    state_upper = np.array([30.0, 0.5, 0.45, 2.0])
+    theta_lower = THETA_LOWER
+    theta_upper = THETA_UPPER
+    state_lower = STATE_BOX_LOWER
+    state_upper = STATE_BOX_UPPER
     aircraft = Aircraft()
     trial_count = min(args.max_oem_trials, train.n_trials)
     trial_ids = np.linspace(0, train.n_trials - 1, trial_count, dtype=int)
     stride = max(1, int(args.oem_stride))
     t_fit = train.t[::stride]
     noise = np.array([0.08, 0.0035, 0.0035, 0.012])
+    # Multiple shooting: single shooting diverges on the aggressive post-stall
+    # trajectories, leaving theta at (or returning exactly) the initial guess.
+    segments = max(1, int(getattr(args, "oem_segments", 6)))
+    segments = min(segments, len(t_fit) - 1)
+    continuity_scale = np.maximum(0.5 * noise, np.array([0.02, 0.0015, 0.0015, 0.006]))
+    indices = np.linspace(0, len(t_fit) - 1, segments + 1, dtype=int)
 
     theta = ca.MX.sym("theta", 8)
-    x0_nodes = ca.MX.sym("x0", 4, trial_count)
-    variables = [theta, ca.reshape(x0_nodes, 4 * trial_count, 1)]
+    nodes = ca.MX.sym("nodes", 4, trial_count * segments)
     residuals = []
     for local_idx, trial in enumerate(trial_ids):
-        x = x0_nodes[:, local_idx]
         u = train.u_act[trial, ::stride]
         y = train.y_meas[trial, ::stride]
-        for k in range(len(t_fit)):
-            for state_idx in range(4):
-                residuals.append((x[state_idx] - y[k, state_idx]) / noise[state_idx])
-            if k == len(t_fit) - 1:
-                continue
-            dt = float(t_fit[k + 1] - t_fit[k])
-            x = casadi_rk4_step(x, u[k], u[k + 1], theta, aircraft, dt)
+        for seg in range(segments):
+            x = nodes[:, local_idx * segments + seg]
+            for k in range(indices[seg], indices[seg + 1]):
+                for state_idx in range(4):
+                    residuals.append((x[state_idx] - y[k, state_idx]) / noise[state_idx])
+                dt = float(t_fit[k + 1] - t_fit[k])
+                x = casadi_rk4_step(x, u[k], u[k + 1], theta, aircraft, dt)
+            if seg < segments - 1:
+                next_node = nodes[:, local_idx * segments + seg + 1]
+                for state_idx in range(4):
+                    residuals.append((x[state_idx] - next_node[state_idx]) / continuity_scale[state_idx])
+            else:
+                k_last = int(indices[segments])
+                for state_idx in range(4):
+                    residuals.append((x[state_idx] - y[k_last, state_idx]) / noise[state_idx])
 
-    z = ca.vertcat(*variables)
+    z = ca.vertcat(theta, ca.reshape(nodes, 4 * trial_count * segments, 1))
     objective = ca.sumsqr(ca.vertcat(*residuals))
     solver = ca.nlpsol(
         "oem_state",
@@ -1034,26 +1066,35 @@ def run_oem_casadi(train: SplitData, validation: SplitData, args: argparse.Names
             "print_time": False,
         },
     )
-    x0_guess = np.vstack([train.y_meas[trial, 0] for trial in trial_ids])
-    z0 = np.concatenate((theta0, np.clip(x0_guess, state_lower, state_upper).ravel(order="F")))
-    lower = np.concatenate((theta_lower, np.tile(state_lower, trial_count)))
-    upper = np.concatenate((theta_upper, np.tile(state_upper, trial_count)))
+    node_guess = np.vstack([np.clip(train.y_meas[trial, ::stride][indices[:-1]], state_lower, state_upper) for trial in trial_ids])
+    z0 = np.concatenate((theta0, node_guess.ravel(order="C")))
+    lower = np.concatenate((theta_lower, np.tile(state_lower, trial_count * segments)))
+    upper = np.concatenate((theta_upper, np.tile(state_upper, trial_count * segments)))
     start = time.perf_counter()
     solution = solver(x0=z0, lbx=lower, ubx=upper)
     elapsed = time.perf_counter() - start
+    stats = solver.stats()
+    return_status = str(stats.get("return_status", "unknown"))
+    converged = return_status in ("Solve_Succeeded", "Solved_To_Acceptable_Level")
+    if not converged:
+        print(f"  WARNING: OEM-SS IPOPT did not converge ({return_status}); treat the OEM row with caution", flush=True)
     theta_hat = np.asarray(solution["x"]).ravel()[:8]
     result = evaluate_method(
         "OEM-SS",
-        "Single-shooting output-error fit of the nominal aerodynamic parameter vector.",
+        "Multiple-shooting output-error fit of the nominal aerodynamic parameter vector.",
         elapsed,
         int(trial_count * len(t_fit)),
         len(z0),
         validation,
         lambda _trial: lambda x, u: theta_dynamics(x, u, theta_hat, aircraft),
         None,
-        f"CasADi/IPOPT backend fitted on {trial_count} trajectory samples with stride {stride}; nonlinear residuals are unmodeled.",
+        (
+            f"CasADi/IPOPT multiple shooting ({segments} segments) on {trial_count} trials with stride {stride}; "
+            f"nonlinear residuals are unmodeled. Solver status: {return_status}."
+        ),
     )
     result.backend = "CasADi/IPOPT"
+    result.train_loss_final = float(solution["f"])
     return result
 
 
@@ -1064,12 +1105,12 @@ def run_oem(train: SplitData, validation: SplitData, args: argparse.Namespace) -
 def run_oem_hidden_controller(train: SplitData, validation: SplitData, args: argparse.Namespace) -> MethodResult:
     theta0 = nominal_theta()
     ctrl0 = np.array([0.068, np.deg2rad(13.0), np.deg2rad(10.0), 3.0, 0.105, 0.018, 0.110, 13.0, np.deg2rad(2.0), 5.0, 0.125, 0.85])
-    theta_lower = np.array([-0.5, 0.0, 0.0, 0.0, -0.2, -1.0, -1.0, -0.5])
-    theta_upper = np.array([0.5, 6.0, 0.2, 0.5, 0.2, 0.5, 0.1, 0.5])
+    theta_lower = THETA_LOWER
+    theta_upper = THETA_UPPER
     ctrl_lower = np.array([0.00, 0.0, 0.0, 0.5, 0.01, 0.0, 0.07, 10.0, -0.08, 1.0, 0.02, 0.0])
     ctrl_upper = np.array([0.18, 0.45, 0.45, 8.0, 0.25, 0.08, 0.18, 16.0, 0.12, 9.0, 0.25, 1.0])
-    state_lower = np.array([5.0, -0.5, -0.45, -2.0])
-    state_upper = np.array([30.0, 0.5, 0.45, 2.0])
+    state_lower = STATE_BOX_LOWER
+    state_upper = STATE_BOX_UPPER
     aircraft = Aircraft()
     trim_u = np.nanmean(train.trim_controls.reshape(-1, 2), axis=0)
     trial_count = min(args.max_oem_trials, train.n_trials)
@@ -1155,10 +1196,10 @@ def simulate_single_trajectory(
 
 def run_oem_mocap_output_casadi(train: SplitData, validation: SplitData, args: argparse.Namespace) -> MethodResult:
     theta0 = nominal_theta()
-    theta_lower = np.array([-0.5, 0.0, 0.0, 0.0, -0.2, -1.0, -1.0, -0.5])
-    theta_upper = np.array([0.5, 6.0, 0.2, 0.5, 0.2, 0.5, 0.1, 0.5])
-    state_lower = np.array([5.0, -0.5, -0.45, -2.0])
-    state_upper = np.array([30.0, 0.5, 0.45, 2.0])
+    theta_lower = THETA_LOWER
+    theta_upper = THETA_UPPER
+    state_lower = STATE_BOX_LOWER
+    state_upper = STATE_BOX_UPPER
     aircraft = Aircraft()
     trial_count = min(args.max_oem_trials, train.n_trials)
     trial_ids = np.linspace(0, train.n_trials - 1, trial_count, dtype=int)
@@ -1240,10 +1281,10 @@ def run_variational_mocap_output_casadi(train: SplitData, validation: SplitData,
     """
 
     theta0 = nominal_theta()
-    theta_lower = np.array([-0.5, 0.0, 0.0, 0.0, -0.2, -1.0, -1.0, -0.5])
-    theta_upper = np.array([0.5, 6.0, 0.2, 0.5, 0.2, 0.5, 0.1, 0.5])
-    state_lower = np.array([5.0, -0.5, -0.45, -2.0])
-    state_upper = np.array([30.0, 0.5, 0.45, 2.0])
+    theta_lower = THETA_LOWER
+    theta_upper = THETA_UPPER
+    state_lower = STATE_BOX_LOWER
+    state_upper = STATE_BOX_UPPER
     aircraft = Aircraft()
     trial_count = min(args.max_vi_trials, train.n_trials)
     trial_ids = np.linspace(0, train.n_trials - 1, trial_count, dtype=int)
@@ -1748,7 +1789,12 @@ def fit_frequency_linear_model(
     nperseg: int,
     min_coherence: float,
 ) -> tuple[np.ndarray, np.ndarray, int]:
-    """Fit dx/dt = c + A x + B u using coherence-weighted averaged spectra."""
+    """Fit dx/dt = c + A x + B u from averaged spectra with input-power weighting.
+
+    The per-bin weight is an input-power fraction heuristic, not a coherence
+    estimate; bins dominated by state response relative to input content are
+    down-weighted or skipped.
+    """
 
     fs = 1.0 / dt
     z_mean = np.concatenate((train_x.reshape(-1, 4).mean(axis=0), train_u.reshape(-1, 2).mean(axis=0)))
@@ -1782,12 +1828,12 @@ def fit_frequency_linear_model(
                 input_power = float(np.sum(spectral_power[4:]))
                 if state_power <= 1e-12 or input_power <= 1e-12:
                     continue
-                multisine_coherence = input_power / (input_power + 0.15 * state_power + 1e-18)
-                if multisine_coherence < min_coherence:
+                input_power_fraction = input_power / (input_power + 0.15 * state_power + 1e-18)
+                if input_power_fraction < min_coherence:
                     continue
                 rows.append(row)
                 targets.append(1j * omega[idx] * row[:4])
-                weights.append(float(np.sqrt(multisine_coherence * input_power / (np.sum(spectral_power) + 1e-18))))
+                weights.append(float(np.sqrt(input_power_fraction * input_power / (np.sum(spectral_power) + 1e-18))))
                 segment_count += 1
 
     if not rows:
@@ -1845,14 +1891,14 @@ def run_frequency_linear(
 
     result = evaluate_method(
         "Frequency-Welch",
-        "Coherence-weighted continuous-time linear model fitted from averaged Welch state/input spectra.",
+        "Input-power-weighted continuous-time linear model fitted from averaged Welch state/input spectra.",
         elapsed,
         freq_count,
         int(intercept.size + coeff.size),
         validation,
         lambda _trial: rhs,
         None,
-        f"Welch/ETFE-inspired spectral fit using bins up to {args.frequency_max_hz:g} Hz and coherence threshold {args.frequency_min_coherence:g}; this is not CIFER and should be interpreted only as a compact local linear frequency-domain baseline.",
+        f"Welch/ETFE-inspired spectral fit using bins up to {args.frequency_max_hz:g} Hz and input-power-fraction threshold {args.frequency_min_coherence:g}; this is not CIFER and should be interpreted only as a compact local linear frequency-domain baseline.",
     )
     result.backend = "NumPy Welch/CSD"
     return result
@@ -2173,6 +2219,7 @@ def summarize_results(results: list[MethodResult], validation: SplitData) -> lis
             "train_samples": result.train_samples,
             "notes": result.notes,
             "evaluation_mode": result.evaluation_mode,
+            "diverged": result.diverged,
         }
         row.update({f"rmse_{name}": value for name, value in zip(STATE_NAMES, state_rmse)})
         if result.validation_outputs is not None:
@@ -2494,7 +2541,9 @@ def plot_frequency_diagnostic(validation: SplitData, args: argparse.Namespace) -
     fig, axes = plt.subplots(3, 1, figsize=(7.4, 6.2), sharex=True)
     for output_idx, label, color in [(3, "Q", "#4c78a8"), (2, "gamma", "#f58518")]:
         output = validation.y_meas[trial, :, output_idx] - np.mean(validation.y_meas[trial, :, output_idx])
-        freq, pxy = csd(output, elevator, fs=fs, nperseg=nperseg, detrend="constant")
+        # H1 estimate: scipy csd(x, y) averages conj(X) * Y, so the input must be
+        # the first argument or the returned phase is conjugated.
+        freq, pxy = csd(elevator, output, fs=fs, nperseg=nperseg, detrend="constant")
         _, pxx = welch(elevator, fs=fs, nperseg=nperseg, detrend="constant")
         _, coh = coherence(elevator, output, fs=fs, nperseg=nperseg, detrend="constant")
         h = pxy / pxx
@@ -2577,12 +2626,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ekf-jac-stride", type=int, default=1)
     parser.add_argument("--ekf-param-trials", type=int, default=8)
     parser.add_argument("--ekf-param-stride", type=int, default=10)
-    parser.add_argument("--ekf-theta-initial-std", type=float, nargs=8, default=[0.08, 0.6, 0.02, 0.08, 0.04, 0.18, 0.08, 0.08])
-    parser.add_argument("--ekf-theta-process-std", type=float, nargs=8, default=[1e-5, 2e-4, 1e-5, 2e-5, 1e-5, 5e-5, 2e-5, 2e-5])
+    parser.add_argument("--ekf-theta-initial-std", type=float, nargs=8, default=[0.08, 0.6, 0.02, 0.08, 0.2, 1.0, 8.0, 0.5])
+    parser.add_argument("--ekf-theta-process-std", type=float, nargs=8, default=[1e-5, 2e-4, 1e-5, 2e-5, 5e-5, 3e-4, 1.5e-3, 1e-4])
     parser.add_argument("--skip-oem", action="store_true", help="skip the slower output-error fit")
     parser.add_argument("--max-oem-trials", type=int, default=4)
     parser.add_argument("--oem-stride", type=int, default=4)
-    parser.add_argument("--max-oem-nfev", type=int, default=35)
+    parser.add_argument("--max-oem-nfev", type=int, default=200)
+    parser.add_argument("--oem-segments", type=int, default=6, help="multiple-shooting segments per trial for OEM-SS")
     parser.add_argument("--max-vi-trials", type=int, default=2)
     parser.add_argument("--vi-stride", type=int, default=20)
     parser.add_argument("--max-vi-nfev", type=int, default=45)
