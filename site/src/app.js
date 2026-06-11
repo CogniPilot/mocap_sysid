@@ -996,6 +996,37 @@ new GLTFLoader().load(
   "./public/assets/airplane.glb",
   (gltf) => {
     const scene = gltf.scene;
+    // The asset's Right* meshes contain an unremoved duplicate of the left
+    // side's geometry (RightAileron spans X = [-6.27, +6.27]); strip the
+    // wrong-side triangles so the duplicate never renders or articulates.
+    for (const name of ["RightAileron", "RightFlap", "RightWheel"]) {
+      const node = findNamedPart(scene, name);
+      let mesh = null;
+      if (node) node.traverse((child) => { if (!mesh && child.isMesh) mesh = child; });
+      if (!mesh) continue;
+      const source = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry;
+      const pos = source.getAttribute("position");
+      const kept = [];
+      for (let tri = 0; tri < pos.count; tri += 3) {
+        const cx = (pos.getX(tri) + pos.getX(tri + 1) + pos.getX(tri + 2)) / 3;
+        if (cx < 0) kept.push(tri);
+      }
+      const attributes = {};
+      for (const [attrName, attr] of Object.entries(source.attributes)) {
+        const itemSize = attr.itemSize;
+        const out = new Float32Array(kept.length * 3 * itemSize);
+        let w = 0;
+        for (const tri of kept) {
+          for (let v = 0; v < 3; v++) {
+            for (let c = 0; c < itemSize; c++) out[w++] = attr.array[(tri + v) * itemSize + c];
+          }
+        }
+        attributes[attrName] = new THREE.BufferAttribute(out, itemSize);
+      }
+      const cleaned = new THREE.BufferGeometry();
+      for (const [attrName, attr] of Object.entries(attributes)) cleaned.setAttribute(attrName, attr);
+      mesh.geometry = cleaned;
+    }
     // The asset authors pivots as hinge-location empties that are siblings of
     // the surface meshes; re-parent each mesh under its pivot (preserving
     // world transforms) so rotating the pivot articulates the surface.
