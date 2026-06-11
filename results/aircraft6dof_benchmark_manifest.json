@@ -20,7 +20,6 @@
     "6DOF-Model-Stitching",
     "6DOF-NN-Surrogate",
     "6DOF-Nominal",
-    "6DOF-OEM-MocapOutput",
     "6DOF-OEM-SS",
     "6DOF-PINN-Closure",
     "6DOF-RidgeResidual",
@@ -30,9 +29,9 @@
     "6DOF-UDE-Residual",
     "6DOF-Variational-Mocap"
   ],
-  "metric": "Validation score is full-state mean NRMSE for state predictors and mocap-output NRMSE for 6DOF-OEM-MocapOutput.",
+  "metric": "Validation score is full-state mean NRMSE over open-loop rollouts.",
   "model_family": "aircraft6dof",
-  "result_rows": 238,
+  "result_rows": 232,
   "scenarios": [
     "aircraft_6dof_aggressive",
     "aircraft_6dof_open_loop",

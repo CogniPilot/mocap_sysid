@@ -67,7 +67,6 @@ SIX_DOF_BUILTINS = {
     "6DOF-Fisher-UQ": ("direct", "mocap"),
     "6DOF-OEM-SS": ("direct", "mocap"),
     "6DOF-RidgeResidual": ("direct", "mocap"),
-    "6DOF-OEM-MocapOutput": ("mocap",),
     "6DOF-Variational-Mocap": ("direct", "mocap"),
     "6DOF-SINDy": ("direct", "mocap"),
     "6DOF-Symbolic-Stepwise": ("direct", "mocap"),

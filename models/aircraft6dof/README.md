@@ -89,7 +89,6 @@ Current baseline methods:
 - `6DOF-Fisher-UQ`: uncertainty-wrapper row around the fitted residual parameter model.
 - `6DOF-OEM-SS`: lightweight output-error state-space analogue.
 - `6DOF-RidgeResidual`: attached-flow RK4 rollout plus a ridge one-step residual.
-- `6DOF-OEM-MocapOutput`: mocap position/quaternion output predictor.
 - `6DOF-Variational-Mocap`: smoothed weak-form derivative baseline.
 - `6DOF-SINDy`: sparse quadratic-library derivative model.
 - `6DOF-Symbolic-Stepwise`: sparse quadratic one-step predictor.

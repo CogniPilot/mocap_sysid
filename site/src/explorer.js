@@ -592,11 +592,43 @@ function renderModelInspector() {
     card("GreyBoxOEM", "22 physical aerodynamic coefficients, segment-wise output error",
       `<table class="model-table"><tbody>${rows}</tbody></table><p class="model-note">fixed: ${fixed}; max deflection ${Object.entries(gb.max_deflection_deg).map(([k,v])=>`${k} ${v}\u00b0`).join(", ")}</p>`);
   }
-  // SAFE closed loop.
+  // SAFE closed loop: one shared linear model for stabilized segments.
   if (m.safe_invariant_weights) {
     const sc = m.safe_scores || {};
-    card("SAFE closed loop (stabilized handoff)", "heading/position-invariant ridge: [u,v,w,\u03c6,\u03b8,p,q,r,stick,1] \u2192 next dynamics + \u0394\u03c8",
-      `<p class="model-note">weights 13\u00d79 \u00b7 ${sc.train_samples ?? "?"} train samples \u00b7 held-out 5 s position error ${sc.validation_pos_err_5s_m ?? "?"} m over ${sc.validation_windows ?? "?"} windows</p>`);
+    const dt = ex.data.flights[0]?.dt_full || 1 / 240;
+    const safeFeatures = ["u", "v", "w", "\u03c6", "\u03b8", "p", "q", "r", "thr", "elev", "ail", "rud", "1"];
+    const safeOutputs = ["u\u0307", "v\u0307", "w\u0307", "\u03c6\u0307", "\u03b8\u0307", "p\u0307", "q\u0307", "r\u0307", "\u03c8\u0307"];
+    const W = m.safe_invariant_weights;
+    // The one-step map is near-identity at 240 Hz; (W - I)/dt reads as
+    // continuous-time equations, which is what a human wants to inspect.
+    const lines = safeOutputs.map((out, j) => {
+      const terms = safeFeatures.map((name, i) => {
+        let v = W[i][j];
+        if (j < 8 && i === j) v -= 1;
+        return { name, v: v / dt };
+      }).filter((t) => Math.abs(t.v) > 0.05);
+      terms.sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
+      const rhs = terms.slice(0, 4).map((t, idx) => `${t.v < 0 ? "\u2212" : idx ? "+" : ""} ${Math.abs(t.v).toPrecision(3)}\u00b7${t.name}`).join(" ");
+      return `${out} \u2248 ${rhs || "0"}`;
+    });
+    card("SAFE closed loop \u2014 shared by every method",
+      "stabilized segments always use this single heading/position-invariant linear ridge fit; the method picker only changes the manual-segment airframe. A direct closed-loop fit beats wrapping the identified controller around each airframe (2.9 m vs 13.6 m at 5 s).",
+      `<p class="model-terms">${lines.join("<br>")}</p>` +
+      `<p class="model-note">linear, not a neural network \u00b7 13\u00d79 weights shown as continuous-time equations (terms &gt; 0.05/s) \u00b7 ${sc.train_samples ?? "?"} train samples \u00b7 held-out 5 s position error ${sc.validation_pos_err_5s_m ?? "?"} m over ${sc.validation_windows ?? "?"} windows</p>`);
+  }
+  // SAFE controller grey-box decomposition: guessed structure, fitted gains.
+  if (m.safe_gains) {
+    const g = m.safe_gains;
+    const axisRow = (axis, names) => `<tr><td>${axis}</td>${(g[axis] || []).map((v, i) => `<td title="${names[i]}">${v.toPrecision(3)}</td>`).join("")}</tr>`;
+    card("SAFE controller (grey-box structure)",
+      "guessed attitude-command structure with fitted gains and saturations: \u03b4 = K\u209a\u00b7(sat(scale\u00b7stick, \u00b1envelope) \u2212 attitude) \u2212 K\u1d48\u00b7rate + bias",
+      `<table class="model-table"><tbody>
+        <tr><td></td><td>K\u209a</td><td>scale</td><td>envelope</td><td>K\u1d48</td><td>bias</td></tr>
+        ${axisRow("elevator", ["Kp", "cmd scale", "envelope limit rad", "Kd", "bias"])}
+        ${axisRow("aileron", ["Kp", "cmd scale", "envelope limit rad", "Kd", "bias"])}
+        <tr><td>rudder</td>${(g.rudder || []).map((v) => `<td>${v.toPrecision(3)}</td>`).join("")}<td colspan="2">(stick gain, yaw-rate gain, bias)</td></tr>
+      </tbody></table>
+      <p class="model-note">retained for interpretability and used when no closed-loop fit exists; identified against the nominal airframe, which is why composing it with each method's airframe currently loses to the direct closed-loop fit. Re-identifying it against the fitted grey-box is the planned upgrade.</p>`);
   }
   // Affine baselines.
   if (m.linear_weights) card("LinearSS", "one-step affine map x[k+1] = W\u1d40[x,u,1]", `<p class="model-note">weights ${m.linear_weights.length}\u00d7${m.linear_weights[0].length}</p>`);
