@@ -277,8 +277,8 @@
     "method_traces": "method_traces.json",
     "playback": "playback.json"
   },
-  "generated_at": "2026-06-11T02:38:25.840810+00:00",
-  "git_sha": "0c5616af4cfe08a367cdb0b903a2b064eefc9758",
+  "generated_at": "2026-06-11T03:25:25.387852+00:00",
+  "git_sha": "8d9d7282777afaabf5d6324b3bc6882f4a1d282b",
   "method_registry": [
     {
       "description": "Built-in 6DOF baseline dispatched by models/aircraft6dof/comparison_suite.py.",

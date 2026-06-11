@@ -1869,13 +1869,24 @@ never begin from an already-diverged state on an open-loop unstable airframe.
 From any selected segment a free run continues to the next ground contact
 with no further state resets: manual segments use the recorded sticks
 re-referenced by the per-flight trim bias. Stabilized segments use a
-\emph{directly identified closed-loop model} (state and stick to next state,
-ridge-fitted on every tracked stabilized sample of the session) rather than
-composing the bare airframe with the inverse-dynamics controller estimate:
-the closed loop is abundantly excited by the lap data and is exactly what
-stabilized segments replay, and on five-second stabilized free-runs it
-reduces the full-state NRMSE roughly four-fold relative to the
-controller-decomposition route (about 0.3--0.5 versus 1.4--1.7). The
+\emph{directly identified closed-loop model} ridge-fitted on every tracked
+stabilized sample of the session rather than composing the bare airframe
+with the inverse-dynamics controller estimate: the closed loop is abundantly
+excited by the lap data and is exactly what stabilized segments replay,
+whereas the decomposition route inherits the weakly conditioned controller
+estimate (on five-second stabilized free-runs the direct fit is roughly
+four-fold better). The regression is restricted to the heading- and
+position-invariant state --- body velocities, roll, pitch, and body rates,
+with the heading \emph{increment} as an additional target --- because flight
+dynamics do not depend on position or heading, and a global affine map
+fitted on raw position/quaternion states cannot represent the
+heading-dependent position kinematics: its free runs wander off the
+operating point within seconds. Heading then integrates the fitted
+increment and position integrates the rotated body velocity exactly, which
+lets stabilized free runs fly whole laps; on ten-second held-out stabilized
+windows this symmetry-respecting fit cuts the five-second position error
+roughly three-fold relative to the raw-state affine fit (about 3\,m versus
+8\,m). The
 explicit controller identification of the previous paragraph is retained for
 interpretability and for eventual composition with identified airframes. Model rollouts are computed
 on the fly in the browser from exported model parameters (the attached-flow

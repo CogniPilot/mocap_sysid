@@ -613,18 +613,26 @@ function renderTradeoff(rows) {
   const nominal = rows.find((row) => cleanMethodName(row.method).includes("Nominal") && finiteNumber(row.validation_score));
   if (nominal) {
     const y = logScale(nominal.validation_score, yExtent[0], yExtent[1], margin.top + plotHeight, margin.top);
-    add("text", {
-      x: margin.left + plotWidth * 0.5,
-      y: Math.max(margin.top + 34, y - 18),
-      "text-anchor": "middle",
-      class: "known-label",
-    }, "known");
-    add("text", {
-      x: margin.left + plotWidth * 0.5,
-      y: Math.min(margin.top + plotHeight - 18, y + 34),
-      "text-anchor": "middle",
-      class: "unknown-label",
-    }, "unknown");
+    // Labels stay strictly on their own side of the nominal line and are
+    // dropped when that region is too thin to hold them.
+    const knownY = y - 10;
+    if (knownY > margin.top + 16) {
+      add("text", {
+        x: margin.left + plotWidth * 0.5,
+        y: knownY,
+        "text-anchor": "middle",
+        class: "known-label",
+      }, "known");
+    }
+    const unknownY = y + 22;
+    if (unknownY < margin.top + plotHeight - 6) {
+      add("text", {
+        x: margin.left + plotWidth * 0.5,
+        y: unknownY,
+        "text-anchor": "middle",
+        class: "unknown-label",
+      }, "unknown");
+    }
     add("line", {
       x1: margin.left,
       y1: y,

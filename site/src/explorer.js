@@ -222,6 +222,34 @@ export function makeGreyboxStepper(greybox, dt) {
   };
 }
 
+// Heading/position-invariant closed-loop SAFE model: the regression predicts
+// the next body velocities, roll/pitch, rates, and the heading increment from
+// [u,v,w,phi,theta,p,q,r, stick, 1]; heading integrates the increment and
+// position integrates the rotated body velocity exactly, so free runs can fly
+// whole laps instead of wandering off the affine fit's operating point.
+export function makeSafeStepper(W, dt) {
+  return (x, stick) => {
+    const quat = normQuat([x[6], x[7], x[8], x[9]]);
+    const e = eulerFromQuat(quat);
+    const rot = rotationBodyToInertial(quat);
+    const step = matVec(rot, [x[3], x[4], x[5]]);
+    const z = [x[3], x[4], x[5], e[0], e[1], x[10], x[11], x[12], stick[0], stick[1], stick[2], stick[3], 1];
+    const out = new Array(9).fill(0);
+    for (let i = 0; i < z.length; i++) {
+      const row = W[i];
+      for (let j = 0; j < 9; j++) out[j] += z[i] * row[j];
+    }
+    const psi = Math.atan2(Math.sin(e[2] + out[8]), Math.cos(e[2] + out[8]));
+    const q = quatFromEuler(out[3], out[4], psi);
+    return [
+      x[0] + step[0] * dt, x[1] + step[1] * dt, x[2] + step[2] * dt,
+      out[0], out[1], out[2],
+      q[0], q[1], q[2], q[3],
+      out[5], out[6], out[7],
+    ];
+  };
+}
+
 function postStep(x) {
   const out = x.slice();
   const q = normQuat([out[6], out[7], out[8], out[9]]);
@@ -377,9 +405,7 @@ function rolloutFrom(flight, models, method, timeS) {
     if (labels[k] === 0) { endIdx = k; break; }
   }
   const stepper = makeStepper(method, models, dt);
-  const safeStep = models.safe_linear_weights
-    ? (x, stick) => postStep(affinePredict(x, stick, models.safe_linear_weights))
-    : null;
+  const safeStep = models.safe_invariant_weights ? makeSafeStepper(models.safe_invariant_weights, dt) : null;
   const ctrl = safeController(models.safe_gains);
   const bias = flight.bias;
   let x = estimateInitialState(flight, timeS);
