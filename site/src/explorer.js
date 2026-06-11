@@ -20,6 +20,11 @@ const ex = {
   anchorTimeS: null,
   selectedMethods: new Set(),
   predictions: {},
+  // Whether the playback is showing this module's dataset. While another
+  // dataset (3DOF, synthetic 6DOF) is displayed the explorer must stay
+  // silent: publishing an overlay would hijack the view back to the Sport
+  // Cub flights.
+  active: true,
 };
 
 function clamp(v, lo, hi) {
@@ -166,9 +171,10 @@ function greyboxRhs(s, u, gb) {
   const side = qbar * p.S * (p.CYb * beta);
   const thrust = p.KT * p.m * thr;
 
-  const fx = -drag * cA * cB - side * cA * sB + lift * sA + thrust * cA * cB;
-  const fy = -drag * sB + side * cB + thrust * sB;
-  const fz = -drag * sA * cB - side * sA * sB - lift * cA - thrust * sA * cB;
+  // Aerodynamic forces rotate from wind axes; thrust is body-fixed along x.
+  const fx = -drag * cA * cB - side * cA * sB + lift * sA + thrust;
+  const fy = -drag * sB + side * cB;
+  const fz = -drag * sA * cB - side * sA * sB - lift * cA;
 
   const cPhi = Math.cos(phi), sPhi = Math.sin(phi);
   const cTh = Math.cos(theta), sTh = Math.sin(theta);
@@ -734,7 +740,17 @@ export async function initExplorer() {
   window.addEventListener("playback-ready", () => tryAnnounce(40));
   // The leaderboard owns method selection; free-run the selected methods the
   // browser has model parameters for.
+  window.addEventListener("playback-context-changed", (event) => {
+    const wasActive = ex.active;
+    ex.active = Boolean(event.detail.explorerActive);
+    const wrap = document.querySelector("#explorer-flight-wrap");
+    if (wrap) wrap.hidden = !ex.active;
+    // Returning to the Sport Cub dataset restores the segmentation overlay
+    // (and any anchored free run) that the other dataset's view cleared.
+    if (ex.active && !wasActive) publishOverlay(ex.anchorTimeS);
+  });
   window.addEventListener("explorer-anchor-request", (event) => {
+    if (!ex.active) return;
     // Clicking Predict here again at (nearly) the same time clears the run.
     if (ex.anchorTimeS != null && Math.abs(event.detail.timeS - ex.anchorTimeS) < 0.05) {
       ex.anchorTimeS = null;
@@ -748,6 +764,7 @@ export async function initExplorer() {
   window.addEventListener("methods-changed", (event) => {
     const available = new Set(ex.data.methods);
     ex.selectedMethods = new Set((event.detail.methods || []).filter((m) => available.has(m)));
+    if (!ex.active) return;
     recomputePredictions();
     renderAll();
     if (ex.anchorTimeS != null) publishOverlay(ex.anchorTimeS);

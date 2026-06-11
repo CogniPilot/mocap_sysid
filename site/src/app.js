@@ -199,8 +199,11 @@ function renderModelTabs() {
     button.addEventListener("click", () => {
       state.modelFamily = family;
       state.selectedMethods.clear();
+      state.playbackTrackOverride = null;
+      state.explorerOverlay = null;
       resetTradeoffZoom();
       setDefaultScenario();
+      notifyExplorerContext();
       render();
     });
     host.append(button);
@@ -266,6 +269,7 @@ function bindControls() {
     state.playbackTrackOverride = null;
     state.explorerOverlay = null;
     resetTradeoffZoom();
+    notifyExplorerContext();
     render();
   });
 
@@ -354,6 +358,8 @@ function bindControls() {
   }
 
   document.querySelector("#playback-predict").addEventListener("click", () => {
+    // On-the-fly free runs exist only for the flight-explorer dataset.
+    if (!state.playbackTrackOverride) return;
     window.dispatchEvent(new CustomEvent("explorer-anchor-request", { detail: { timeS: state.playbackTimeS } }));
   });
   document.querySelector("#playback-method").addEventListener("change", (event) => {
@@ -779,6 +785,17 @@ function toggleMethodSelection(key) {
   }
   window.dispatchEvent(new CustomEvent("methods-changed", { detail: { methods: Array.from(state.selectedMethods) } }));
   render();
+}
+
+function notifyExplorerContext() {
+  // Tell the flight-explorer module whether its dataset is the one displayed,
+  // so it never publishes an overlay (and hijacks the view) from another
+  // dataset's screen.
+  window.dispatchEvent(new CustomEvent("playback-context-changed", {
+    detail: {
+      explorerActive: state.modelFamily === "aircraft6dof" && state.scenario === "sportcub_mocap_5_22_26",
+    },
+  }));
 }
 
 function renderPlaybackMethodPicker() {
@@ -1762,6 +1779,8 @@ function renderPlaybackControls(track) {
     if (wrapper) wrapper.style.display = state.playbackTrackOverride ? "none" : "";
   }
   renderPlaybackMethodPicker();
+  const predict = document.querySelector("#playback-predict");
+  if (predict) predict.style.display = state.playbackTrackOverride ? "" : "none";
   if (segmentSelect && track && !state.playbackTrackOverride) {
     const segments = track.segments?.length ? track.segments : [track];
     segmentSelect.innerHTML = "";
