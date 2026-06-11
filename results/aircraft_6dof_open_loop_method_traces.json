@@ -11437,7 +11437,7 @@
       "state_source": "direct"
     },
     {
-      "method": "6DOF-Nominal",
+      "method": "6DOF-NominalGreyBox",
       "model_family": "aircraft6dof",
       "scenario": "aircraft_6dof_open_loop",
       "segments": [
@@ -22873,7 +22873,7 @@
       "state_source": "direct"
     },
     {
-      "method": "6DOF-Nominal",
+      "method": "6DOF-NominalGreyBox",
       "model_family": "aircraft6dof",
       "scenario": "aircraft_6dof_open_loop",
       "segments": [

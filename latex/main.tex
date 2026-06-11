@@ -100,8 +100,8 @@ This section lists only the method families currently represented in repository 
 
 \subsection{Baselines and Fixed-Structure Aircraft Identification}
 
-\paragraph{Nominal model.}
-The nominal row evaluates the coded 3-DOF aircraft model without the hidden nonlinear aerodynamic residuals. It is a no-fit baseline and appears in the result figures as the reference performance level.
+\paragraph{Nominal grey-box model.}
+The nominal grey-box row evaluates the coded 3-DOF aircraft model without the hidden nonlinear aerodynamic residuals. It is a no-fit baseline and appears in the result figures as the reference performance level.
 
 \paragraph{EquationError-LS.}
 The equation-error least-squares row fits aerodynamic coefficients from reconstructed state derivatives, the classical regression formulation of aircraft parameter estimation \cite{KleinMorelli2006,morelli_system_2002}. It is fast and interpretable, but it is sensitive to measurement noise because the dependent variables require numerical differentiation.
@@ -1938,8 +1938,8 @@ $\dot\alpha$ terms.
 
 \subsection{6-DOF Baseline Methods}
 
-\paragraph{6DOF-Nominal.}
-The 6-DOF nominal row propagates the repository's attached-flow quaternion rigid-body model with the supplied pilot-command history. It has no fitted parameters and is used as the no-fit baseline against the hidden nonlinear stall/residual aerodynamic truth model.
+\paragraph{6DOF-NominalGreyBox.}
+The 6-DOF nominal grey-box row propagates the repository's attached-flow quaternion rigid-body model with the supplied pilot-command history. It has no fitted parameters and is used as the no-fit baseline against the hidden nonlinear stall/residual aerodynamic truth model. The row appears only for synthetic scenarios: on real flights the truth-minus-residual interpretation does not exist and the attached-flow model is simply a wrong model, so it is omitted there (it remains the internal base model of the residual methods).
 
 \paragraph{6DOF-LinearSS.}
 The 6-DOF linear state-space row fits an affine one-step predictor,
@@ -2231,6 +2231,35 @@ the benchmark uses structured coefficient SINDy: the known rigid-body balance is
 built into the coefficient-inference step, low-order aircraft terms are retained
 as protected regressors, and sparse discovery is reserved for missing nonlinear
 aerodynamic terms.
+
+\subsection{Gaussian-Process and Kernel Closure Methods}
+Gaussian-process regression places a prior over the unknown residual
+dynamics $f_{\mathrm{res}}(\mathbf{z})$ and conditions it on training
+transitions, yielding both a posterior mean and a predictive variance
+\cite{rasmussen2006gaussian}. In aircraft identification GP models have been
+used as aerodynamic-coefficient surrogates and residual closures
+\cite{hemakumara2013learning}, and GP state-space formulations with
+variational inference extend this to latent states and process noise
+\cite{frigola2014variational,doerr2018probabilistic}. The repository's
+kernel rows implement the deterministic core of this idea: a radial-basis
+kernel expansion over the heading- and position-invariant features
+$\mathbf{z} = [u, v, w, \mathbf{g}_b, p, q, r, \mathbf{u}_{\mathrm{cmd}}]$,
+\[
+\hat f_{\mathrm{res}}(\mathbf{z}) = \sum_{i=1}^{N_c} w_i\,
+\exp\!\Big(-\tfrac{1}{2}\,\big\Vert (\mathbf{z}-\mathbf{c}_i) \oslash
+\boldsymbol{\ell} \big\Vert^2\Big),
+\]
+with $N_c$ centers subsampled from the training inputs, per-dimension length
+scales $\boldsymbol{\ell}$ set from the feature standard deviations, and
+ridge-regularized weights -- equivalent to the posterior mean of a sparse GP
+with fixed hyperparameters. The residual corrects only the six dynamic
+states around the nominal model; position and attitude integrate
+kinematically. Two honest limitations relative to full GP practice are
+stated in the method notes: hyperparameters are not optimized by marginal
+likelihood, and the predictive variance is not propagated, so the rows
+report point predictions only. Upgrading to variance-aware free runs (a
+predictive tube rather than a line) is the natural extension for the
+website's rollout display.
 
 \subsection{Physics-Informed and Neural-Residual Methods}
 For the longitudinal benchmark considered here, a direct inverse PINN that penalizes deviations from the same fixed aerodynamic coefficient model used by OEM is not the most appropriate use of physics information. The purpose of the benchmark is to evaluate identification methods when unmodeled aerodynamic forces, moments, actuator effects, or disturbances are present. If the PINN physics residual forces the trajectory to satisfy an incomplete nominal force and moment model, the residual acts as a regularizer toward the wrong dynamics and can suppress the missing effects the method is supposed to discover.

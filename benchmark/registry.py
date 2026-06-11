@@ -23,7 +23,7 @@ class MethodSpec:
 
 
 BUILTIN_3DOF_METHOD_SPECS: tuple[MethodSpec, ...] = (
-    MethodSpec("Nominal", "aircraft3dof", "open_loop", ("direct", "mocap")),
+    MethodSpec("Nominal-GreyBox", "aircraft3dof", "open_loop", ("direct", "mocap")),
     MethodSpec("Linear-SS", "aircraft3dof", "trim_grid", ("direct", "mocap")),
     MethodSpec("Model-Stitching", "aircraft3dof", "trim_grid", ("direct", "mocap")),
     MethodSpec("Koopman-EDMD", "aircraft3dof", "aggressive", ("direct", "mocap")),
@@ -55,7 +55,7 @@ HEAVY_BUILTINS = {method.name for method in BUILTIN_3DOF_METHOD_SPECS if method.
 MOCAP_ONLY_BUILTINS = {method.name for method in BUILTIN_3DOF_METHOD_SPECS if method.observation_types == ("mocap",)}
 
 SIX_DOF_BUILTINS = {
-    "6DOF-Nominal": ("direct", "mocap"),
+    "6DOF-NominalGreyBox": ("direct", "mocap"),
     "6DOF-LinearSS": ("direct", "mocap"),
     "6DOF-Model-Stitching": ("direct", "mocap"),
     "6DOF-Subspace-Hankel": ("direct", "mocap"),

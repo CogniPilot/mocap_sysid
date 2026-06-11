@@ -1,7 +1,7 @@
 {
   "traces": [
     {
-      "method": "6DOF-Nominal",
+      "method": "6DOF-NominalGreyBox",
       "model_family": "aircraft6dof",
       "scenario": "aircraft_6dof_sine_sweep",
       "segments": [
@@ -25732,7 +25732,7 @@
       "state_source": "mocap"
     },
     {
-      "method": "6DOF-Nominal",
+      "method": "6DOF-NominalGreyBox",
       "model_family": "aircraft6dof",
       "scenario": "aircraft_6dof_sine_sweep",
       "segments": [

@@ -925,7 +925,7 @@ def run_nominal(validation: SplitData) -> MethodResult:
     theta = nominal_theta()
     aircraft = Aircraft()
     return evaluate_method(
-        "Nominal",
+        "Nominal-GreyBox",
         "Known nominal rigid-body and aerodynamic model, no fitted correction.",
         0.0,
         0,
@@ -2799,8 +2799,8 @@ def main() -> int:
 
         results: list[MethodResult] = []
         pinn_result: MethodResult | None = None
-        if wants("Nominal"):
-            results.append(run_logged("Nominal", lambda: run_nominal(validation)))
+        if wants("Nominal-GreyBox"):
+            results.append(run_logged("Nominal-GreyBox", lambda: run_nominal(validation)))
         if wants("Linear-SS"):
             results.append(run_logged("Linear-SS", lambda: run_linear_state_space(x_smooth, train.u_act, validation)))
         if wants("Model-Stitching"):

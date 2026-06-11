@@ -60,8 +60,10 @@ GROUND_ALTITUDE_M = 0.5
 GROUND_EFFECT_ALTITUDE_M = 0.65
 DISPLAY_RATE_HZ = 10.0  # browser display rate; stride derived from the data rate
 RIDGE = 1e-5
+# 6DOF-Nominal is omitted: it is the synthetic benchmark's truth-minus-residual
+# baseline and has no meaning on real flights (it remains the internal base of
+# RidgeResidual and GP-RBF).
 METHODS = (
-    "6DOF-Nominal",
     "6DOF-LinearSS",
     "6DOF-RidgeResidual",
     "6DOF-GreyBoxOEM",
@@ -330,7 +332,7 @@ def train_methods(train_path: Path) -> dict[str, object]:
         "6DOF-Subspace-Hankel": {"kind": "hankel", "lag": HANKEL_LAG, "weights": hankel_w},
     }
     return {
-        "6DOF-Nominal": None,
+        "6DOF-NominalGreyBox": None,
         "6DOF-LinearSS": linear,
         "6DOF-RidgeResidual": residual,
         "6DOF-GreyBoxOEM": greybox,
@@ -392,7 +394,7 @@ def make_stepper(method: str, weights, dt: float, config: Aircraft6DOFConfig):
         return surrogate_step
 
     def step(x: np.ndarray, u: np.ndarray) -> np.ndarray:
-        if method == "6DOF-Nominal":
+        if method == "6DOF-NominalGreyBox":
             return nominal_rk4_step(x, u, dt, config)
         phi = np.concatenate((x, u, [1.0]))
         if method == "6DOF-LinearSS":

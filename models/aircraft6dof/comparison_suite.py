@@ -51,7 +51,7 @@ SCENARIO_TITLES = {
 }
 SCENARIO_ORDER = tuple(SCENARIO_TITLES)
 METHOD_TRAINING_SCENARIOS = {
-    "6DOF-Nominal": "none",
+    "6DOF-NominalGreyBox": "none",
     "6DOF-LinearSS": "aircraft_6dof_trim_grid",
     "6DOF-Model-Stitching": "aircraft_6dof_trim_grid",
     "6DOF-Subspace-Hankel": "aircraft_6dof_trim_grid",
@@ -1129,7 +1129,7 @@ def run_methods(
         return scenario, split, split_x, train_samples
 
     def add_result(result: Result6DOF) -> None:
-        if training_scenario_override is not None and result.method != "6DOF-Nominal":
+        if training_scenario_override is not None and result.method != "6DOF-NominalGreyBox":
             result.training_scenario = training_scenario_override
         else:
             result.training_scenario = METHOD_TRAINING_SCENARIOS.get(result.method, "aircraft_6dof_aggressive")
@@ -1137,25 +1137,29 @@ def run_methods(
 
     results: list[Result6DOF] = []
 
-    start = time.perf_counter()
-    pred = parallel_rollout("nominal_rollout", workers, validation_x0, validation.u_cmd, validation.t, config)
-    rollout_elapsed = time.perf_counter() - start
-    add_result(
-        score_state_method(
-            "6DOF-Nominal",
-            "Attached-flow nominal 6DOF rollout using pilot commands and no fitted stall correction.",
-            "numpy-rk4",
-            state_source,
-            0.0,
-            0.0,
-            rollout_elapsed,
-            0,
-            0,
-            pred,
-            validation,
-            "No-fit baseline; mismatch includes actuator lag, hidden stall/nonlinear aerodynamics, and mocap-derived initialization error.",
+    if training_scenario_override is None:
+        # The attached-flow nominal row is the truth-minus-residual baseline of
+        # the synthetic benchmark; on real flights it is just a wrong model
+        # with no baseline meaning, so the row is omitted there.
+        start = time.perf_counter()
+        pred = parallel_rollout("nominal_rollout", workers, validation_x0, validation.u_cmd, validation.t, config)
+        rollout_elapsed = time.perf_counter() - start
+        add_result(
+            score_state_method(
+                "6DOF-NominalGreyBox",
+                "Attached-flow nominal 6DOF rollout using pilot commands and no fitted stall correction.",
+                "numpy-rk4",
+                state_source,
+                0.0,
+                0.0,
+                rollout_elapsed,
+                0,
+                0,
+                pred,
+                validation,
+                "No-fit baseline; mismatch includes actuator lag, hidden stall/nonlinear aerodynamics, and mocap-derived initialization error.",
+            )
         )
-    )
 
     start = time.perf_counter()
     cpu_start = time.process_time()
@@ -2144,17 +2148,17 @@ def plot_train_time_accuracy(rows: list[dict[str, object]], output: Path) -> Non
         train_times = np.array([max(float(row["train_elapsed_s"]), 1e-2) for row in source_rows])
         scores = np.array([max(float(row["validation_score"]), 1e-6) for row in source_rows])
         rollout = np.array([max(float(row["rollout_elapsed_s"]), 1e-3) for row in source_rows])
-        nominal = [row for row in source_rows if row["method"] == "6DOF-Nominal"]
+        nominal = [row for row in source_rows if row["method"] == "6DOF-NominalGreyBox"]
         if nominal:
             nominal_score = max(float(nominal[0]["validation_score"]), 1e-6)
             ax.axhline(nominal_score, color="#d62728", linestyle="--", linewidth=1.0)
-            ax.text(max(train_times) * 0.82, nominal_score * 1.06, "Nominal", color="#d62728", fontsize=7.0)
+            ax.text(max(train_times) * 0.82, nominal_score * 1.06, "NominalGreyBox", color="#d62728", fontsize=7.0)
         sizes = 34.0 + 130.0 * np.sqrt(rollout / max(float(np.max(rollout)), 1e-9))
         ax.scatter(train_times, scores, s=sizes, color=colors[source], edgecolor="black", linewidth=0.45, alpha=0.78, zorder=3)
         label_offsets = [(1.08, 1.10), (0.82, 1.18), (1.05, 0.75), (0.72, 0.82)]
         for index, row in enumerate(source_rows):
             label = tradeoff_label(row["method"])
-            if label == "Nominal":
+            if label == "NominalGreyBox":
                 continue
             dx, dy = label_offsets[index % len(label_offsets)]
             ax.annotate(

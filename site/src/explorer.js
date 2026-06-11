@@ -10,7 +10,7 @@
 
 const DATA_URL = "./public/data/flight_explorer.json";
 const LABEL_COLORS = { ground: "#8d6e63", ground_effect: "#26a69a", stabilized: "#5c7cfa", manual: "#f08c00" };
-const METHOD_COLORS = { "6DOF-Nominal": "#d62728", "6DOF-LinearSS": "#2ca02c", "6DOF-RidgeResidual": "#9467bd", "6DOF-GreyBoxOEM": "#e8a838", "6DOF-EquationError-LS": "#17becf", "6DOF-SINDy": "#e377c2", "6DOF-Koopman-EDMD": "#bcbd22", "6DOF-Symbolic-Stepwise": "#8c564b", "6DOF-Subspace-Hankel": "#1f77b4", "6DOF-GP-RBF": "#f7b6d2" };
+const METHOD_COLORS = { "6DOF-NominalGreyBox": "#d62728", "6DOF-LinearSS": "#2ca02c", "6DOF-RidgeResidual": "#9467bd", "6DOF-GreyBoxOEM": "#e8a838", "6DOF-EquationError-LS": "#17becf", "6DOF-SINDy": "#e377c2", "6DOF-Koopman-EDMD": "#bcbd22", "6DOF-Symbolic-Stepwise": "#8c564b", "6DOF-Subspace-Hankel": "#1f77b4", "6DOF-GP-RBF": "#f7b6d2" };
 const MIN_SPEED = 2.5;
 const MAX_SPEED = 12.0;
 
@@ -451,7 +451,7 @@ export function makeStepper(method, models, dt) {
       return postStep(base.map((v, i) => v + out[i]));
     };
   }
-  if (method === "6DOF-Nominal") return (x, u) => nominalStep(x, u, dt, cfg);
+  if (method === "6DOF-NominalGreyBox") return (x, u) => nominalStep(x, u, dt, cfg);
   if (method === "6DOF-GreyBoxOEM" && models.greybox) return makeGreyboxStepper(models.greybox, dt);
   if (method === "6DOF-LinearSS") return (x, u) => postStep(affinePredict(x, u, models.linear_weights));
   return (x, u) => {
@@ -832,7 +832,7 @@ function renderAll() {
   }
 }
 
-const METHOD_COLORS_HEX = { "6DOF-Nominal": 0xd62728, "6DOF-LinearSS": 0x2ca02c, "6DOF-RidgeResidual": 0x9467bd, "6DOF-GreyBoxOEM": 0xe8a838, "6DOF-EquationError-LS": 0x17becf, "6DOF-SINDy": 0xe377c2, "6DOF-Koopman-EDMD": 0xbcbd22, "6DOF-Symbolic-Stepwise": 0x8c564b, "6DOF-Subspace-Hankel": 0x1f77b4, "6DOF-GP-RBF": 0xf7b6d2 };
+const METHOD_COLORS_HEX = { "6DOF-NominalGreyBox": 0xd62728, "6DOF-LinearSS": 0x2ca02c, "6DOF-RidgeResidual": 0x9467bd, "6DOF-GreyBoxOEM": 0xe8a838, "6DOF-EquationError-LS": 0x17becf, "6DOF-SINDy": 0xe377c2, "6DOF-Koopman-EDMD": 0xbcbd22, "6DOF-Symbolic-Stepwise": 0x8c564b, "6DOF-Subspace-Hankel": 0x1f77b4, "6DOF-GP-RBF": 0xf7b6d2 };
 
 function publishOverlay(timeS) {
   // Publish the segmentation-colored full-flight track and the free-run
