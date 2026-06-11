@@ -210,6 +210,17 @@ def convert_run(bag: dict[str, np.ndarray], name: str) -> dict[str, np.ndarray |
     # only ticks at ~8 Hz; zero-order-hold it to the grid.
     ser_idx = np.clip(np.searchsorted(bag["ser_t"], grid, side="right") - 1, 0, len(bag["ser_t"]) - 1)
     pwm_serial = bag["ser"][ser_idx]
+    # The SAFE switch has three positions (Beginner self-level / Intermediate
+    # envelope-only / Experienced manual); the 2026-05-22 recordings only ever
+    # use the two extremes (1000/2000 us), so a binary label is faithful.
+    # Guard future sessions: a middle position would be silently mislabeled.
+    mode_levels = np.unique(np.round(pwm_serial[:, 4], -2))
+    if len(mode_levels) > 2:
+        raise SystemExit(
+            f"mode channel has {len(mode_levels)} PWM levels {mode_levels}: the "
+            "binary flight_mode label cannot represent the Intermediate SAFE "
+            "mode; extend flight_mode before converting this session"
+        )
     flight_mode = (pwm_serial[:, 4] > MODE_STABILIZED_PWM).astype(np.int8)
 
     throttle = np.clip((pwm_joy[:, 0] - 1000.0) / 1000.0, 0.0, 1.0)

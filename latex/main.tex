@@ -1934,7 +1934,11 @@ airframe: no actuator/servo dynamics (a 50--100\,ms lag is identifiable at
 with no airspeed or battery-stage dependence even though the ground-roll
 analysis quantifies a per-flight thrust stage, no propeller-slipstream
 augmentation of tail effectiveness, and no $C_{L_q}$ or
-$\dot\alpha$ terms.
+$\dot\alpha$ terms. A ground test resolves whether gyro
+augmentation contaminates the ``manual'' (Experienced-mode) segments:
+rotating the airframe by hand in Experienced mode produces no surface
+response, so no rate feedback is active there and the fitted rate-damping
+coefficients are genuine bare-airframe aerodynamic derivatives.
 
 \subsection{6-DOF Baseline Methods}
 
@@ -2390,6 +2394,393 @@ The immediate roadmap is repository-driven rather than submission-driven. The fi
 Future methods should be added only when the repository contains executable code, benchmark metadata, and validation results for the new row. Candidate additions include input-output nonlinear predictors, richer local/LPV model stitching, Bayesian uncertainty-aware variants of the existing grey-box methods, and high-fidelity aerodynamic surrogate closures. Until those implementations exist in the repository, this reference limits detailed method descriptions to the rows already represented by code and generated results.
 
 \appendix
+\section{Method Implementations and Results}
+\label{app:implementation}
+
+This appendix presents each implemented method as a self-contained unit ---
+approach, implementation, and results --- so a reviewer can audit the code
+against the stated algorithm and the claims against the generated numbers.
+Validation scores are full-state mean NRMSE over open-loop rollouts (lower is
+better); ``synthetic'' results average the four simulated scenarios and
+``real'' results are the Sport Cub motion-capture datasets (4/17 and 5/22)
+with mocap-derived states. The authoritative code is
+\texttt{models/aircraft6dof/comparison\_suite.py},
+\texttt{models/aircraft6dof/greybox\_oem\_fit.py},
+\texttt{models/aircraft6dof/flight\_explorer\_export.py}, and
+\texttt{site/src/explorer.js}.
+
+\subsection{Common Experimental Rules}
+
+Each rule was added in response to a verified failure mode and applies to all
+methods unless stated.
+
+\paragraph{R1 --- Validation data is initial conditions and inputs only.}
+Every validation rollout receives one initial state and the pilot-command
+history; no method filters, smooths, or conditions on validation
+measurements mid-rollout, and measured states reappear only in scoring. The
+one audit violation (the 3-DOF suite defaulting to the post-controller
+actuator signal $u_{\mathrm{act}}$) was fixed: $u_{\mathrm{cmd}}$ is the
+default and $u_{\mathrm{act}}$ is documented as an oracle diagnostic.
+
+\paragraph{R2 --- Known kinematics are never fitted.}
+$\dot{\mathbf p}=R(q)\mathbf v$ and
+$\dot q=\tfrac12 q\otimes\boldsymbol\omega$ are exact identities. Surrogates
+fit only the six dynamic states $(\dot u,\dot v,\dot w,\dot p,\dot q,\dot
+r)$; rollouts integrate position from the rotated body velocity and attitude
+with an exact axis-angle quaternion step. Measured motivation: learned
+position increments translated at 66\,m/s against a 12\,m/s velocity clamp
+(impossible 134\,m errors in 3\,s), and linear features cannot represent the
+bilinear $q\otimes\boldsymbol\omega$. Classical equation error likewise fits
+only force and moment equations \cite{KleinMorelli2006}.
+
+\paragraph{R3 --- Features are heading- and position-invariant.}
+Surrogate features are $[u,v,w,\mathbf g_b,p,q,r,\mathbf u_{\mathrm{cmd}}]$
+with $\mathbf g_b=R^{T}(q)\mathbf e_z$ the body-frame gravity direction:
+flight dynamics are invariant to translation and heading, and attitude
+enters only through gravity. Raw quaternion features let the 1.4k-sample
+4/17 dataset overfit heading, and position features made rollouts
+structurally divergent (worst published score 9{,}073 before the fix).
+
+\paragraph{R4 --- Derivative and increment targets are smoothed.}
+A Savitzky--Golay quadratic filter (50\,ms window, $\sim$12 samples) forms
+derivative targets and smoothed-state differences form increment targets:
+raw one-step differences of 240\,Hz mocap states have measured per-channel
+signal-to-noise of only 0.24--0.77.
+
+\paragraph{R5 --- Physical envelopes catch divergence honestly.}
+6-DOF rollouts clamp speed and rates; 3-DOF rollouts freeze on leaving a
+generous physical box, keeping one clipped sample so the diverged flag
+triggers (previously an exponential blowup posted an $\alpha$-RMSE of
+1{,}160 radians as a finite, unflagged score).
+
+\paragraph{R6 --- Identical real-data preprocessing.}
+Manual maneuvers split into quasi-steady lead-ins (pooled per-flight
+data-compatibility trim-bias estimation) and 0.6--1.2\,s gap-free actuation
+chunks with locally estimated initial states; train/validation is
+round-robin per flight; mocap dropouts are never trained on or scored.
+Result rows carry an implementation status (\emph{implemented},
+\emph{analogue}, \emph{placeholder}) and a diverged flag.
+
+\subsection{6DOF-NominalGreyBox}
+\paragraph{Approach.} The repository's attached-flow quaternion rigid-body
+model evaluated with nominal coefficients and the recorded pilot commands ---
+no fitted parameters. On synthetic data the truth model is this nominal
+grey-box plus hidden nonlinear residuals, so the row measures exactly the
+unmodeled-physics gap every fitted method must close.
+\paragraph{Implementation.} A parallel RK4 rollout of
+\texttt{models/aircraft6dof/model.py} from the shared validation initial
+states. The row appears only for synthetic scenarios: on real flights the
+truth-minus-residual interpretation does not exist, so the row is omitted
+(the model remains the internal base of the residual methods).
+\paragraph{Results.} Synthetic 0.207 (direct and mocap) --- the floor that
+separates ``learned something real'' (below) from ``fit noise'' (above).
+
+\subsection{6DOF-GreyBoxOEM}
+\paragraph{Approach.} Output-error estimation \cite{jategaonkar2006flight}
+of a 22-coefficient physical model: lift, drag, and side-force expansions
+($C_{L_0}, C_{L_\alpha}, C_{D_0}, C_{D_{CL^2}}, C_{Y_\beta}$, thrust gain
+$K_T$) and roll/pitch/yaw moment-coefficient groups with $b/2V$ and
+$\bar c/2V$ rate non-dimensionalization and surface-deflection terms. Each
+training chunk is rolled out from its measured initial state and the
+parameters jointly minimize position and Euler-attitude residuals weighted
+by output sigmas --- segment-wise output error rather than multiple
+shooting, since measured chunk initial conditions remove the need for
+continuity variables.
+\paragraph{Implementation.} CasADi RK4 at a 60\,Hz model rate inside scipy
+trust-region least squares with physical bounds. Control-channel maps are
+derived from name lists (a hardcoded map once silently swapped aileron and
+elevator: scores barely moved, parameter signs were unphysical --- the
+motivating incident for never hardcoding orders). Two physics bugs found by
+review and fixed: thrust folded into the wind-axis rotation (a propeller is
+body-fixed; worth 19\% of validation NRMSE) and bound starvation ---
+the original $K_T$ cap of 0.85\,m/s$^2$ per unit throttle could not balance
+cruise drag ($\approx$2.3 required), pinning $K_T$, $C_{L_0}$, and
+$C_{L_\alpha}$; the fitter now records parameters within 1\% of the box.
+$C_{D_{CL^2}}$ at its physical zero bound is accepted (induced drag is
+weakly identifiable over the narrow $C_L$ range).
+\paragraph{Results.} Real data 0.158 (4/17) and 0.102 (5/22) --- the
+reference physical model. Fitted values are physically plausible
+($C_{L_0}=1.21$, $C_{L_\alpha}=3.59$ for a low-Reynolds cambered foam wing;
+$K_T=1.36$; $C_{m_q}$-type damping $-24.7$) and the lateral control signs
+match the real airframe (opposite the synthetic convention). Not run on
+synthetic scenarios (the spec encodes the Sport Cub airframe).
+
+\subsection{6DOF-LinearSS}
+\paragraph{Approach.} A global one-step affine predictor
+$\mathbf x_{k+1}=W^{T}[\mathbf x_k,\mathbf u_k,1]$ in the prediction-error
+tradition \cite{ljung1999system}: the strongest cheap baseline near an
+operating envelope, with no claim of recovering aerodynamic structure.
+\paragraph{Implementation.} Ridge regression on the training chunks;
+open-loop validation with physical clamps. Positions remain in the feature
+set by layout contract with the browser integrator; the near-identity
+discrete map keeps them benign (unlike derivative/increment surrogates,
+where they were removed under R3). The model inspector renders
+$(W-I)/\Delta t$ as continuous-time equations.
+\paragraph{Results.} Synthetic 0.376/0.388; real 0.207 (4/17) and 0.142
+(5/22). On real laps it is hard to beat for short horizons but cannot
+extrapolate maneuvers; the grey-box and UDE rows overtake it there.
+
+\subsection{6DOF-RidgeResidual}
+\paragraph{Approach.} The nominal grey-box RK4 step plus an affine one-step
+residual --- the linear-residual version of the hybrid physics-plus-learning
+idea, kept fast and deterministic.
+\paragraph{Implementation.} Residual targets are next-state minus
+nominal-step on the training chunks; ridge solve; rollout adds the residual
+to the nominal step each sample.
+\paragraph{Results.} Synthetic 0.260/0.280 (a solid improvement over the
+0.207-floor nominal once its residual absorbs hidden stall terms ---
+note the nominal row's 0.207 is the \emph{average} gap, while RidgeResidual
+must also overcome mocap-derived initialization noise); real 0.693/0.247,
+limited by its base model's wrong-signed lateral derivatives on the real
+airframe --- the documented motivation for the UDE row's grey-box base.
+
+\subsection{6DOF-EquationError-LS}
+\paragraph{Approach.} Classical equation-error least squares
+\cite{KleinMorelli2006,morelli_system_2002}: regress smoothed state
+derivatives on instantaneous flight variables, fitting the force and moment
+equations only --- fast, interpretable, and the canonical precursor that
+seeds output-error methods.
+\paragraph{Implementation.} Savitzky--Golay derivatives (R4) of the six
+dynamic states (R2) on linear invariant features (R3) --- gravity-direction
+components are what allow a \emph{linear} feature set to represent the
+gravity term --- with a standardized ridge solve and explicit-Euler
+validation inside the kinematic stepper.
+\paragraph{Results.} Synthetic 3.49/3.76; real 1.16/2.23. The honest
+structural ceiling of a single global \emph{linear} derivative model:
+amplitude-dependent dynamics bias the fit, and integration accumulates the
+bias over long rollouts. The quadratic-library SINDy row is the direct
+upgrade and the score gap (2.2 vs 0.22 on 5/22) quantifies what the
+quadratic terms buy.
+
+\subsection{6DOF-SINDy}
+\paragraph{Approach.} Sparse identification of nonlinear dynamics
+\cite{brunton2016discovering,champion2019data}: sequentially thresholded
+least squares selects a sparse model from a quadratic candidate library on
+the invariant features, fitting smoothed derivatives of the six dynamic
+states. The library is deliberately generic (structure \emph{discovery});
+the aerodynamically structured alternative is the grey-box row.
+\paragraph{Implementation.} \texttt{stlsq\_fit}: ridge fit
+$\rightarrow$ per-output magnitude threshold (constant and linear blocks
+protected) $\rightarrow$ ridge refit restricted to surviving features,
+iterated to a fixed point. A single post-hoc prune is \emph{not} STLSQ
+(it leaves dense-fit coefficient values in place) --- the backend label only
+claims STLSQ since this was fixed. Typical sparsity: $\sim$210 of 630
+coefficients.
+\paragraph{Results.} Synthetic 0.296/0.298; real 0.126 (4/17) and 0.216
+(5/22). On real data its discovered dominant terms are the quaternion-free
+physical bilinears (e.g.\ $\dot q\leftarrow$ pitch-damping and elevator
+terms), and it sits between the affine baseline and the physical grey-box
+--- the expected position for unstructured discovery on limited data.
+
+\subsection{6DOF-Symbolic-Stepwise}
+\paragraph{Approach.} A sparse symbolic-regression-style baseline: the SINDy
+library at milder sparsity, separating sparsity-level effects from library
+effects. Labeled \emph{analogue}: it does not run statistical forward
+selection (no PSE/PRESS criteria as in Klein's stepwise regression) or
+genetic programming \cite{koza1990genetic}.
+\paragraph{Implementation.} The same threshold-and-refit estimator at a
+12\% retention quantile on smoothed increment targets.
+\paragraph{Results.} Synthetic 0.243/0.240; real 0.602/0.648 --- denser
+than SINDy and correspondingly more overfit on the small real datasets,
+which is precisely the sparsity ablation the row exists to show.
+
+\subsection{6DOF-Koopman-EDMD}
+\paragraph{Approach.} An extended-DMD-style lifted predictor
+\cite{koopman1931hamiltonian,williams2015data,schmid2010dmd}: a quadratic
+dictionary approximates the action of the Koopman operator on state
+observables. Labeled \emph{analogue}: lifted observables are not propagated
+(predictions return to the state space each step), so the row tests the
+EDMD feature class rather than the operator machinery.
+\paragraph{Implementation.} Quadratic one-step increment predictor on
+invariant features with heavy ridge (100$\times$), smoothed targets,
+kinematic integration.
+\paragraph{Results.} Synthetic 0.538/0.304; real 10.9 (4/17) and 1.0
+(5/22). The 4/17 number is small-data quadratic overfit (1.4k samples vs
+105 features) reported honestly; on 5/22 the same estimator is within
+5$\times$ of the grey-box. Propagating a learned lifted state (true EDMD
+with control) is the natural upgrade.
+
+\subsection{6DOF-Subspace-Hankel}
+\paragraph{Approach.} A short-memory linear predictor in the spirit of
+subspace identification \cite{VanOverscheeDeMoor1996,verhaegen1992subspace,
+HOKALMAN+1966+545+548}: a lag-3 history of the invariant state predicts the
+next dynamic-state increment. Labeled \emph{analogue}: no Hankel SVD or
+N4SID/MOESP realization is performed.
+\paragraph{Implementation.} Ridge ARX on stacked invariant histories with
+smoothed increment targets; the browser port re-seeds its lag window
+whenever the incoming state is not its own last output (fresh anchor or
+SAFE handoff).
+\paragraph{Results.} Synthetic 0.240/0.239; real 0.110 and 0.111 ---
+essentially tying the 22-parameter physical grey-box with a 32$\times$6
+weight matrix. Two very different model classes agreeing is good evidence
+the pipeline is honest, and that most of the predictable real-data signal
+is short-memory linear; a true realization-based implementation is a
+worthwhile follow-up.
+
+\subsection{6DOF-GP-RBF}
+\paragraph{Approach.} The deterministic core of a sparse Gaussian-process
+residual closure (see the kernel formulation section):
+$\hat f_{\mathrm{res}}(\mathbf z)=\sum_i w_i\exp(-\tfrac12\Vert(\mathbf z-
+\mathbf c_i)\oslash\boldsymbol\ell\Vert^2)$ correcting the nominal model's
+dynamic states \cite{rasmussen2006gaussian,hemakumara2013learning}.
+\paragraph{Implementation.} 96 centers subsampled from training inputs,
+per-dimension length scales from feature standard deviations, ridge
+weights; equivalent to a sparse-GP posterior mean with fixed
+hyperparameters. Stated limitations: no marginal-likelihood optimization,
+no propagated predictive variance.
+\paragraph{Results.} Synthetic 0.233/0.224 (the best synthetic fitted row:
+smooth residual aerodynamics are exactly a kernel method's home turf); real
+0.745/0.522, inheriting the nominal base-model mismatch on the real
+airframe. Rebasing on the grey-box (as done for the UDE) and
+variance-aware rollouts are the planned upgrades.
+
+\subsection{6DOF-UDE-Residual}
+\paragraph{Approach.} The universal-differential-equation premise: best
+known physics plus a learned residual \cite{rackauckas2020universal}. On
+real scenarios the base is the \emph{fitted grey-box}; on synthetic
+scenarios, the nominal grey-box. Labeled \emph{analogue}: the residual is a
+ridge map, not a trained network (the 3-DOF tier carries the genuine
+ODE-in-the-loop torch UDE).
+\paragraph{Implementation.} Residual targets are smoothed next dynamic
+states minus the base one-step prediction; shrinkage scales with sample
+count --- the standardized Gram grows with $n$, so the previous fixed
+penalty was $\sim$$10^{-5}$ of the Gram diagonal, i.e.\ effectively
+unregularized noise (the measured cause of this row's old 12.1 score). With
+$\lambda=n$, a noise-dominated residual correctly shrinks toward zero.
+Rollouts integrate kinematics from the \emph{corrected} dynamics (with the
+base's uncorrected rates, attitude drift compounded --- a measured
+failure).
+\paragraph{Results.} Real 0.109 (4/17) and 0.095 (5/22) --- the best real
+rows, edging the bare grey-box (0.158/0.102): the residual contributes a
+small genuine correction once shrinkage prevents noise fitting. Synthetic
+2.06/0.98 is poor because there the base is the nominal model and the
+hidden stall residual is strongly state-dependent --- the honest message is
+that residual quality tracks base quality.
+
+\subsection{6DOF-Model-Stitching}
+\paragraph{Approach.} A scheduled family of local affine models blended by
+airdata (speed, $\alpha$, $\beta$), following stitched-model and LPV
+practice \cite{Tischler1995SystemIM,toth2010lpv}.
+\paragraph{Implementation.} Local centers from the training distribution;
+per-center ridge fits; rollout blends predictions with scheduling weights.
+\paragraph{Results.} Synthetic 0.357/0.378; real 3.57/0.39. The 4/17
+failure is the scheduling variables leaving the training hull on held-out
+maneuvers; trim-anchored stitching with derivative interpolation is the
+literature upgrade.
+
+\subsection{Placeholders}
+Frequency-Welch and Frequency-Stitching (regularized realizations with no
+spectral content), EKF-ParamID/Fisher-UQ/OEM-SS (one ridge fit reported
+under three names; their notes say so --- scores are identical by
+construction at 0.260/0.280 synthetic, 0.693/0.247 real),
+Variational-Mocap (smoothed weak-form ridge; 3.71/3.67 synthetic),
+PINN-Closure (a sparsified copy of the UDE weights), and NN-Surrogate (a
+random-feature closed form) are labeled \emph{placeholder} in every
+artifact, are excluded from headline claims, and exist to reserve the rows
+until genuine implementations land (filter-error method, CIFER-style
+frequency fitting, and a trained 6-DOF network are the roadmap items).
+
+\subsection{SAFE Closed-Loop Model}
+\paragraph{Approach.} Stabilized (SAFE-mode) flight cannot be predicted by
+a bare airframe: the hidden inner loop adds surface corrections absent from
+the recorded sticks. The \emph{direct method} of closed-loop identification
+\cite{ljung1999system} fits the closed loop itself --- and is shared by
+every method, since composing the separately identified controller with
+each airframe was measured worse (13.6\,m vs 2.9\,m at 5\,s; the
+inverse-dynamics controller estimate is weakly conditioned).
+\paragraph{Implementation.} A linear ridge fit on the heading- and
+position-invariant state: $[u,v,w,\phi,\theta,p,q,r,\mathrm{stick},1]
+\rightarrow$ next dynamics plus the heading increment $\Delta\psi$;
+heading integrates the fitted increment and position integrates
+$R(q)\mathbf v$ exactly (a raw-state affine fit cannot represent
+heading-dependent position kinematics: 8.3\,m $\rightarrow$ 2.9\,m at 5\,s
+from this change alone). After the one-step ridge fit, the same
+13$\times$9 weights are re-optimized against one-second free-run shooting
+residuals over the training windows (simulation-error minimization):
+one-step regression on noisy states carries an attenuation bias that
+compounds over a 1{,}200-step rollout, and the multi-step objective removes
+it with no structure change. Stabilized spans are cut into ten-second
+windows, round-robin per flight, every third held out; the autonomous
+flight is excluded (its lateral commands bypass the recorded sticks --- the
+rudder channel is constant while the aircraft banks).
+\paragraph{Results.} Held-out five-second free-run position error 2.98\,m
+over 11 windows (52k training samples; 3.41\,m before the simulation-error
+refinement, against a 21.9\,m naive constant-turn baseline); free runs fly
+complete laps. Envelope-protection saturation was hypothesized to dominate
+the residual error and tested: one-step residuals are 74\% higher near
+command saturation, but only $\sim$4\% of stabilized samples are affected
+and a Hammerstein extension (fitted command scale and envelope saturation
+ahead of the linear loop) improved the held-out error by only 3\%, so the
+linear structure is retained and the finding is recorded here. The
+manufacturer's manual clarifies the mechanism: the SAFE unit (gyro and
+accelerometer only, no airspeed sensor) limits pitch and roll angles and
+self-levels on stick release (the switch has three positions ---
+self-leveling, envelope-only, and manual --- of which the recordings use
+only the two extremes; the recorded mode channel is strictly bimodal at
+1000/2000\,$\mu$s and the converter now refuses sessions that use the
+middle position; the pilot confirms the Panic Recovery trigger was never
+used, so no unlabeled fourth controller regime exists in the recordings), so the pilot-perceived low-airspeed
+unresponsiveness is not a control-law gate: the controller is
+speed-blind, and the dependence is plant-side --- every commanded
+deflection buys a moment scaling with dynamic pressure, and the
+attitude-command law only ever requests the gain-limited deflection
+$K_p\cdot(\mathrm{error})$ toward a clipped setpoint --- a small slice of
+the available throw. At low speed that slice buys too little moment to
+track even the clipped bank command within maneuver timescales, while
+speed-independent propeller disturbance moments grow in relative terms.
+The airframe itself retains ample authority: the pilot can bank steeply at
+the same speeds in Experienced mode by commanding full deflection
+directly, which is precisely what the gain-limited law never does. A
+speed-gated aileron-authority feature was tested accordingly and rejected
+(held-out error worsened, 2.98\,m $\rightarrow$ 3.03--3.11\,m), and the
+measured stick-to-roll coupling collapse below $\approx$4.5\,m/s is
+explained by the same mechanism. The
+fitted weights read as physics in the model inspector:
+$\dot\phi\approx1.00\,p$, $\dot u\approx14.2-11.5\,\theta$ (thrust trim and
+the $-g\theta$ gravity coupling), and $\dot p\approx-25\,\phi$ exposing the
+SAFE self-leveling stiffness.
+
+\subsection{SAFE Controller Grey-Box}
+\paragraph{Approach.} A guessed attitude-command structure with fitted
+gains and saturations: $\delta=K_p(\mathrm{sat}(c\cdot\mathrm{stick},
+\pm\ell)-\mathrm{att})-K_d\cdot\mathrm{rate}+b$ per axis (rudder: stick
+gain, yaw-rate gain, bias).
+\paragraph{Implementation.} Staged grid search over $(c,\ell)$ with Huber
+regression for the gains, fitted from stabilized segments by inverse
+dynamics against the nominal airframe.
+\paragraph{Results.} Retained for interpretability and as the free-run
+fallback; identified against the nominal airframe, which is why its
+composition with each method's airframe currently loses to the direct
+closed-loop fit --- re-identification against the fitted grey-box is the
+planned route to per-method SAFE handoff.
+
+\subsection{3-DOF Implementation Decisions}
+The 3-DOF formulations appear in the supplemental sections; decisions worth
+review: the suite OEM is CasADi multiple shooting (soft continuity
+residuals, IPOPT budget 200, convergence status recorded; non-converged
+solves are not published); the filter-error EKF (augmented state, Joseph
+form, CasADi Jacobians) trains on training data only with frozen-$\theta$
+open-loop validation; the torch UDE and PINN train RK4-in-the-loop over
+multiple-shooting segments so derivative targets are never formed (the
+benchmark sample period is 0.02\,s for Nyquist and RK4-stability reasons);
+the SINDy library replaces trigonometric features with Taylor residuals to
+break collinearity; trim solves the full equilibrium including lift
+(residual $\sim$$10^{-16}$); the ETFE uses the correct
+$\mathrm{csd}(\mathrm{input},\mathrm{output})$ ordering with input-power
+weighting not claimed to be coherence, and unstable identified poles are
+reflected into the left half-plane before open-loop simulation; and R5's
+envelope applies.
+
+\subsection{Browser Ports}
+Every exported model has a JavaScript stepper implementing the same
+equations as its Python counterpart; the grey-box port is verified against
+the CasADi RK4 step to machine precision and all steppers are smoke-tested
+for bounded, finite free runs from real anchors. Steppers share the exact
+kinematic step (R2), the invariant feature map (R3), and the physical
+clamps (R5); the free-run loop hands off between the manual-segment
+airframe and the SAFE closed-loop model on the recorded mode channel and
+stops at ground contact.
+
 \section{Benchmark Result Tables}
 \label{app:benchmark_tables}
 The main text uses figures to summarize trends. The following tables retain the
