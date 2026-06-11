@@ -124,13 +124,37 @@ def euler_from_quat_array(quat: np.ndarray) -> np.ndarray:
     return np.column_stack([roll, pitch, yaw])
 
 
-def train_safe_closed_loop(data: np.lib.npyio.NpzFile) -> np.ndarray:
+STABILIZED_WINDOW_S = 10.0
+STABILIZED_MIN_WINDOW_S = 5.0
+STABILIZED_VALIDATION_PERIOD = 3  # every third window held out, like manual
+
+
+def stabilized_windows(labels: np.ndarray, tracked: np.ndarray, dt: float) -> list[tuple[int, int]]:
+    """Cut the tracked stabilized spans into fitting/validation windows."""
+    keep = (labels == 2) & tracked
+    edges = np.flatnonzero(np.diff(keep.astype(np.int8)))
+    bounds = [0, *(edges + 1).tolist(), len(keep)]
+    windows: list[tuple[int, int]] = []
+    span = int(round(STABILIZED_WINDOW_S / dt))
+    minimum = int(round(STABILIZED_MIN_WINDOW_S / dt))
+    for left, right in zip(bounds[:-1], bounds[1:]):
+        if not keep[left]:
+            continue
+        start = left
+        while right - start >= minimum:
+            stop = min(start + span, right)
+            windows.append((start, stop))
+            start = stop
+    return windows
+
+
+def train_safe_closed_loop(data: np.lib.npyio.NpzFile) -> tuple[np.ndarray, dict[str, list[dict[str, object]]], dict[str, float]]:
     """Identify the stabilized closed-loop dynamics directly.
 
     Free-running a bare-airframe model through SAFE segments requires the
     hidden-controller decomposition, whose inverse-dynamics identification is
-    weakly conditioned, so the closed loop is fitted directly on every tracked
-    stabilized sample. The regression is restricted to the heading- and
+    weakly conditioned, so the closed loop is fitted directly on the tracked
+    stabilized data. The regression is restricted to the heading- and
     position-invariant state (body velocities, roll, pitch, body rates) plus
     the heading *increment*: flight dynamics do not depend on where the
     aircraft is or which way it points, and a global affine map fitted on raw
@@ -139,12 +163,20 @@ def train_safe_closed_loop(data: np.lib.npyio.NpzFile) -> np.ndarray:
     fitted increment and position integrates the rotated body velocity
     exactly, which lets free runs fly whole laps.
 
-    Returns a 13x9 weight matrix: [u,v,w,phi,theta,p,q,r, stick(4), 1] ->
-    [next u,v,w,phi,theta,p,q,r, dpsi].
+    Like the manual maneuver windows, the stabilized spans are cut into
+    windows assigned round-robin per flight (every third held out), the model
+    fits on the train windows only, and the held-out windows score it by
+    free-run position error.
+
+    Returns the 13x9 weight matrix ([u,v,w,phi,theta,p,q,r, stick(4), 1] ->
+    [next u,v,w,phi,theta,p,q,r, dpsi]), the per-flight window membership for
+    the website's Data Splits view, and the held-out validation scores.
     """
     dt = float(data["sample_period_s"])
     feats, targs = [], []
-    for flight_index in range(len(data["segment_names"])):
+    membership: dict[str, list[dict[str, object]]] = {}
+    holdouts: list[tuple[np.ndarray, np.ndarray, int, int]] = []
+    for flight_index, name in enumerate(str(s) for s in data["segment_names"]):
         mask = np.asarray(data["valid_mask"][flight_index], dtype=bool)
         x = np.asarray(data["x_meas"][flight_index][mask], dtype=float)
         sticks = np.asarray(data["u_cmd"][flight_index][mask], dtype=float)
@@ -155,14 +187,28 @@ def train_safe_closed_loop(data: np.lib.npyio.NpzFile) -> np.ndarray:
             else np.ones(len(x), dtype=bool)
         )
         labels = sample_labels(x, mode)
-        if is_autonomous(str(data["segment_names"][flight_index])):
+        if is_autonomous(name):
             # The autopilot's lateral commands bypass the recorded sticks, so
             # these stabilized samples teach the model that a neutral stick
             # keeps turning.
-            print(f"closed-loop SAFE fit: excluding {data['segment_names'][flight_index]} (autonomous)")
+            print(f"closed-loop SAFE fit: excluding {name} (autonomous)")
             continue
-        keep = (labels == 2) & tracked
-        keep_next = keep[:-1] & keep[1:]
+        windows = stabilized_windows(labels, tracked, dt)
+        train_mask = np.zeros(len(x), dtype=bool)
+        rows: list[dict[str, object]] = []
+        for index, (start, stop) in enumerate(windows):
+            held_out = len(windows) >= 2 and index % STABILIZED_VALIDATION_PERIOD == STABILIZED_VALIDATION_PERIOD - 1
+            rows.append({
+                "start_s": round(start * dt, 2),
+                "stop_s": round(stop * dt, 2),
+                "split": "validation" if held_out else "train",
+            })
+            if held_out:
+                holdouts.append((x, sticks, start, stop))
+            else:
+                train_mask[start:stop] = True
+        membership[name] = rows
+        keep_next = train_mask[:-1] & train_mask[1:]
         euler = euler_from_quat_array(x[:, 6:10])
         invariant = np.column_stack([x[:, 3:6], euler[:, 0:2], x[:, 10:13]])
         dpsi = np.arctan2(np.sin(np.diff(euler[:, 2])), np.cos(np.diff(euler[:, 2])))
@@ -170,10 +216,34 @@ def train_safe_closed_loop(data: np.lib.npyio.NpzFile) -> np.ndarray:
         targs.append(np.column_stack([invariant[1:], dpsi])[keep_next])
     features = np.concatenate(feats)
     targets = np.concatenate(targs)
-    print(f"closed-loop SAFE fit: {len(features)} stabilized samples at dt={dt}")
-    return np.linalg.solve(
+    weights = np.linalg.solve(
         features.T @ features + RIDGE * np.eye(features.shape[1]), features.T @ targets
     )
+
+    # Score the held-out windows by free-run position error, the quantity the
+    # viewer's Predict-here actually shows.
+    step = make_safe_step(weights, dt)
+    horizon = int(round(STABILIZED_MIN_WINDOW_S / dt))
+    errors = []
+    for x, sticks, start, stop in holdouts:
+        if stop - start < horizon + 1:
+            continue
+        state = suite.local_state_estimate(x, dt, start, window=12)
+        for k in range(horizon):
+            state = step(state, sticks[start + k])
+        if np.all(np.isfinite(state)):
+            errors.append(float(np.linalg.norm(state[0:3] - x[start + horizon, 0:3])))
+    scores = {
+        "train_samples": int(len(features)),
+        "validation_windows": len(errors),
+        "validation_pos_err_5s_m": round(float(np.mean(errors)), 3) if errors else None,
+    }
+    print(
+        f"closed-loop SAFE fit: {len(features)} train samples, "
+        f"{len(errors)} held-out windows, mean 5 s position error "
+        f"{scores['validation_pos_err_5s_m']} m"
+    )
+    return weights, membership, scores
 
 
 def make_safe_step(safe_weights: np.ndarray, dt: float):
@@ -243,16 +313,21 @@ def rollout(
     stepper,
     x0: np.ndarray,
     sticks: np.ndarray,
-    labels: np.ndarray,
+    modes: np.ndarray,
     bias: np.ndarray,
     safe_step,
 ) -> np.ndarray:
-    """Integrate the bare airframe on manual segments and the directly
-    identified closed-loop model on stabilized segments."""
+    """Integrate the bare airframe while the pilot flies manual and the
+    directly identified closed-loop model while SAFE is engaged.
+
+    The handoff keys off the recorded mode channel, not the altitude-based
+    segmentation class: a low SAFE pass is still closed-loop flight, and the
+    state carries over continuously at every switch.
+    """
     pred = np.empty((len(sticks), len(x0)))
     pred[0] = suite.normalize_state(x0)
     for k in range(len(sticks) - 1):
-        if labels[k] == 2:
+        if modes[k] == 1:
             pred[k + 1] = safe_step(pred[k], sticks[k])
         else:
             pred[k + 1] = stepper(pred[k], sticks[k] - bias)
@@ -283,7 +358,7 @@ def main() -> int:
     downsample = max(1, int(round(1.0 / (DISPLAY_RATE_HZ * dt))))
     config = Aircraft6DOFConfig()
     weights = train_methods(args.train)
-    safe_weights = train_safe_closed_loop(data)
+    safe_weights, safe_membership, safe_scores = train_safe_closed_loop(data)
     safe_step = make_safe_step(safe_weights, dt)
 
     gains, _rmse, _count = fit_safe_controller(args.flights)
@@ -302,6 +377,7 @@ def main() -> int:
             else np.ones(len(x), dtype=bool)
         )
         labels = sample_labels(x, mode)
+        mode_int = np.asarray(mode, dtype=int)
         segments = contiguous_segments(labels)
 
         # Per-flight trim bias from the manual windows' lead-ins, matching the
@@ -332,7 +408,7 @@ def main() -> int:
                 scores = {}
                 keep = tracked[start:stop]
                 for method in METHODS:
-                    pred = rollout(steppers[method], x0, sticks[start:stop], labels[start:stop], bias, safe_step)
+                    pred = rollout(steppers[method], x0, sticks[start:stop], mode_int[start:stop], bias, safe_step)
                     pred_aligned = suite.align_quaternion_signs(pred, x[start:stop])
                     # Score only on genuinely tracked samples: interpolated
                     # dropout spans are fabricated data.
@@ -355,16 +431,21 @@ def main() -> int:
                 # animated as first-class playback tracks.
                 "quat": np.round(pose[ds, 3:7], 5).tolist(),
                 "euler": np.round(euler_array(x[ds]), 4).tolist(),
-                # Full-rate sticks and labels drive the on-the-fly rollouts.
+                # Full-rate sticks, labels, and mode drive the on-the-fly
+                # rollouts; the manual/SAFE model handoff keys off the mode.
                 "stick_full": np.round(sticks, 3).tolist(),
                 "labels_full": labels.tolist(),
                 "labels": labels[ds].tolist(),
-                "mode": np.asarray(mode[ds], dtype=int).tolist(),
+                "mode": mode_int[ds].tolist(),
+                "mode_full": mode_int.tolist(),
                 "tracked": tracked[ds].astype(int).tolist(),
                 "tracked_full": tracked.astype(int).tolist(),
                 "bias": np.round(bias, 4).tolist(),
                 "autonomous": is_autonomous(name),
                 "segments": segment_rows,
+                # Stabilized train/validation windows of the closed-loop SAFE
+                # model, mirrored in the Data Splits view.
+                "stabilized_splits": safe_membership.get(name, []),
             }
         )
         print(f"{name}: {len(segment_rows)} segments", flush=True)
@@ -378,6 +459,7 @@ def main() -> int:
             "residual_weights": np.round(weights["6DOF-RidgeResidual"], 6).tolist(),
             "safe_gains": {axis: np.round(coef, 5).tolist() for axis, coef in gains.items()},
             "safe_invariant_weights": np.round(safe_weights, 8).tolist(),
+            "safe_scores": safe_scores,
             "greybox": {
                 "parameter_names": list(SPORTCUB_PARAMETER_NAMES),
                 "parameters": np.round(weights["6DOF-GreyBoxOEM"]["theta"], 6).tolist(),

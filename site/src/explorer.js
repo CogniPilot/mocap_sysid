@@ -399,6 +399,7 @@ function rolloutFrom(flight, models, method, timeS) {
   const startIdx = Math.max(0, Math.round(timeS / dt));
   const sticks = flight.stick_full;
   const labels = flight.labels_full;
+  const modes = flight.mode_full || labels.map((label) => (label === 2 ? 1 : 0));
   // Stop at the next ground contact: the airframe models have no gear model.
   let endIdx = sticks.length;
   for (let k = startIdx + Math.round(1 / dt); k < labels.length; k++) {
@@ -424,12 +425,14 @@ function rolloutFrom(flight, models, method, timeS) {
       quatEnu.push(quatMul(Q_NED_TO_ENU, normQuat([x[6], x[7], x[8], x[9]])));
     }
     const stick = sticks[k];
-    if (labels[k] === 2 && safeStep) {
-      // Stabilized: the directly identified closed-loop model replaces the
-      // bare airframe + provisional controller decomposition.
+    if (modes[k] === 1 && safeStep) {
+      // SAFE engaged: the directly identified closed-loop model replaces the
+      // bare airframe + provisional controller decomposition. The handoff
+      // keys off the recorded mode channel (a low SAFE pass is still
+      // closed-loop flight) and the state carries over continuously.
       x = safeStep(x, stick);
     } else {
-      const u = labels[k] === 2 ? ctrl(stick, x) : stick.map((v, i) => v - bias[i]);
+      const u = modes[k] === 1 ? ctrl(stick, x) : stick.map((v, i) => v - bias[i]);
       x = stepper(x, u);
     }
     if (!x.every(Number.isFinite)) break;
@@ -454,6 +457,98 @@ function recomputePredictions() {
   if (ex.anchorTimeS == null) return;
   for (const method of predictionMethods()) {
     ex.predictions[method] = rolloutFrom(flight(), ex.data.models, method, ex.anchorTimeS);
+  }
+}
+
+function safeScoreNote() {
+  const scores = ex.data?.models?.safe_scores;
+  if (!scores || scores.validation_pos_err_5s_m == null) return "";
+  return ` (currently ${scores.validation_pos_err_5s_m.toFixed(1)} m mean over ${scores.validation_windows} held-out windows)`;
+}
+
+function renderSplitsView() {
+  // "Data Splits" tab: every flight as a timeline colored by segmentation
+  // class, with the manual maneuver windows marked by their train/validation
+  // membership, so the provenance of every fitted model is visible.
+  const chart = document.querySelector("#splits-chart");
+  const notes = document.querySelector("#splits-notes");
+  if (!chart || !ex.data) return;
+  chart.innerHTML = "";
+  const maxDuration = Math.max(...ex.data.flights.map((f) => f.time[f.time.length - 1] || 1));
+  const colorAt = (f, k) => (f.tracked && !f.tracked[k] ? "#4a5159" : LABEL_COLORS[ex.data.labels[f.labels[k]]] || "#666");
+  for (const f of ex.data.flights) {
+    const row = document.createElement("div");
+    row.className = "splits-row";
+    const name = document.createElement("div");
+    name.className = "splits-name";
+    name.textContent = f.name + (f.autonomous ? " (autonomous)" : "");
+    row.append(name);
+    const lane = document.createElement("div");
+    lane.className = "splits-lane";
+    const duration = f.time[f.time.length - 1] || 1;
+    lane.style.width = `${(100 * duration) / maxDuration}%`;
+    // Segmentation gradient, like the playback time bar.
+    const stops = [];
+    let runStart = 0;
+    for (let k = 1; k <= f.labels.length; k += 1) {
+      if (k === f.labels.length || colorAt(f, k) !== colorAt(f, runStart)) {
+        const a = ((f.time[runStart] / duration) * 100).toFixed(2);
+        const b = ((f.time[Math.min(k, f.time.length - 1)] / duration) * 100).toFixed(2);
+        stops.push(`${colorAt(f, runStart)} ${a}% ${b}%`);
+        runStart = k;
+      }
+    }
+    const bar = document.createElement("div");
+    bar.className = "splits-bar";
+    bar.style.background = `linear-gradient(to right, ${stops.join(", ")})`;
+    lane.append(bar);
+    // Train/validation membership strips: manual maneuver windows (bare
+    // airframe methods) above the bar, stabilized windows (closed-loop SAFE
+    // model) below it.
+    const addStrip = (start, stop, split, title, below) => {
+      const strip = document.createElement("div");
+      strip.className = `splits-window splits-${split}${below ? " splits-below" : ""}`;
+      strip.style.left = `${(100 * start) / duration}%`;
+      strip.style.width = `${(100 * (stop - start)) / duration}%`;
+      strip.title = title;
+      lane.append(strip);
+    };
+    for (const segment of f.segments) {
+      if (!segment.split) continue;
+      addStrip(segment.start_s, segment.stop_s, segment.split,
+        `${segment.kind} ${segment.start_s}-${segment.stop_s} s -> ${segment.split} (airframe methods)`, false);
+    }
+    for (const window of f.stabilized_splits || []) {
+      addStrip(window.start_s, window.stop_s, window.split,
+        `stabilized ${window.start_s}-${window.stop_s} s -> ${window.split} (closed-loop SAFE model)`, true);
+    }
+    row.append(lane);
+    chart.append(row);
+  }
+  const legend = document.createElement("div");
+  legend.className = "splits-legend";
+  legend.innerHTML = [
+    ...Object.entries(LABEL_COLORS).map(([label, color]) => `<span><i style="background:${color}"></i>${label.replace("_", " ")}</span>`),
+    '<span><i style="background:#4a5159"></i>mocap dropout</span>',
+    '<span><i class="splits-train-key"></i>train window (above: airframe methods, below: SAFE model)</span>',
+    '<span><i class="splits-validation-key"></i>validation window</span>',
+  ].join("");
+  chart.append(legend);
+  if (notes) {
+    notes.innerHTML = `
+      <p>Manual maneuver windows (orange) are detected from the transmitter mode channel. Each window is split
+      into a quasi-steady <em>lead-in</em> — pooled per flight to estimate the stick trim bias — and the
+      <em>control actuation</em> portion, which is cut into 0.6&ndash;1.2&nbsp;s gap-free chunks whose initial states are
+      estimated at each chunk start. Windows are assigned round-robin within each flight (every third manual
+      window becomes validation), so both splits span multiple flights and battery states; models are fitted on
+      the train chunks only and scored on held-out validation chunks.</p>
+      <p>Stabilized segments (blue) never train the bare-airframe methods: the SAFE inner loop adds hidden surface
+      corrections. They train the separate <em>closed-loop SAFE model</em> instead, with the same discipline as the
+      manual windows: the tracked stabilized spans are cut into ~10&nbsp;s windows (strips below the bar), every third
+      window per flight is held out, the model fits on the train windows only, and the held-out windows score it by
+      5&nbsp;s free-run position error${safeScoreNote()}. The autonomous flight is excluded: its lateral commands
+      bypass the recorded sticks. Ground (brown) windows feed the rolling-friction and thrust analysis, ground
+      effect (teal) is kept out of all airframe fits, and mocap dropouts (gray) are never trained on or scored.</p>`;
   }
 }
 
@@ -611,6 +706,7 @@ export async function initExplorer() {
   if (preferred >= 0) ex.flightIndex = preferred;
   bind();
   renderAll();
+  renderSplitsView();
   // Handshake with the playback module: announce the full-flight view and
   // retry until acknowledged, so no module load order or transient error can
   // leave the 3D viewer on the benchmark-window view.
