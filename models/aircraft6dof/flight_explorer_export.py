@@ -243,16 +243,21 @@ def rollout(
     stepper,
     x0: np.ndarray,
     sticks: np.ndarray,
-    labels: np.ndarray,
+    modes: np.ndarray,
     bias: np.ndarray,
     safe_step,
 ) -> np.ndarray:
-    """Integrate the bare airframe on manual segments and the directly
-    identified closed-loop model on stabilized segments."""
+    """Integrate the bare airframe while the pilot flies manual and the
+    directly identified closed-loop model while SAFE is engaged.
+
+    The handoff keys off the recorded mode channel, not the altitude-based
+    segmentation class: a low SAFE pass is still closed-loop flight, and the
+    state carries over continuously at every switch.
+    """
     pred = np.empty((len(sticks), len(x0)))
     pred[0] = suite.normalize_state(x0)
     for k in range(len(sticks) - 1):
-        if labels[k] == 2:
+        if modes[k] == 1:
             pred[k + 1] = safe_step(pred[k], sticks[k])
         else:
             pred[k + 1] = stepper(pred[k], sticks[k] - bias)
@@ -302,6 +307,7 @@ def main() -> int:
             else np.ones(len(x), dtype=bool)
         )
         labels = sample_labels(x, mode)
+        mode_int = np.asarray(mode, dtype=int)
         segments = contiguous_segments(labels)
 
         # Per-flight trim bias from the manual windows' lead-ins, matching the
@@ -332,7 +338,7 @@ def main() -> int:
                 scores = {}
                 keep = tracked[start:stop]
                 for method in METHODS:
-                    pred = rollout(steppers[method], x0, sticks[start:stop], labels[start:stop], bias, safe_step)
+                    pred = rollout(steppers[method], x0, sticks[start:stop], mode_int[start:stop], bias, safe_step)
                     pred_aligned = suite.align_quaternion_signs(pred, x[start:stop])
                     # Score only on genuinely tracked samples: interpolated
                     # dropout spans are fabricated data.
@@ -355,11 +361,13 @@ def main() -> int:
                 # animated as first-class playback tracks.
                 "quat": np.round(pose[ds, 3:7], 5).tolist(),
                 "euler": np.round(euler_array(x[ds]), 4).tolist(),
-                # Full-rate sticks and labels drive the on-the-fly rollouts.
+                # Full-rate sticks, labels, and mode drive the on-the-fly
+                # rollouts; the manual/SAFE model handoff keys off the mode.
                 "stick_full": np.round(sticks, 3).tolist(),
                 "labels_full": labels.tolist(),
                 "labels": labels[ds].tolist(),
-                "mode": np.asarray(mode[ds], dtype=int).tolist(),
+                "mode": mode_int[ds].tolist(),
+                "mode_full": mode_int.tolist(),
                 "tracked": tracked[ds].astype(int).tolist(),
                 "tracked_full": tracked.astype(int).tolist(),
                 "bias": np.round(bias, 4).tolist(),

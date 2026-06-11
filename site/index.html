@@ -51,6 +51,7 @@
         <div class="view-tabs" id="playback-tabs" aria-label="Playback view">
           <button type="button" data-playback-view="animation" class="active">Animation</button>
           <button type="button" data-playback-view="history">Time Histories</button>
+          <button type="button" data-playback-view="splits">Data Splits</button>
         </div>
         <div id="animation-view" class="playback-view">
           <div class="playback-stage">
@@ -105,6 +106,14 @@
             <p id="timeseries-status">Measured pose and controls</p>
           </div>
           <div id="timeseries-plots" class="timeseries-grid"></div>
+        </div>
+        <div id="splits-view" class="playback-view" hidden>
+          <div class="panel-heading compact-heading">
+            <h2>Training Data Separation</h2>
+            <p id="splits-status">How the recorded flights become training and validation data</p>
+          </div>
+          <div id="splits-chart" class="splits-chart"></div>
+          <div id="splits-notes" class="splits-notes"></div>
         </div>
       </section>
 
