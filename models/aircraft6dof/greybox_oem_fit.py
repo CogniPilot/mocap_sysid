@@ -294,6 +294,100 @@ def fit_greybox_lag(split: suite.Split6DOF, dt: float, max_nfev: int = 150) -> d
     }
 
 
+
+
+def fit_greybox_ekf(x_quat: np.ndarray, u_cmd: np.ndarray, dt: float, stride: int = 4) -> dict:
+    """Filter-error parameter estimation: augmented-state EKF over the grey-box.
+
+    Port of the 3DOF filter-error EKF: the 12 Euler states are augmented with
+    the 22 aerodynamic parameters, propagated chunk by chunk over the manual
+    training windows with CasADi step and parameter Jacobians, and corrected
+    by Joseph-form updates against the measured states. The parameter
+    covariance carries across chunks; the state covariance resets at each
+    chunk start (independent measured initial conditions). Validation is a
+    frozen-theta open-loop rollout elsewhere -- no filtering touches
+    validation data.
+    """
+    import casadi as ca
+
+    spec = sportcub_greybox_spec()
+    x_train = quat_states_to_euler(x_quat)
+    u_train = u_cmd[:, :, OEM_CONTROL_ORDER]
+    _dynamics, rk4 = build_casadi_dynamics(spec, dt * stride)
+
+    n_x, n_th = 12, len(GREYBOX_FIT_NAMES)
+    x_sym = ca.SX.sym("x", n_x)
+    u_sym = ca.SX.sym("u", 4)
+    th_sym = ca.SX.sym("th", n_th)
+    lag_init = [spec.default_parameter_bounds[n].initial for n in LAG_PARAMETERS]
+    p_full = ca.vertcat(ca.DM(spec.fixed_parameter_vector()), th_sym, ca.DM(lag_init))
+    x_next = rk4(x_sym, u_sym, p_full)
+    step_jac = ca.Function(
+        "greybox_ekf_step", [x_sym, u_sym, th_sym],
+        [x_next, ca.jacobian(x_next, x_sym), ca.jacobian(x_next, th_sym)],
+    )
+
+    bounds = [spec.default_parameter_bounds[n] for n in GREYBOX_FIT_NAMES]
+    theta = np.array([b.initial for b in bounds])
+    lower = np.array([b.lower for b in bounds])
+    upper = np.array([b.upper for b in bounds])
+    span = upper - lower
+
+    # Measurement: all 12 mocap-derived Euler states. Stds reflect the
+    # derived-state quality (positions mm-class, velocities/rates derived).
+    meas_std = np.array([0.05, 0.05, 0.05, 0.15, 0.15, 0.15, 0.02, 0.02, 0.03, 0.10, 0.10, 0.10])
+    measurement_cov = np.diag(meas_std**2)
+    process_std = np.array([0.01, 0.01, 0.01, 0.05, 0.05, 0.05, 0.005, 0.005, 0.005, 0.05, 0.05, 0.05])
+    process_cov = np.diag(process_std**2)
+    theta_process_cov = np.diag((1e-4 * span) ** 2)
+    state_initial_cov = np.diag((2.0 * meas_std) ** 2)
+    theta_cov = np.diag((span / 4.0) ** 2)
+
+    n_aug = n_x + n_th
+    h_mat = np.zeros((n_x, n_aug))
+    h_mat[:, :n_x] = np.eye(n_x)
+    eye_aug = np.eye(n_aug)
+    updates = 0
+    for trial in range(x_train.shape[0]):
+        x = x_train[trial, 0].copy()
+        p_cov = np.zeros((n_aug, n_aug))
+        p_cov[:n_x, :n_x] = state_initial_cov
+        p_cov[n_x:, n_x:] = theta_cov
+        for k in range(0, x_train.shape[1] - stride, stride):
+            x_pred_dm, f_x_dm, f_th_dm = step_jac(x, u_train[trial, k], theta)
+            x_pred = np.asarray(x_pred_dm).ravel()
+            transition = eye_aug.copy()
+            transition[:n_x, :n_x] = np.asarray(f_x_dm)
+            transition[:n_x, n_x:] = np.asarray(f_th_dm)
+            q_aug = np.zeros((n_aug, n_aug))
+            q_aug[:n_x, :n_x] = process_cov
+            q_aug[n_x:, n_x:] = theta_process_cov
+            p_pred = transition @ p_cov @ transition.T + q_aug
+            innovation = x_train[trial, k + stride] - x_pred
+            innovation[8] = np.arctan2(np.sin(innovation[8]), np.cos(innovation[8]))
+            s_cov = h_mat @ p_pred @ h_mat.T + measurement_cov
+            gain = np.linalg.solve(s_cov, h_mat @ p_pred).T
+            correction = gain @ innovation
+            x = x_pred + correction[:n_x]
+            theta = np.clip(theta + correction[n_x:], lower, upper)
+            joseph = eye_aug - gain @ h_mat
+            p_cov = joseph @ p_pred @ joseph.T + gain @ measurement_cov @ gain.T
+            updates += 1
+        theta_cov = p_cov[n_x:, n_x:]
+
+    values = dict(zip(GREYBOX_FIT_NAMES, theta))
+    for name, init in zip(LAG_PARAMETERS, lag_init):
+        values[name] = init
+    theta_full = spec.full_parameter_vector(np.array([values[n] for n in SPORTCUB_PARAMETER_NAMES]))
+    return {
+        "spec": spec,
+        "theta": theta,
+        "theta_full": theta_full,
+        "theta_std": np.sqrt(np.maximum(np.diag(theta_cov), 0.0)),
+        "updates": updates,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--train", type=Path, default=TRAIN_DEFAULT)

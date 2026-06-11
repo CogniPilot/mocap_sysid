@@ -1301,6 +1301,38 @@ def run_methods(
         )
     )
 
+    if training_scenario_override and "sportcub" in training_scenario_override:
+        # Real filter-error EKF over the grey-box parameters (port of the
+        # 3DOF implementation): training data only, frozen-theta validation.
+        from .greybox_oem_fit import fit_greybox_ekf, greybox_rollout_quat as _gb_rollout
+
+        _scenario, train, train_x, train_samples = training_context("6DOF-EKF-ParamID")
+        start = time.perf_counter()
+        cpu_start = time.process_time()
+        ekf = fit_greybox_ekf(train_x, train.u_cmd, train.dt)
+        train_elapsed = time.perf_counter() - start
+        train_cpu = time.process_time() - cpu_start
+        rollout_start = time.perf_counter()
+        pred = _gb_rollout(ekf["spec"], ekf["theta_full"], validation_x0, validation.u_cmd, validation.dt)
+        rollout_elapsed = time.perf_counter() - rollout_start
+        add_result(
+            score_state_method(
+                "6DOF-EKF-ParamID",
+                "Filter-error estimation: augmented-state EKF over the grey-box parameters with CasADi Jacobians.",
+                "casadi-ad-ekf",
+                state_source,
+                train_elapsed,
+                train_cpu,
+                rollout_elapsed,
+                int(ekf["updates"]),
+                int(ekf["theta"].size),
+                pred,
+                validation,
+                "Joseph-form augmented-state EKF runs over the manual training chunks only; "
+                "validation is a frozen-theta open-loop rollout receiving pilot commands.",
+            )
+        )
+
     start = time.perf_counter()
     cpu_start = time.process_time()
     _scenario, train, train_x, train_samples = training_context("6DOF-EKF-ParamID")
@@ -1312,60 +1344,50 @@ def run_methods(
     rollout_start = time.perf_counter()
     pred = parallel_rollout("residual_rollout", workers, validation_x0, validation.u_cmd, validation.t, weights_ekf, config)
     rollout_elapsed = time.perf_counter() - rollout_start
-    add_result(
-        score_state_method(
-            "6DOF-EKF-ParamID",
-            "Recursive-estimation analogue represented by a fitted affine residual parameter vector.",
-            "numpy-ridge-paramid",
-            state_source,
-            train_elapsed,
-            train_cpu,
-            rollout_elapsed,
-            train_samples,
-            int(weights_ekf.size),
-            pred,
-            validation,
-            "The validation phase is open loop and receives only pilot commands after initialization. "
-            "No recursive filter is run: this row is a ridge-fitted affine residual model.",
-            implementation_status="placeholder",
-        )
-    )
+    if not (training_scenario_override and "sportcub" in training_scenario_override):
+        # Placeholder rows retained for synthetic scenarios only; on the real
+        # Sport Cub data the real filter-error EKF above replaces EKF-ParamID,
+        # Fisher-UQ is reported from the grey-box Cramer-Rao analysis, and
+        # GreyBoxOEM is the output-error row (no duplicate OEM-SS name).
+        for placeholder_name, placeholder_desc, placeholder_backend, placeholder_note in (
+            (
+                "6DOF-EKF-ParamID",
+                "Recursive-estimation analogue represented by a fitted affine residual parameter vector.",
+                "numpy-ridge-paramid",
+                "The validation phase is open loop and receives only pilot commands after initialization. "
+                "No recursive filter is run: this row is a ridge-fitted affine residual model.",
+            ),
+            (
+                "6DOF-Fisher-UQ",
+                "Fisher-information wrapper around the fitted residual parameter model.",
+                "numpy-ridge-uq",
+                "Duplicate of the 6DOF-EKF-ParamID fit (same weights and prediction); no Fisher-information analysis is computed for 6DOF.",
+            ),
+            (
+                "6DOF-OEM-SS",
+                "Output-error state-space residual model using the same open-loop rollout structure as the fitted parameter model.",
+                "numpy-rk4-ridge",
+                "Duplicate of the 6DOF-EKF-ParamID fit (same weights and prediction); no output-error optimization is run for 6DOF.",
+            ),
+        ):
+            add_result(
+                score_state_method(
+                    placeholder_name,
+                    placeholder_desc,
+                    placeholder_backend,
+                    state_source,
+                    train_elapsed,
+                    train_cpu,
+                    rollout_elapsed,
+                    train_samples,
+                    int(weights_ekf.size),
+                    pred,
+                    validation,
+                    placeholder_note,
+                    implementation_status="placeholder",
+                )
+            )
 
-    add_result(
-        score_state_method(
-            "6DOF-Fisher-UQ",
-            "Fisher-information wrapper around the fitted residual parameter model.",
-            "numpy-ridge-uq",
-            state_source,
-            train_elapsed,
-            train_cpu,
-            rollout_elapsed,
-            train_samples,
-            int(weights_ekf.size),
-            pred,
-            validation,
-            "Duplicate of the 6DOF-EKF-ParamID fit (same weights and prediction); no Fisher-information analysis is computed for 6DOF.",
-            implementation_status="placeholder",
-        )
-    )
-
-    add_result(
-        score_state_method(
-            "6DOF-OEM-SS",
-            "Output-error state-space residual model using the same open-loop rollout structure as the fitted parameter model.",
-            "numpy-rk4-ridge",
-            state_source,
-            train_elapsed,
-            train_cpu,
-            rollout_elapsed,
-            train_samples,
-            int(weights_ekf.size),
-            pred,
-            validation,
-            "Duplicate of the 6DOF-EKF-ParamID fit (same weights and prediction); no output-error optimization is run for 6DOF.",
-            implementation_status="placeholder",
-        )
-    )
 
     _scenario, train, train_x, train_samples = training_context("6DOF-EquationError-LS")
     nominal_next = parallel_nominal_next(train_x, train.u_cmd, train.dt, config, workers)
@@ -1740,6 +1762,64 @@ def run_methods(
                 pred,
                 validation,
                 "22 aerodynamic coefficients fitted within physical bounds; the same parameters drive the browser free-runs.",
+            )
+        )
+        try:
+            import torch  # noqa: F401
+
+            from .greybox_oem_fit import OEM_CONTROL_ORDER as _OEM
+            from .greybox_oem_fit import quat_states_to_euler as _q2e
+            from .ude_nn import rollout_ude_quat, train_greybox_ude
+
+            start = time.perf_counter()
+            cpu_start = time.process_time()
+            ude_model = train_greybox_ude(
+                _q2e(train_x), train.u_cmd[:, :, _OEM], np.asarray(greybox["theta_full"]), train.dt
+            )
+            ude_train_elapsed = time.perf_counter() - start
+            ude_train_cpu = time.process_time() - cpu_start
+            rollout_start = time.perf_counter()
+            pred_nn = rollout_ude_quat(ude_model, validation_x0, validation.u_cmd[:, :, _OEM], validation.dt)
+            ude_rollout_elapsed = time.perf_counter() - rollout_start
+            add_result(
+                score_state_method(
+                    "6DOF-UDE-NN",
+                    "Universal differential equation: fitted grey-box physics plus an MLP residual trained RK4-in-the-loop.",
+                    "torch-rk4-shooting",
+                    state_source,
+                    ude_train_elapsed,
+                    ude_train_cpu,
+                    ude_rollout_elapsed,
+                    train_samples,
+                    int(sum(t.numel() for t in ude_model["net"].parameters())),
+                    pred_nn,
+                    validation,
+                    "Two-layer tanh MLP on invariant features corrects the six dynamic derivatives of the "
+                    "fitted grey-box; trained by simulation error over 0.5 s shooting segments (no derivative "
+                    "targets); frozen-network open-loop validation.",
+                )
+            )
+        except ImportError:
+            print(f"  {state_source}: torch unavailable, skipping 6DOF-UDE-NN", flush=True)
+
+        weak = [n for n, sd, v in zip(greybox["parameter_names"], greybox["cr_std"], greybox["theta"]) if abs(v) > 1e-9 and sd / abs(v) > 0.25]
+        couples = ", ".join(f"{c['a']}-{c['b']}" for c in greybox["couplings"])
+        add_result(
+            score_state_method(
+                "6DOF-Fisher-UQ",
+                "Cramer-Rao parameter uncertainty and coupling analysis of the grey-box output-error fit.",
+                "casadi-jacobian-crlb",
+                state_source,
+                greybox_fit_elapsed,
+                greybox_fit_cpu,
+                rollout_elapsed,
+                train_samples,
+                int(greybox["theta"].size),
+                pred,
+                validation,
+                "Same rollout as 6DOF-GreyBoxOEM; this row carries the uncertainty analysis: "
+                f"weak parameters (>25% rel. std): {', '.join(weak) or 'none'}; "
+                f"strong couplings (|r|>0.9): {couples or 'none'}. Bounds are optimistic (residual coloring uncorrected).",
             )
         )
     return results
