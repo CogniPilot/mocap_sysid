@@ -565,11 +565,14 @@ def standardize_fit(phi: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray
 
 
 def linear_features(x: np.ndarray, u: np.ndarray) -> np.ndarray:
-    return np.concatenate((x, u, np.ones((*x.shape[:-1], 1))), axis=-1)
+    # Rigid-body dynamics are translation-invariant: inertial positions are
+    # excluded so open-loop rollouts cannot diverge through spurious
+    # position-dependent terms.
+    return np.concatenate((x[..., 3:], u, np.ones((*x.shape[:-1], 1))), axis=-1)
 
 
 def poly_features(x: np.ndarray, u: np.ndarray, *, degree: int = 2) -> np.ndarray:
-    z = np.concatenate((x, u), axis=-1)
+    z = np.concatenate((x[..., 3:], u), axis=-1)
     parts = [np.ones((*z.shape[:-1], 1)), z]
     if degree >= 2:
         quad = []
@@ -602,6 +605,63 @@ def sparsify_weights(weights: np.ndarray, fraction: float = 0.08, protected: int
         threshold = np.quantile(values, 1.0 - fraction)
         sparse[protected:, col] *= values >= threshold
     return sparse
+
+
+def stlsq_fit(
+    phi: np.ndarray,
+    target: np.ndarray,
+    ridge: float,
+    *,
+    fraction: float = 0.06,
+    protected: int = 18,
+    iterations: int = 5,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Sequentially thresholded least squares (the actual SINDy estimator).
+
+    Alternates magnitude thresholding with a ridge refit restricted to each
+    output's surviving features, so retained coefficients are re-estimated
+    without the pruned columns; a single post-hoc prune leaves the dense
+    fit's coefficient values in place.
+    """
+    phi2 = phi.reshape(-1, phi.shape[-1])
+    target2 = target.reshape(-1, target.shape[-1])
+    phi_s, mean, scale = standardize_fit(phi2)
+    gram = phi_s.T @ phi_s
+    rhs_all = phi_s.T @ target2
+    n_features = phi_s.shape[1]
+    weights = np.linalg.solve(gram + ridge * np.eye(n_features), rhs_all)
+    for _ in range(iterations):
+        pruned = sparsify_weights(weights, fraction=fraction, protected=protected)
+        changed = False
+        for col in range(weights.shape[1]):
+            active = np.flatnonzero(pruned[:, col])
+            if active.size == 0:
+                weights[:, col] = 0.0
+                continue
+            if active.size == np.count_nonzero(weights[:, col]):
+                continue
+            sub = gram[np.ix_(active, active)] + ridge * np.eye(active.size)
+            weights[:, col] = 0.0
+            weights[active, col] = np.linalg.solve(sub, rhs_all[active, col])
+            changed = True
+        if not changed:
+            break
+    return weights, mean, scale
+
+
+def savgol_derivative(x: np.ndarray, dt: float, window_s: float = 0.05) -> np.ndarray:
+    """Savitzky-Golay smoothed derivative of (trials, samples, states) data.
+
+    Raw forward differences amplify measurement noise by sqrt(2)/dt (~340x at
+    240 Hz); local quadratic smoothing with a documented window is the
+    standard equation-error practice.
+    """
+    from scipy.signal import savgol_filter
+
+    window = max(5, int(round(window_s / dt)) | 1)
+    if x.shape[1] <= window:
+        return np.gradient(x, dt, axis=1)
+    return savgol_filter(x, window_length=window, polyorder=2, deriv=1, delta=dt, axis=1)
 
 
 def derivative_rollout(
@@ -641,7 +701,7 @@ def one_step_rollout(
         pred[trial, 0] = normalize_state(pred[trial, 0])
         for index in range(len(t) - 1):
             phi = poly_features(pred[trial, index][None, :], u[trial, index][None, :], degree=degree)[0]
-            pred[trial, index + 1] = normalize_state(apply_standardized(phi, weights, mean, scale))
+            pred[trial, index + 1] = normalize_state(pred[trial, index] + apply_standardized(phi, weights, mean, scale))
     return pred
 
 
@@ -774,7 +834,7 @@ def rbf_residual_rollout(
         pred[trial, 0] = normalize_state(pred[trial, 0])
         for index in range(len(t) - 1):
             base = nominal_rk4_step(pred[trial, index], u[trial, index], dt, cfg)
-            z = np.concatenate((pred[trial, index], u[trial, index]))[None, :]
+            z = np.concatenate((pred[trial, index, 3:], u[trial, index]))[None, :]
             phi = np.concatenate((rbf_features(z, centers, length_scale), np.ones((1, 1))), axis=1)[0]
             pred[trial, index + 1] = normalize_state(base + phi @ weights)
     return pred
@@ -797,7 +857,7 @@ def nn_residual_rollout(
         pred[trial, 0] = normalize_state(pred[trial, 0])
         for index in range(len(t) - 1):
             base = nominal_rk4_step(pred[trial, index], u[trial, index], dt, cfg)
-            z_now = np.concatenate((pred[trial, index], u[trial, index]))[None, :]
+            z_now = np.concatenate((pred[trial, index, 3:], u[trial, index]))[None, :]
             phi_now = np.concatenate(
                 (
                     rbf_features(z_now, centers, length_scale),
@@ -814,9 +874,9 @@ def lagged_rollout(initial: np.ndarray, u: np.ndarray, t: np.ndarray, weights: n
     pred[:, :lag, :] = initial[:, None, :]
     for trial in range(u.shape[0]):
         for index in range(lag - 1, len(t) - 1):
-            history = pred[trial, index - lag + 1 : index + 1].reshape(-1)
+            history = pred[trial, index - lag + 1 : index + 1, 3:].reshape(-1)
             phi = np.concatenate((history, u[trial, index], [1.0]))
-            pred[trial, index + 1] = normalize_state(phi @ weights)
+            pred[trial, index + 1] = normalize_state(pred[trial, index] + phi @ weights)
     return pred
 
 
@@ -1251,7 +1311,7 @@ def run_methods(
     xk = train_x[:, :-1, :]
     uk = train.u_cmd[:, :-1, :]
     xkp1 = train_x[:, 1:, :]
-    dxdt = (xkp1 - xk) / train.dt
+    dxdt = savgol_derivative(train_x, train.dt)[:, :-1, :]
     flat_x = xk.reshape(-1, len(STATE_NAMES))
     flat_u = uk.reshape(-1, len(INPUT_NAMES))
     flat_xkp1 = xkp1.reshape(-1, len(STATE_NAMES))
@@ -1284,7 +1344,7 @@ def run_methods(
             int(weights_deriv.size + mean_deriv.size + scale_deriv.size),
             pred,
             validation,
-            "6DOF analogue of equation-error least squares; sensitive to derivative noise in mocap-derived states.",
+            "Equation-error least squares on Savitzky-Golay smoothed derivatives (50 ms quadratic window).",
         )
     )
 
@@ -1321,8 +1381,9 @@ def run_methods(
     start = time.perf_counter()
     cpu_start = time.process_time()
     phi_poly = poly_features(fit_x, fit_u, degree=2)
-    weights_sindy, mean_sindy, scale_sindy = fit_standardized_ridge(phi_poly, fit_dxdt, 10.0 * ridge)
-    weights_sindy = sparsify_weights(weights_sindy, fraction=0.06, protected=1 + len(STATE_NAMES) + len(INPUT_NAMES))
+    weights_sindy, mean_sindy, scale_sindy = stlsq_fit(
+        phi_poly, fit_dxdt, 10.0 * ridge, fraction=0.06, protected=1 + len(STATE_NAMES) - 3 + len(INPUT_NAMES)
+    )
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
@@ -1331,7 +1392,7 @@ def run_methods(
     add_result(
         score_state_method(
             "6DOF-SINDy",
-            "Sparse quadratic-library derivative model for the full 6DOF state.",
+            "Sparse quadratic-library derivative model fitted by iterated threshold-and-refit (STLSQ).",
             "numpy-stlsq",
             state_source,
             train_elapsed,
@@ -1347,8 +1408,8 @@ def run_methods(
 
     start = time.perf_counter()
     cpu_start = time.process_time()
-    weights_symbolic, mean_symbolic, scale_symbolic = fit_standardized_ridge(phi_poly, fit_xkp1, ridge)
-    weights_symbolic = sparsify_weights(weights_symbolic, fraction=0.12, protected=1 + len(STATE_NAMES) + len(INPUT_NAMES))
+    weights_symbolic, mean_symbolic, scale_symbolic = fit_standardized_ridge(phi_poly, fit_xkp1 - fit_x, ridge)
+    weights_symbolic = sparsify_weights(weights_symbolic, fraction=0.12, protected=1 + len(STATE_NAMES) - 3 + len(INPUT_NAMES))
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
@@ -1367,13 +1428,14 @@ def run_methods(
             int(np.count_nonzero(weights_symbolic)),
             pred,
             validation,
-            "Symbolic-regression-style sparse predictor used as a 6DOF counterpart to the 3DOF symbolic row.",
+            "Sparse-ridge analogue: magnitude pruning, not statistical forward selection (no PSE/PRESS).",
+            implementation_status="analogue",
         )
     )
 
     start = time.perf_counter()
     cpu_start = time.process_time()
-    weights_edmd, mean_edmd, scale_edmd = fit_standardized_ridge(phi_poly, fit_xkp1, 100.0 * ridge)
+    weights_edmd, mean_edmd, scale_edmd = fit_standardized_ridge(phi_poly, fit_xkp1 - fit_x, 100.0 * ridge)
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
@@ -1392,7 +1454,8 @@ def run_methods(
             int(weights_edmd.size + mean_edmd.size + scale_edmd.size),
             pred,
             validation,
-            "EDMD-style lifted surrogate; no aerodynamic coefficient interpretation.",
+            "EDMD analogue: quadratic one-step ridge predicting raw states; lifted observables are not propagated.",
+            implementation_status="analogue",
         )
     )
 
@@ -1419,13 +1482,14 @@ def run_methods(
             int(weights_ude.size + mean_ude.size + scale_ude.size),
             pred,
             validation,
-            "Fast deterministic UDE analogue for the initial 6DOF benchmark.",
+            "Deterministic UDE analogue: ridge residual map, no neural network or ODE-in-the-loop training.",
+            implementation_status="analogue",
         )
     )
 
     start = time.perf_counter()
     cpu_start = time.process_time()
-    weights_pinn = sparsify_weights(weights_ude, fraction=0.08, protected=1 + len(STATE_NAMES) + len(INPUT_NAMES))
+    weights_pinn = sparsify_weights(weights_ude, fraction=0.08, protected=1 + len(STATE_NAMES) - 3 + len(INPUT_NAMES))
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
@@ -1457,8 +1521,8 @@ def run_methods(
     targets = []
     for trial in range(train_x.shape[0]):
         for index in range(lag - 1, train_x.shape[1] - 1):
-            history.append(np.concatenate((train_x[trial, index - lag + 1 : index + 1].reshape(-1), train.u_cmd[trial, index], [1.0])))
-            targets.append(train_x[trial, index + 1])
+            history.append(np.concatenate((train_x[trial, index - lag + 1 : index + 1, 3:].reshape(-1), train.u_cmd[trial, index], [1.0])))
+            targets.append(train_x[trial, index + 1] - train_x[trial, index])
     weights_hankel = ridge_fit(np.asarray(history)[:, None, :], np.asarray(targets)[:, None, :], ridge)
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
@@ -1478,7 +1542,8 @@ def run_methods(
             int(weights_hankel.size),
             pred,
             validation,
-            "Compact subspace-style baseline; validation rollout is initialized from the first state only.",
+            "Lagged ARX analogue: no Hankel SVD or state realization (not N4SID/MOESP).",
+            implementation_status="analogue",
         )
     )
 
@@ -1490,7 +1555,7 @@ def run_methods(
     residual = xkp1 - nominal_next
     start = time.perf_counter()
     cpu_start = time.process_time()
-    z = np.concatenate((xk.reshape(-1, len(STATE_NAMES)), uk.reshape(-1, len(INPUT_NAMES))), axis=1)
+    z = np.concatenate((xk.reshape(-1, len(STATE_NAMES))[:, 3:], uk.reshape(-1, len(INPUT_NAMES))), axis=1)
     target_res = residual.reshape(-1, len(STATE_NAMES))
     rng = np.random.default_rng(12_345 + (0 if state_source == "direct" else 1))
     fit_count = min(60_000, z.shape[0])

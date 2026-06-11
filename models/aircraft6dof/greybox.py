@@ -111,12 +111,12 @@ class SportCubGreyboxConfig:
     )
     default_parameter_bounds: dict[str, Bounds1D] = field(
         default_factory=lambda: {
-            "CL0": Bounds1D(0.05, 0.30, 0.70),
-            "CLa": Bounds1D(3.00, 4.50, 6.50),
+            "CL0": Bounds1D(0.05, 0.50, 1.60),
+            "CLa": Bounds1D(1.50, 4.00, 7.00),
             "CD0": Bounds1D(0.02, 0.08, 0.25),
-            "CDCLS": Bounds1D(0.01, 0.05, 0.30),
+            "CDCLS": Bounds1D(0.00, 0.05, 0.30),
             "CYb": Bounds1D(-1.20, -0.30, 0.20),
-            "KT": Bounds1D(0.15, 0.45, 0.85),
+            "KT": Bounds1D(0.50, 2.50, 9.00),
             "KL0": Bounds1D(-2.00, 0.00, 2.00),
             "KLb": Bounds1D(-50.00, -2.00, 50.00),
             "KLp": Bounds1D(-200.00, -50.00, 0.00),
@@ -130,15 +130,15 @@ class SportCubGreyboxConfig:
             "KN0": Bounds1D(-2.00, 0.00, 2.00),
             "KNb": Bounds1D(-50.00, 3.00, 50.00),
             "KNp": Bounds1D(-50.00, -1.00, 50.00),
-            "KNr": Bounds1D(-100.00, -8.00, 0.00),
+            "KNr": Bounds1D(-100.00, -8.00, 20.00),
             "KNda": Bounds1D(-30.00, -1.00, 30.00),
             "KNdr": Bounds1D(-50.00, -10.00, 50.00),
         }
     )
     literature_parameter_bounds: dict[str, Bounds1D] = field(
         default_factory=lambda: {
-            "CL0": Bounds1D(0.05, 0.30, 0.70),
-            "CLa": Bounds1D(3.00, 4.50, 6.50),
+            "CL0": Bounds1D(0.05, 0.50, 1.60),
+            "CLa": Bounds1D(1.50, 4.00, 7.00),
             "CYb": Bounds1D(-1.20, -0.30, 0.20),
         }
     )
@@ -296,9 +296,11 @@ def build_casadi_dynamics(config: SportCubGreyboxConfig, dt: float):
     side = qbar * S * CY
     thrust = KT * m * thr
 
-    force_x_b = -drag * c_a * c_b - side * c_a * s_b + lift * s_a + thrust * c_a * c_b
-    force_y_b = -drag * s_b + side * c_b + thrust * s_b
-    force_z_b = -drag * s_a * c_b - side * s_a * s_b - lift * c_a - thrust * s_a * c_b
+    # Aerodynamic forces rotate from wind axes; thrust is body-fixed along x
+    # (a propeller does not rotate with the airflow).
+    force_x_b = -drag * c_a * c_b - side * c_a * s_b + lift * s_a + thrust
+    force_y_b = -drag * s_b + side * c_b
+    force_z_b = -drag * s_a * c_b - side * s_a * s_b - lift * c_a
 
     c_phi = ca.cos(phi)
     s_phi = ca.sin(phi)

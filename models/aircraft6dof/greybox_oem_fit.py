@@ -194,9 +194,15 @@ def main() -> int:
     }
     for name, value in scores.items():
         print(f"  {name}: {value:.4f}")
+    at_bounds = []
     for name, value, lo, hi in zip(SPORTCUB_PARAMETER_NAMES, theta, fit["lower"], fit["upper"]):
-        at_bound = "  (at bound)" if value in (lo, hi) else ""
-        print(f"  {name:6s} = {value:+10.4f}{at_bound}")
+        # Within 1% of the box span counts as pinned: TRF stops just inside.
+        pinned = min(value - lo, hi - value) < 0.01 * (hi - lo)
+        if pinned:
+            at_bounds.append(name)
+        print(f"  {name:6s} = {value:+10.4f}{'  (at bound)' if pinned else ''}")
+    if at_bounds:
+        print(f"  WARNING: parameters pinned at bounds: {', '.join(at_bounds)} — widen the spec box")
 
     args.results_dir.mkdir(parents=True, exist_ok=True)
     output = args.results_dir / "sportcub_greybox_params.json"
@@ -206,6 +212,7 @@ def main() -> int:
         "fixed_parameters": spec.fixed_parameters,
         "max_deflection_deg": spec.max_deflection_deg,
         "model_rate_hz": fit["model_rate_hz"],
+        "parameters_at_bounds": at_bounds,
         "scores": scores,
         "cost": fit["cost"],
         "nfev": fit["nfev"],

@@ -104,10 +104,10 @@ This section lists only the method families currently represented in repository 
 The nominal row evaluates the coded 3-DOF aircraft model without the hidden nonlinear aerodynamic residuals. It is a no-fit baseline and appears in the result figures as the reference performance level.
 
 \paragraph{EquationError-LS.}
-The equation-error least-squares row fits aerodynamic coefficients from reconstructed state derivatives. It is fast and interpretable, but it is sensitive to measurement noise because the dependent variables require numerical differentiation.
+The equation-error least-squares row fits aerodynamic coefficients from reconstructed state derivatives, the classical regression formulation of aircraft parameter estimation \cite{KleinMorelli2006,morelli_system_2002}. It is fast and interpretable, but it is sensitive to measurement noise because the dependent variables require numerical differentiation.
 
 \paragraph{OEM-SS.}
-The output-error single-shooting row estimates fixed aerodynamic parameters by optimizing trajectory error through the longitudinal model. The implementation uses CasADi/IPOPT and is the main deterministic fixed-structure aircraft identification baseline for direct-state data.
+The output-error single-shooting row estimates fixed aerodynamic parameters by optimizing trajectory error through the longitudinal model. The implementation uses CasADi/IPOPT and is the main deterministic fixed-structure aircraft identification baseline for direct-state data \cite{jategaonkar2006flight,Morelli2002SIDPAC}.
 
 \paragraph{OEM-MocapOutput.}
 The mocap-output OEM row treats $V,\alpha,\gamma,Q$ as latent states and fits measured position and pitch attitude directly. This is the most relevant deterministic baseline for the motion-capture-only setting because it avoids differentiating position and attitude to construct aerodynamic states.
@@ -116,24 +116,24 @@ The mocap-output OEM row treats $V,\alpha,\gamma,Q$ as latent states and fits me
 The variational/multiple-shooting mocap row adds process-residual flexibility while estimating latent states from mocap outputs. It is included as a practical bridge between fixed-structure output error and process-noise or smoothing formulations.
 
 \paragraph{EKF-ParamID and Fisher-UQ.}
-The EKF parameter-identification row estimates parameters from training data and then validates the learned model in open-loop rollout. The Fisher-information row provides local uncertainty and parameter-correlation diagnostics for the fitted fixed-structure model.
+The EKF parameter-identification row estimates parameters with an augmented-state extended Kalman filter \cite{kalman_new_1960,jategaonkar2006flight} and then validates the learned model in open-loop rollout. The Fisher-information row provides local uncertainty and parameter-correlation diagnostics for the fitted fixed-structure model.
 
 \subsection{Linear, Local, Lifted, and Frequency-Domain Predictors}
 
 \paragraph{Linear-SS.}
-The linear state-space row fits a discrete affine state-space predictor. It is a strong local predictive baseline, especially near trim or when mocap-derived state reconstruction dominates the error budget, but it should not be interpreted as recovering nonlinear aerodynamic structure.
+The linear state-space row fits a discrete affine state-space predictor in the prediction-error tradition \cite{ljung1999system}. It is a strong local predictive baseline, especially near trim or when mocap-derived state reconstruction dominates the error budget, but it should not be interpreted as recovering nonlinear aerodynamic structure.
 
 \paragraph{Model-Stitching.}
-The model-stitching row fits local linear models on trim-grid data and blends them using scheduling weights. It tests whether multiple local models improve over one global linear model across wider initial-condition and maneuver variation.
+The model-stitching row fits local linear models on trim-grid data and blends them using scheduling weights, following the stitched-model and LPV identification practice \cite{Tischler1995SystemIM,toth2010lpv}. It tests whether multiple local models improve over one global linear model across wider initial-condition and maneuver variation.
 
 \paragraph{Subspace-Hankel.}
-The subspace row fits a compact linear predictor using Hankel/subspace-style structure. It represents the repository's current state-space realization baseline.
+The subspace row fits a compact linear predictor using Hankel/subspace-style structure. It represents the repository's current state-space realization baseline; it is an ARX-style analogue rather than a full N4SID/MOESP projection method \cite{VanOverscheeDeMoor1996,verhaegen1992subspace,HOKALMAN+1966+545+548}.
 
 \paragraph{Koopman-EDMD.}
-The Koopman-EDMD row fits a lifted linear predictor using a fixed nonlinear feature library. It is included as a predictive surrogate rather than as an aerodynamic-parameter estimator.
+The Koopman-EDMD row fits a lifted linear predictor using a fixed nonlinear feature library \cite{koopman1931hamiltonian,williams2015data,schmid2010dmd}. It is included as a predictive surrogate rather than as an aerodynamic-parameter estimator.
 
 \paragraph{Frequency-Welch.}
-The frequency-domain row uses Welch/ETFE-inspired spectral estimates, coherence screening, and a weighted continuous-time linear fit. It is not CIFER and should be interpreted only as the repository's compact spectral baseline.
+The frequency-domain row uses Welch/ETFE-inspired spectral estimates \cite{welch1967use}, coherence screening, and a weighted continuous-time linear fit. It is not CIFER \cite{Tischler1995SystemIM} and should be interpreted only as the repository's compact spectral baseline.
 
 \paragraph{Frequency-Stitching.}
 The frequency-stitching row applies the same spectral fitting idea locally on trim-grid groups and blends the resulting local continuous-time models. It tests whether the poor global frequency-domain performance is primarily a single-LTI-model limitation.
@@ -141,22 +141,22 @@ The frequency-stitching row applies the same spectral fitting idea locally on tr
 \subsection{Sparse, Symbolic, Kernel, and Neural Closure Methods}
 
 \paragraph{SINDy.}
-The SINDy row uses a structured coefficient-library formulation so that known low-order aircraft terms can be protected while sparse nonlinear residual terms are selected from a candidate library.
+The SINDy row \cite{brunton2016discovering,champion2019data} uses a structured coefficient-library formulation so that known low-order aircraft terms can be protected while sparse nonlinear residual terms are selected from a candidate library.
 
 \paragraph{Symbolic-Stepwise.}
-The symbolic-stepwise row uses the same candidate-library idea with forward stepwise selection. It is a lightweight symbolic baseline rather than a full genetic-programming symbolic-regression implementation.
+The symbolic-stepwise row uses the same candidate-library idea with forward stepwise selection. It is a lightweight symbolic baseline rather than a full genetic-programming symbolic-regression implementation \cite{koza1990genetic,makke_interpretable_2024}.
 
 \paragraph{GP-CoeffClosure.}
-The GP/RBF coefficient-closure row learns a smooth residual aerodynamic coefficient map with kernel features. It represents the repository's current kernel surrogate closure method.
+The GP/RBF coefficient-closure row learns a smooth residual aerodynamic coefficient map with kernel features \cite{rasmussen2006gaussian,hemakumara2013learning}. It represents the repository's current kernel surrogate closure method.
 
 \paragraph{NN-CoeffSurrogate.}
 The neural coefficient surrogate row learns aerodynamic coefficient residuals from labels available in the synthetic benchmark. Because real flight tests do not provide those coefficient labels directly, this row is an upper-bound diagnostic for what a supervised closure could achieve.
 
 \paragraph{PINN-CoeffClosure and PINN-HiddenElevator.}
-The PINN-style rows use flight-dynamics-level residuals, not full CFD or Navier--Stokes constraints. The coefficient-closure row learns aerodynamic closures, while the hidden-elevator row tests whether a neural model can infer a hidden command correction in SAFE-like cases.
+The PINN-style rows \cite{raissi2017physics,lagaris1998artificial} use flight-dynamics-level residuals, not full CFD or Navier--Stokes constraints. The coefficient-closure row learns aerodynamic closures, while the hidden-elevator row tests whether a neural model can infer a hidden command correction in SAFE-like cases.
 
 \paragraph{UDE-Residual and UDE-HiddenControl.}
-The UDE rows retain the known longitudinal dynamics and learn residual terms. The residual row targets missing aerodynamics, while the hidden-control row targets unknown input reshaping from a proprietary SAFE-like controller.
+The UDE rows \cite{rackauckas2020universal} retain the known longitudinal dynamics and learn residual terms. The residual row targets missing aerodynamics, while the hidden-control row targets unknown input reshaping from a proprietary SAFE-like controller.
 
 \section{Dataset and Result Artifacts}
 
@@ -1871,7 +1871,8 @@ with no further state resets, handing off between two models on the recorded
 flight-mode channel with the state carried continuously across each switch:
 while the pilot flies manual the bare airframe integrates the recorded
 sticks re-referenced by the per-flight trim bias, and while SAFE is engaged
-the free run uses a \emph{directly identified closed-loop model}
+the free run uses a \emph{directly identified closed-loop model} (the
+\emph{direct method} of closed-loop identification \cite{ljung1999system})
 ridge-fitted on the tracked stabilized data rather than composing the bare
 airframe with the inverse-dynamics controller estimate: the closed loop is
 abundantly excited by the lap data and is exactly what stabilized segments
@@ -1912,7 +1913,8 @@ anchored to the regression's operating envelope rather than to flight
 physics. The benchmark therefore also fits the repository's lumped-parameter
 Sport Cub grey-box (twelve Euler states; lift, drag, and side-force
 coefficient expansions plus moment-acceleration coefficients with
-$b/2V$ and $\bar c/2V$ rate terms) by output-error multiple shooting: every
+$b/2V$ and $\bar c/2V$ rate terms) by segment-wise output error
+\cite{jategaonkar2006flight}: every
 bias-corrected manual training chunk is rolled out with a fixed-step RK4
 integrator from its measured initial state, and the 22 aerodynamic
 parameters jointly minimize position and attitude residuals (weighted by the
@@ -1925,7 +1927,14 @@ their upper bounds --- consistent with the ground-roll finding that the
 nominal thrust constant underestimates the installed power. Because the
 model is a compact closed-form ODE, the same fitted parameters export
 directly to the browser, where the explorer integrates it with the identical
-RK4 step for segment scores and free-run predictions.
+RK4 step for segment scores and free-run predictions. Known structural
+limitations, in roughly decreasing order of expected impact for this
+airframe: no actuator/servo dynamics (a 50--100\,ms lag is identifiable at
+240\,Hz and its absence biases control derivatives low), a static thrust map
+with no airspeed or battery-stage dependence even though the ground-roll
+analysis quantifies a per-flight thrust stage, no propeller-slipstream
+augmentation of tail effectiveness, and no $C_{L_q}$ or
+$\dot\alpha$ terms.
 
 \subsection{6-DOF Baseline Methods}
 
@@ -2080,11 +2089,11 @@ objective, assuming independent Gaussian noise in each channel, is
 \[
     J_{\mathrm{SS}}
     =
-    \sum_{j=1}^{4} N\log\sigma_j
+    \sum_{j=1}^{n_y} N\log\sigma_j
     +
     \frac{1}{2}
     \sum_{k=0}^{N-1}
-    \sum_{j=1}^{4}
+    \sum_{j=1}^{n_y}
     \frac{\left(\hat{y}_{k,j}-y_{k,j}\right)^2}{\sigma_j^2}.
 \]
 Thus, the single--shooting OEM problem is
@@ -2092,7 +2101,7 @@ Thus, the single--shooting OEM problem is
     \min_{\boldsymbol{\theta}_p,\,\mathbf{x}_0,\,\log\boldsymbol{\sigma}}
     J_{\mathrm{SS}}.
 \]
-While this formulation is compact, the entire predicted trajectory relies on a single integration from the initial state, rendering the optimization sensitive to parameter initialization and prone to error accumulation over long horizons. Consequently, the Equation Error Method is often employed as a precursor to provide a robust initial guess for the OEM. The single-shooting output error approach remains the current industry standard, implemented in widely used toolkits such as SIDPAC \cite{Morelli2002SIDPAC}.
+While this formulation is compact, the entire predicted trajectory relies on a single integration from the initial state, rendering the optimization sensitive to parameter initialization and prone to error accumulation over long horizons. Consequently, the Equation Error Method is often employed as a precursor to provide a robust initial guess for the OEM. The single-shooting output error approach remains standard practice for low-turbulence flight tests and is implemented in widely used toolkits such as SIDPAC \cite{Morelli2002SIDPAC}; when process noise (turbulence) is significant, the filter-error method, which embeds a Kalman filter inside the likelihood, is the accepted extension \cite{jategaonkar2006flight}.
 
 \subsection{Variational System Identification}
 Variational system identification occupies the space between deterministic OEM and filter-error methods. For a stochastic continuous-time model,
