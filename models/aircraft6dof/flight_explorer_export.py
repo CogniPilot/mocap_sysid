@@ -620,8 +620,11 @@ def main() -> int:
                 for method, spec in weights["surrogates"].items()
             },
             "greybox": {
-                "parameter_names": list(SPORTCUB_PARAMETER_NAMES),
+                "parameter_names": weights["6DOF-GreyBoxOEM"]["parameter_names"],
                 "parameters": np.round(weights["6DOF-GreyBoxOEM"]["theta"], 6).tolist(),
+                "cr_std": np.round(weights["6DOF-GreyBoxOEM"]["cr_std"], 6).tolist(),
+                "couplings": weights["6DOF-GreyBoxOEM"]["couplings"],
+                "uncertainty_note": "Cramer-Rao lower bounds from the output-error Jacobian; residual coloring uncorrected (optimistic).",
                 "fixed_parameters": weights["6DOF-GreyBoxOEM"]["spec"].fixed_parameters,
                 "max_deflection_deg": weights["6DOF-GreyBoxOEM"]["spec"].max_deflection_deg,
             },
