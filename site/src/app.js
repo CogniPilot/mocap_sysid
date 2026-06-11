@@ -246,9 +246,9 @@ function bindControls() {
       state.playback = state.playback.filter((track) => track.id !== event.detail.track.id);
       state.playback.push(event.detail.track);
     }
-    state.playbackTrackOverride = "sportcub_flights_5_22";
+    state.playbackTrackOverride = event.detail.track?.id || `explorer_${event.detail.scenario}`;
     state.modelFamily = "aircraft6dof";
-    state.scenario = "sportcub_mocap_5_22_26";
+    state.scenario = event.detail.scenario || "sportcub_mocap_5_22_26";
     state.playbackSegmentIndex = flightIndex;
     state.playbackTimeS = timeS || 0;
     state.playbackLastMs = null;
@@ -805,7 +805,7 @@ function notifyExplorerContext() {
   // dataset's screen.
   window.dispatchEvent(new CustomEvent("playback-context-changed", {
     detail: {
-      explorerActive: state.modelFamily === "aircraft6dof" && state.scenario === "sportcub_mocap_5_22_26",
+      scenario: state.modelFamily === "aircraft6dof" ? state.scenario : null,
     },
   }));
 }

@@ -494,38 +494,92 @@ def manual_window_splits(paths: dict[str, Path]) -> dict[tuple[str, int], str]:
     return membership
 
 
+def load_window_records(paths: dict[str, Path]) -> list[dict[str, object]]:
+    """Maneuver-window datasets (4/17) as flight-like records.
+
+    Each window becomes a track: all-manual mode (the collection has no
+    SAFE channel), tracked everywhere, and the train/validation membership
+    taken from which split file the window lives in.
+    """
+    records = []
+    for split_name, path in paths.items():
+        data = np.load(path, allow_pickle=False)
+        for index, name in enumerate(str(s) for s in data["segment_names"]):
+            mask = np.asarray(data["valid_mask"][index], dtype=bool)
+            records.append({
+                "name": name,
+                "x": np.asarray(data["x_meas"][index][mask], dtype=float),
+                "pose": np.asarray(data["pose_meas"][index][mask], dtype=float),
+                "sticks": np.asarray(data["u_cmd"][index][mask], dtype=float),
+                "split": split_name,
+                "dt": float(data["sample_period_s"]),
+            })
+    return records
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dataset", choices=["5_22", "4_17"], default="5_22")
     parser.add_argument("--flights", type=Path, default=FLIGHTS_DEFAULT)
     parser.add_argument("--train", type=Path, default=TRAIN_DEFAULT)
     parser.add_argument("--validation", type=Path, default=VALIDATION_DEFAULT)
     parser.add_argument("--output", type=Path, default=OUTPUT_DEFAULT)
     args = parser.parse_args()
+    windows_mode = args.dataset == "4_17"
+    if windows_mode:
+        args.train = Path("data/sportcub_mocap_4_17_26_train.npz")
+        args.validation = Path("data/sportcub_mocap_4_17_26_validation.npz")
+        args.output = ROOT / "site" / "public" / "data" / "flight_explorer_4_17.json"
 
-    data = np.load(args.flights, allow_pickle=False)
-    dt = float(data["sample_period_s"])
+    if windows_mode:
+        window_records = load_window_records({"train": args.train, "validation": args.validation})
+        dt = window_records[0]["dt"]
+        safe_weights, safe_membership, safe_scores = None, {}, None
+        safe_step = None
+        gains = None
+    else:
+        data = np.load(args.flights, allow_pickle=False)
+        dt = float(data["sample_period_s"])
     downsample = max(1, int(round(1.0 / (DISPLAY_RATE_HZ * dt))))
     config = Aircraft6DOFConfig()
     weights = train_methods(args.train)
-    safe_weights, safe_membership, safe_scores = train_safe_closed_loop(data)
-    safe_step = make_safe_step(safe_weights, dt)
-
-    gains, _rmse, _count = fit_safe_controller(args.flights)
+    if not windows_mode:
+        safe_weights, safe_membership, safe_scores = train_safe_closed_loop(data)
+        safe_step = make_safe_step(safe_weights, dt)
+        gains, _rmse, _count = fit_safe_controller(args.flights)
     membership = manual_window_splits({"train": args.train, "validation": args.validation})
 
+    if windows_mode:
+        record_iter = [(i, r["name"]) for i, r in enumerate(window_records)]
+    else:
+        record_iter = list(enumerate(str(s) for s in data["segment_names"]))
+
     flights_payload = []
-    for flight_index, name in enumerate(str(s) for s in data["segment_names"]):
-        mask = np.asarray(data["valid_mask"][flight_index], dtype=bool)
-        x = np.asarray(data["x_meas"][flight_index][mask], dtype=float)
-        pose = np.asarray(data["pose_meas"][flight_index][mask], dtype=float)
-        sticks = np.asarray(data["u_cmd"][flight_index][mask], dtype=float)
-        mode = np.asarray(data["flight_mode"][flight_index][mask])
-        tracked = (
-            np.asarray(data["mocap_tracked"][flight_index][mask]) != 0
-            if "mocap_tracked" in data.files
-            else np.ones(len(x), dtype=bool)
-        )
-        labels = sample_labels(x, mode)
+    for flight_index, name in record_iter:
+        if windows_mode:
+            record = window_records[flight_index]
+            x = record["x"]
+            pose = record["pose"]
+            sticks = record["sticks"]
+            mode = np.zeros(len(x), dtype=np.int8)
+            tracked = np.ones(len(x), dtype=bool)
+        else:
+            mask = np.asarray(data["valid_mask"][flight_index], dtype=bool)
+            x = np.asarray(data["x_meas"][flight_index][mask], dtype=float)
+            pose = np.asarray(data["pose_meas"][flight_index][mask], dtype=float)
+            sticks = np.asarray(data["u_cmd"][flight_index][mask], dtype=float)
+            mode = np.asarray(data["flight_mode"][flight_index][mask])
+            tracked = (
+                np.asarray(data["mocap_tracked"][flight_index][mask]) != 0
+                if "mocap_tracked" in data.files
+                else np.ones(len(x), dtype=bool)
+            )
+        if windows_mode:
+            # Maneuver windows are airborne manual excerpts by construction;
+            # the altitude heuristic misreads their mocap-local origin as ground.
+            labels = np.full(len(x), 3, dtype=np.int8)
+        else:
+            labels = sample_labels(x, mode)
         mode_int = np.asarray(mode, dtype=int)
         segments = contiguous_segments(labels)
 
@@ -553,7 +607,7 @@ def main() -> int:
                 "kind": LABELS[label],
                 "start_s": round(start * dt, 2),
                 "stop_s": round(stop * dt, 2),
-                "split": membership.get((name, start)),
+                "split": (window_records[flight_index]["split"] if windows_mode and label == 3 else membership.get((name, start))),
             }
             if label in (2, 3) and stop - start >= 30:
                 x0 = suite.local_state_estimate(x, dt, start, window=12)
@@ -603,15 +657,17 @@ def main() -> int:
         print(f"{name}: {len(segment_rows)} segments", flush=True)
 
     payload = {
-        "dataset": "sportcub_mocap_5_22_26",
+        "dataset": "sportcub_mocap_4_17_26" if windows_mode else "sportcub_mocap_5_22_26",
         "labels": list(LABELS),
         "methods": list(METHODS),
         "models": {
             "linear_weights": np.round(weights["6DOF-LinearSS"], 6).tolist(),
             "residual_weights": np.round(weights["6DOF-RidgeResidual"], 6).tolist(),
-            "safe_gains": {axis: np.round(coef, 5).tolist() for axis, coef in gains.items()},
-            "safe_invariant_weights": np.round(safe_weights, 8).tolist(),
-            "safe_scores": safe_scores,
+            **({
+                "safe_gains": {axis: np.round(coef, 5).tolist() for axis, coef in gains.items()},
+                "safe_invariant_weights": np.round(safe_weights, 8).tolist(),
+                "safe_scores": safe_scores,
+            } if not windows_mode else {}),
             "surrogates": {
                 method: {
                     key: (np.round(value, 7).tolist() if isinstance(value, np.ndarray) else value)

@@ -8,7 +8,11 @@
 // bare airframe alone cannot represent stabilized flight. Computing rollouts
 // client-side avoids exporting a trace per (segment, method) pair.
 
-const DATA_URL = "./public/data/flight_explorer.json";
+const DATA_URLS = {
+  "sportcub_mocap_5_22_26": "./public/data/flight_explorer.json",
+  "sportcub_mocap_4_17_26": "./public/data/flight_explorer_4_17.json",
+};
+const DEFAULT_DATASET = "sportcub_mocap_5_22_26";
 const LABEL_COLORS = { ground: "#8d6e63", ground_effect: "#26a69a", stabilized: "#5c7cfa", manual: "#f08c00" };
 const METHOD_COLORS = { "6DOF-NominalGreyBox": "#d62728", "6DOF-LinearSS": "#2ca02c", "6DOF-RidgeResidual": "#9467bd", "6DOF-GreyBoxOEM": "#e8a838", "6DOF-EquationError-LS": "#17becf", "6DOF-SINDy": "#e377c2", "6DOF-Koopman-EDMD": "#bcbd22", "6DOF-Symbolic-Stepwise": "#8c564b", "6DOF-Subspace-Hankel": "#1f77b4", "6DOF-GP-RBF": "#f7b6d2" };
 const MIN_SPEED = 2.5;
@@ -528,7 +532,7 @@ function rolloutFrom(flight, models, method, timeS) {
   }
   const stepper = makeStepper(method, models, dt);
   const safeStep = models.safe_invariant_weights ? makeSafeStepper(models.safe_invariant_weights, dt) : null;
-  const ctrl = safeController(models.safe_gains);
+  const ctrl = models.safe_gains ? safeController(models.safe_gains) : null;
   const bias = flight.bias;
   let x = estimateInitialState(flight, timeS);
   const stride = Math.max(1, Math.round(0.1 / dt));
@@ -553,7 +557,7 @@ function rolloutFrom(flight, models, method, timeS) {
       // closed-loop flight) and the state carries over continuously.
       x = safeStep(x, stick);
     } else {
-      const u = modes[k] === 1 ? ctrl(stick, x) : stick.map((v, i) => v - bias[i]);
+      const u = modes[k] === 1 && ctrl ? ctrl(stick, x) : stick.map((v, i) => v - bias[i]);
       x = stepper(x, u);
     }
     if (!x.every(Number.isFinite)) break;
@@ -579,6 +583,17 @@ function recomputePredictions() {
   for (const method of predictionMethods()) {
     ex.predictions[method] = rolloutFrom(flight(), ex.data.models, method, ex.anchorTimeS);
   }
+}
+
+const datasetCache = {};
+
+async function loadExplorerDataset(scenario) {
+  if (!datasetCache[scenario]) {
+    const response = await fetch(DATA_URLS[scenario]);
+    if (!response.ok) throw new Error(`${response.status}`);
+    datasetCache[scenario] = await response.json();
+  }
+  return datasetCache[scenario];
 }
 
 function safeScoreNote() {
@@ -869,6 +884,7 @@ function publishOverlay(timeS) {
     new CustomEvent("explorer-set-ic", {
       detail: {
         flight: f.name,
+        scenario: ex.data.dataset,
         flightIndex: ex.flightIndex,
         timeS: timeS == null ? 0 : timeS,
         overlay,
@@ -888,11 +904,12 @@ function buildPlaybackTrack() {
   // Full flights as first-class playback tracks: the 3D animation flies the
   // whole record (positions re-zeroed per flight; the overlay carries the
   // matching origin), instead of only the benchmark chunk windows.
+  const five22 = ex.data.dataset === "sportcub_mocap_5_22_26";
   return {
-    id: "sportcub_flights_5_22",
+    id: `explorer_${ex.data.dataset}`,
     model_family: "aircraft6dof",
-    source: "mocap full record",
-    title: "Sport Cub full flights (2026-05-22)",
+    source: five22 ? "mocap full record" : "mocap maneuver windows",
+    title: five22 ? "Sport Cub full flights (2026-05-22)" : "Sport Cub maneuver windows (2026-04-17)",
     segments: ex.data.flights.map((f) => ({
       name: f.name,
       time_s: f.time,
@@ -964,9 +981,7 @@ export async function initExplorer() {
   const host = document.querySelector("#explorer-flight");
   if (!host) return;
   try {
-    const response = await fetch(DATA_URL);
-    if (!response.ok) throw new Error(`${response.status}`);
-    ex.data = await response.json();
+    ex.data = await loadExplorerDataset(DEFAULT_DATASET);
   } catch (error) {
     const status = document.querySelector("#explorer-status");
     if (status) status.textContent = `Flight data unavailable (${error.message}).`;
@@ -1006,14 +1021,32 @@ export async function initExplorer() {
   window.addEventListener("playback-ready", () => tryAnnounce(40));
   // The leaderboard owns method selection; free-run the selected methods the
   // browser has model parameters for.
-  window.addEventListener("playback-context-changed", (event) => {
+  window.addEventListener("playback-context-changed", async (event) => {
     const wasActive = ex.active;
-    ex.active = Boolean(event.detail.explorerActive);
+    const scenario = event.detail.scenario;
+    ex.active = Boolean(DATA_URLS[scenario]);
     const wrap = document.querySelector("#explorer-flight-wrap");
     if (wrap) wrap.hidden = !ex.active;
-    // Returning to the Sport Cub dataset restores the segmentation overlay
-    // (and any anchored free run) that the other dataset's view cleared.
-    if (ex.active && !wasActive) publishOverlay(ex.anchorTimeS);
+    if (!ex.active) return;
+    const switching = ex.data?.dataset !== scenario;
+    if (switching) {
+      try {
+        ex.data = await loadExplorerDataset(scenario);
+      } catch (error) {
+        console.warn("explorer dataset unavailable", scenario, error);
+        ex.active = false;
+        return;
+      }
+      ex.flightIndex = 0;
+      ex.anchorTimeS = null;
+      ex.predictions = {};
+      ex.playbackTrack = buildPlaybackTrack();
+      bind();
+      renderAll();
+      renderSplitsView();
+      renderModelInspector();
+    }
+    if (switching || !wasActive) publishOverlay(ex.anchorTimeS);
   });
   window.addEventListener("explorer-anchor-request", (event) => {
     if (!ex.active) return;
