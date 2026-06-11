@@ -1073,6 +1073,45 @@ function refreshAircraftInstance(instance) {
   for (const part of Object.values(parts)) {
     if (part && part.isObject3D) part.userData.baseQuat = part.quaternion.clone();
   }
+  // The authored aileron pivot axes are slightly misaligned with the actual
+  // hinge lines on the tapered wing, so large deflections swing the surface
+  // out of the wing plane. Derive each aileron's hinge axis from its own
+  // geometry: the surface's longest dimension is the hinge line.
+  let referenceWorldAxis = null;
+  for (const key of ["leftAileron", "rightAileron"]) {
+    const pivot = parts[key];
+    if (!pivot) continue;
+    let mesh = null;
+    pivot.traverse((node) => {
+      if (!mesh && node.isMesh) mesh = node;
+    });
+    if (!mesh) continue;
+    mesh.geometry.computeBoundingBox();
+    const size = mesh.geometry.boundingBox.getSize(new THREE.Vector3());
+    const axisLocal = new THREE.Vector3(
+      size.x >= size.y && size.x >= size.z ? 1 : 0,
+      size.y > size.x && size.y >= size.z ? 1 : 0,
+      size.z > size.x && size.z >= size.y ? 1 : 0,
+    );
+    // Geometry axis -> pivot frame through the mesh's local transform.
+    const axis = axisLocal.applyQuaternion(mesh.quaternion).normalize();
+    // Sign convention must mirror across the wings: align both hinge axes to
+    // the same WORLD spanwise direction (a local-Z test cannot see a mirrored
+    // pivot, which made the right aileron deflect backwards).
+    const worldQuat = new THREE.Quaternion();
+    pivot.getWorldQuaternion(worldQuat);
+    const worldAxis = axis.clone().applyQuaternion(worldQuat);
+    if (referenceWorldAxis === null) {
+      if (axis.dot(SPIN_Z) < 0) {
+        axis.negate();
+        worldAxis.negate();
+      }
+      referenceWorldAxis = worldAxis;
+    } else if (worldAxis.dot(referenceWorldAxis) < 0) {
+      axis.negate();
+    }
+    pivot.userData.hingeAxis = axis;
+  }
   instance.group.userData = parts;
 }
 
@@ -1191,8 +1230,8 @@ function updateAircraftControls(aircraft, controls, deltaS) {
     // The GLB pivots map local Z to the spanwise hinge line, local Y to the
     // fin line, and local X to the fuselage axis (verified from the authored
     // pivot orientations in the asset).
-    setHinge(parts.leftAileron, SPIN_Z, -0.6 * aileron);
-    setHinge(parts.rightAileron, SPIN_Z, 0.6 * aileron);
+    setHinge(parts.leftAileron, parts.leftAileron?.userData.hingeAxis || SPIN_Z, -0.6 * aileron);
+    setHinge(parts.rightAileron, parts.rightAileron?.userData.hingeAxis || SPIN_Z, 0.6 * aileron);
     setHinge(parts.elevator, SPIN_Z, -0.7 * elevator);
     setHinge(parts.rudder, HINGE_Y, 0.7 * rudder);
     if (parts.prop && parts.prop.userData.baseQuat) {
