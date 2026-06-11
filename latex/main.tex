@@ -1934,7 +1934,13 @@ airframe: no actuator/servo dynamics (a 50--100\,ms lag is identifiable at
 with no airspeed or battery-stage dependence even though the ground-roll
 analysis quantifies a per-flight thrust stage, no propeller-slipstream
 augmentation of tail effectiveness, and no $C_{L_q}$ or
-$\dot\alpha$ terms.
+$\dot\alpha$ terms. A further interpretation caveat from the
+manufacturer's manual: the ``manual'' (Experienced-mode) segments remove
+the SAFE envelope limits but the receiver's AS3X gyro stabilization remains
+active, so the fitted rate-damping coefficients are \emph{effective
+closed-loop} damping including gyro feedback rather than bare-airframe
+aerodynamic derivatives; predictions are unaffected because the
+augmentation is always present in flight.
 
 \subsection{6-DOF Baseline Methods}
 
