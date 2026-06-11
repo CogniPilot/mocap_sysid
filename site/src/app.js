@@ -191,8 +191,10 @@ function renderModelTabs() {
   const host = document.querySelector("#model-tabs");
   host.innerHTML = "";
   // A selector with one option is noise; hide the whole Model control.
-  const wrap = host.closest("div");
-  if (wrap) wrap.hidden = state.manifest.model_families.length <= 1;
+  // The labeled wrapper is the parent div; the hidden attribute alone is
+  // insufficient on #model-tabs because .segmented sets display.
+  const wrap = host.parentElement;
+  if (wrap) wrap.style.display = state.manifest.model_families.length <= 1 ? "none" : "";
   for (const family of state.manifest.model_families) {
     const button = document.createElement("button");
     button.type = "button";
