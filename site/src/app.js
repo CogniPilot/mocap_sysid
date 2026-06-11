@@ -1230,11 +1230,11 @@ function updateAircraftControls(aircraft, controls, deltaS) {
     // The GLB pivots map local Z to the spanwise hinge line, local Y to the
     // fin line, and local X to the fuselage axis (verified from the authored
     // pivot orientations in the asset).
-    // Deflections exaggerated 3x for visibility in the small viewport.
-    setHinge(parts.leftAileron, parts.leftAileron?.userData.hingeAxis || SPIN_Z, -1.8 * aileron);
-    setHinge(parts.rightAileron, parts.rightAileron?.userData.hingeAxis || SPIN_Z, 1.8 * aileron);
-    setHinge(parts.elevator, SPIN_Z, -2.1 * elevator);
-    setHinge(parts.rudder, HINGE_Y, 2.1 * rudder);
+    // Deflections exaggerated 2x for visibility in the small viewport.
+    setHinge(parts.leftAileron, parts.leftAileron?.userData.hingeAxis || SPIN_Z, -1.2 * aileron);
+    setHinge(parts.rightAileron, parts.rightAileron?.userData.hingeAxis || SPIN_Z, 1.2 * aileron);
+    setHinge(parts.elevator, SPIN_Z, -1.4 * elevator);
+    setHinge(parts.rudder, HINGE_Y, 1.4 * rudder);
     if (parts.prop && parts.prop.userData.baseQuat) {
       parts.prop.userData.spin = (parts.prop.userData.spin || 0) + deltaS * (22 + 90 * thrust);
       setHinge(parts.prop, HINGE_X, parts.prop.userData.spin);
