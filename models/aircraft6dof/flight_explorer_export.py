@@ -38,7 +38,17 @@ import numpy as np
 
 from benchmark.paths import ROOT
 from . import comparison_suite as suite
-from .greybox import Aircraft6DOFConfig, euler_from_quaternion, nominal_rk4_step, normalize_quaternion
+from .greybox import (
+    SPORTCUB_PARAMETER_NAMES,
+    Aircraft6DOFConfig,
+    build_casadi_dynamics,
+    euler_from_quaternion,
+    nominal_rk4_step,
+    normalize_quaternion,
+    quaternion_from_euler,
+    rotation_body_to_inertial,
+)
+from .greybox_oem_fit import OEM_CONTROL_ORDER, euler_states_to_quat, fit_greybox, quat_states_to_euler
 from .safe_controller import fit_safe_controller, safe_controller
 
 FLIGHTS_DEFAULT = Path("data/sportcub_mocap_5_22_26_flights.npz")
@@ -50,7 +60,7 @@ GROUND_ALTITUDE_M = 0.5
 GROUND_EFFECT_ALTITUDE_M = 0.65
 DISPLAY_RATE_HZ = 10.0  # browser display rate; stride derived from the data rate
 RIDGE = 1e-5
-METHODS = ("6DOF-Nominal", "6DOF-LinearSS", "6DOF-RidgeResidual")
+METHODS = ("6DOF-Nominal", "6DOF-LinearSS", "6DOF-RidgeResidual", "6DOF-GreyBoxOEM")
 LABELS = ("ground", "ground_effect", "stabilized", "manual")
 
 
@@ -91,18 +101,49 @@ def ned_to_enu_pos(pos_ned: np.ndarray) -> np.ndarray:
     return np.column_stack([pos_ned[:, 1], pos_ned[:, 0], -pos_ned[:, 2]])
 
 
+def is_autonomous(name: str) -> bool:
+    """Whether a flight record was flown by the offboard autopilot.
+
+    The autopilot's lateral commands never reach the recorded transmitter
+    channels (the aileron stick barely moves and the rudder is constant while
+    the aircraft banks through laps), so stick-driven identification and
+    prediction are unsound for these records. A stick-variance test cannot
+    separate them from piloted elevator-only flights (the autopilot passes
+    pitch commands through the elevator channel), so the recording name is
+    the authoritative marker.
+    """
+    return name.startswith("auto")
+
+
+def euler_from_quat_array(quat: np.ndarray) -> np.ndarray:
+    q = quat / np.maximum(np.linalg.norm(quat, axis=1, keepdims=True), 1e-12)
+    q0, q1, q2, q3 = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
+    roll = np.arctan2(2 * (q0 * q1 + q2 * q3), 1 - 2 * (q1 * q1 + q2 * q2))
+    pitch = np.arcsin(np.clip(2 * (q0 * q2 - q3 * q1), -1.0, 1.0))
+    yaw = np.arctan2(2 * (q0 * q3 + q1 * q2), 1 - 2 * (q2 * q2 + q3 * q3))
+    return np.column_stack([roll, pitch, yaw])
+
+
 def train_safe_closed_loop(data: np.lib.npyio.NpzFile) -> np.ndarray:
     """Identify the stabilized closed-loop dynamics directly.
 
     Free-running a bare-airframe model through SAFE segments requires the
     hidden-controller decomposition, whose inverse-dynamics identification is
-    weakly conditioned. The closed loop itself (state + stick -> next state)
-    is abundantly excited by the lap data and is exactly what stabilized
-    segments replay, so it is fitted directly by ridge regression on every
-    tracked stabilized sample.
+    weakly conditioned, so the closed loop is fitted directly on every tracked
+    stabilized sample. The regression is restricted to the heading- and
+    position-invariant state (body velocities, roll, pitch, body rates) plus
+    the heading *increment*: flight dynamics do not depend on where the
+    aircraft is or which way it points, and a global affine map fitted on raw
+    position/quaternion states cannot represent the heading-dependent position
+    update, so its free runs wander within seconds. Heading integrates the
+    fitted increment and position integrates the rotated body velocity
+    exactly, which lets free runs fly whole laps.
+
+    Returns a 13x9 weight matrix: [u,v,w,phi,theta,p,q,r, stick(4), 1] ->
+    [next u,v,w,phi,theta,p,q,r, dpsi].
     """
     dt = float(data["sample_period_s"])
-    xs, us, nexts = [], [], []
+    feats, targs = [], []
     for flight_index in range(len(data["segment_names"])):
         mask = np.asarray(data["valid_mask"][flight_index], dtype=bool)
         x = np.asarray(data["x_meas"][flight_index][mask], dtype=float)
@@ -114,54 +155,45 @@ def train_safe_closed_loop(data: np.lib.npyio.NpzFile) -> np.ndarray:
             else np.ones(len(x), dtype=bool)
         )
         labels = sample_labels(x, mode)
+        if is_autonomous(str(data["segment_names"][flight_index])):
+            # The autopilot's lateral commands bypass the recorded sticks, so
+            # these stabilized samples teach the model that a neutral stick
+            # keeps turning.
+            print(f"closed-loop SAFE fit: excluding {data['segment_names'][flight_index]} (autonomous)")
+            continue
         keep = (labels == 2) & tracked
         keep_next = keep[:-1] & keep[1:]
-        xs.append(x[:-1][keep_next])
-        us.append(sticks[:-1][keep_next])
-        nexts.append(x[1:][keep_next])
-    x_all = np.concatenate(xs)
-    u_all = np.concatenate(us)
-    next_all = np.concatenate(nexts)
-    print(f"closed-loop SAFE fit: {len(x_all)} stabilized samples at dt={dt}")
-    return suite.ridge_fit(suite.design_matrix(x_all, u_all), next_all, RIDGE)
+        euler = euler_from_quat_array(x[:, 6:10])
+        invariant = np.column_stack([x[:, 3:6], euler[:, 0:2], x[:, 10:13]])
+        dpsi = np.arctan2(np.sin(np.diff(euler[:, 2])), np.cos(np.diff(euler[:, 2])))
+        feats.append(np.column_stack([invariant[:-1], sticks[:-1], np.ones(len(dpsi))])[keep_next])
+        targs.append(np.column_stack([invariant[1:], dpsi])[keep_next])
+    features = np.concatenate(feats)
+    targets = np.concatenate(targs)
+    print(f"closed-loop SAFE fit: {len(features)} stabilized samples at dt={dt}")
+    return np.linalg.solve(
+        features.T @ features + RIDGE * np.eye(features.shape[1]), features.T @ targets
+    )
 
 
-def train_safe_closed_loop(data: np.lib.npyio.NpzFile) -> np.ndarray:
-    """Identify the stabilized closed-loop dynamics directly.
+def make_safe_step(safe_weights: np.ndarray, dt: float):
+    """Full-state wrapper around the invariant closed-loop regression."""
 
-    Free-running a bare-airframe model through SAFE segments requires the
-    hidden-controller decomposition, whose inverse-dynamics identification is
-    weakly conditioned. The closed loop itself (state + stick -> next state)
-    is abundantly excited by the lap data and is exactly what stabilized
-    segments replay, so it is fitted directly by ridge regression on every
-    tracked stabilized sample.
-    """
-    dt = float(data["sample_period_s"])
-    xs, us, nexts = [], [], []
-    for flight_index in range(len(data["segment_names"])):
-        mask = np.asarray(data["valid_mask"][flight_index], dtype=bool)
-        x = np.asarray(data["x_meas"][flight_index][mask], dtype=float)
-        sticks = np.asarray(data["u_cmd"][flight_index][mask], dtype=float)
-        mode = np.asarray(data["flight_mode"][flight_index][mask])
-        tracked = (
-            np.asarray(data["mocap_tracked"][flight_index][mask]) != 0
-            if "mocap_tracked" in data.files
-            else np.ones(len(x), dtype=bool)
-        )
-        labels = sample_labels(x, mode)
-        keep = (labels == 2) & tracked
-        keep_next = keep[:-1] & keep[1:]
-        xs.append(x[:-1][keep_next])
-        us.append(sticks[:-1][keep_next])
-        nexts.append(x[1:][keep_next])
-    x_all = np.concatenate(xs)
-    u_all = np.concatenate(us)
-    next_all = np.concatenate(nexts)
-    print(f"closed-loop SAFE fit: {len(x_all)} stabilized samples at dt={dt}")
-    return suite.ridge_fit(suite.design_matrix(x_all, u_all), next_all, RIDGE)
+    def safe_step(x: np.ndarray, stick: np.ndarray) -> np.ndarray:
+        quat = normalize_quaternion(x[6:10])
+        euler = euler_from_quaternion(quat)
+        rot = rotation_body_to_inertial(quat)
+        pos = x[0:3] + rot @ x[3:6] * dt
+        z = np.concatenate([x[3:6], euler[0:2], x[10:13], stick, [1.0]])
+        out = z @ safe_weights
+        psi = np.arctan2(np.sin(euler[2] + out[8]), np.cos(euler[2] + out[8]))
+        quat_next = quaternion_from_euler(np.array([out[3], out[4], psi]))
+        return np.concatenate([pos, out[0:3], quat_next, out[5:8]])
+
+    return safe_step
 
 
-def train_methods(train_path: Path) -> dict[str, np.ndarray | None]:
+def train_methods(train_path: Path) -> dict[str, object]:
     segments, dt = suite.load_segments(train_path)
     split = suite.trim_to_input_onset(segments, dt, estimate_bias=True, label="explorer train")
     x = split.x_true
@@ -174,10 +206,28 @@ def train_methods(train_path: Path) -> dict[str, np.ndarray | None]:
             nominal_next[trial, index] = nominal_rk4_step(x[trial, index], u[trial, index], split.dt, config)
     residual_target = x[:, 1:, :] - nominal_next
     residual = suite.ridge_fit(suite.design_matrix(x[:, :-1, :], u[:, :-1, :]), residual_target, RIDGE)
-    return {"6DOF-Nominal": None, "6DOF-LinearSS": linear, "6DOF-RidgeResidual": residual}
+    print(f"grey-box OEM fit on {x.shape[0]} chunks", flush=True)
+    greybox = fit_greybox(x, u, split.dt)
+    return {
+        "6DOF-Nominal": None,
+        "6DOF-LinearSS": linear,
+        "6DOF-RidgeResidual": residual,
+        "6DOF-GreyBoxOEM": greybox,
+    }
 
 
-def make_stepper(method: str, weights: np.ndarray | None, dt: float, config: Aircraft6DOFConfig):
+def make_stepper(method: str, weights, dt: float, config: Aircraft6DOFConfig):
+    if method == "6DOF-GreyBoxOEM":
+        _dynamics, rk4 = build_casadi_dynamics(weights["spec"], dt)
+        theta_full = weights["theta_full"]
+
+        def greybox_step(x: np.ndarray, u: np.ndarray) -> np.ndarray:
+            x_euler = quat_states_to_euler(x[None, None, :])[0, 0]
+            x_euler = np.asarray(rk4(x_euler, u[OEM_CONTROL_ORDER], theta_full)).ravel()
+            return euler_states_to_quat(x_euler[None, None, :])[0, 0]
+
+        return greybox_step
+
     def step(x: np.ndarray, u: np.ndarray) -> np.ndarray:
         if method == "6DOF-Nominal":
             return nominal_rk4_step(x, u, dt, config)
@@ -234,10 +284,7 @@ def main() -> int:
     config = Aircraft6DOFConfig()
     weights = train_methods(args.train)
     safe_weights = train_safe_closed_loop(data)
-
-    def safe_step(x, stick):
-        phi = np.concatenate((x, stick, [1.0]))
-        return suite.normalize_state(phi @ safe_weights)
+    safe_step = make_safe_step(safe_weights, dt)
 
     gains, _rmse, _count = fit_safe_controller(args.flights)
     membership = manual_window_splits({"train": args.train, "validation": args.validation})
@@ -316,6 +363,7 @@ def main() -> int:
                 "tracked": tracked[ds].astype(int).tolist(),
                 "tracked_full": tracked.astype(int).tolist(),
                 "bias": np.round(bias, 4).tolist(),
+                "autonomous": is_autonomous(name),
                 "segments": segment_rows,
             }
         )
@@ -329,8 +377,13 @@ def main() -> int:
             "linear_weights": np.round(weights["6DOF-LinearSS"], 6).tolist(),
             "residual_weights": np.round(weights["6DOF-RidgeResidual"], 6).tolist(),
             "safe_gains": {axis: np.round(coef, 5).tolist() for axis, coef in gains.items()},
-            "safe_linear_weights": np.round(safe_weights, 6).tolist(),
-            "safe_linear_weights": np.round(safe_weights, 6).tolist(),
+            "safe_invariant_weights": np.round(safe_weights, 8).tolist(),
+            "greybox": {
+                "parameter_names": list(SPORTCUB_PARAMETER_NAMES),
+                "parameters": np.round(weights["6DOF-GreyBoxOEM"]["theta"], 6).tolist(),
+                "fixed_parameters": weights["6DOF-GreyBoxOEM"]["spec"].fixed_parameters,
+                "max_deflection_deg": weights["6DOF-GreyBoxOEM"]["spec"].max_deflection_deg,
+            },
             "config": {
                 "mass": config.mass,
                 "gravity": config.gravity,

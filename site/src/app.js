@@ -232,6 +232,8 @@ function bindControls() {
   window.addEventListener("explorer-set-ic", (event) => {
     const { flightIndex, timeS } = event.detail;
     state.explorerOverlay = event.detail.overlay || null;
+    if (event.detail.methods) state.browserMethods = event.detail.methods;
+    renderPlaybackMethodPicker();
     document.querySelector("#playback-predict")?.classList.toggle("active", Boolean(event.detail.overlay?.anchored));
     if (event.detail.track) {
       state.playback = state.playback.filter((track) => track.id !== event.detail.track.id);
@@ -354,10 +356,18 @@ function bindControls() {
   document.querySelector("#playback-predict").addEventListener("click", () => {
     window.dispatchEvent(new CustomEvent("explorer-anchor-request", { detail: { timeS: state.playbackTimeS } }));
   });
+  document.querySelector("#playback-method").addEventListener("change", (event) => {
+    state.selectedMethods.clear();
+    state.selectedMethods.add(methodKey(event.target.value));
+    window.dispatchEvent(new CustomEvent("methods-changed", { detail: { methods: Array.from(state.selectedMethods) } }));
+    render();
+  });
   document.querySelector("#playback-fullscreen").addEventListener("click", () => {
-    const stage = document.querySelector(".playback-stage");
+    // Fullscreen the whole animation view so the playback controls (time
+    // bar, trail handles, Predict here) stay usable, not just the 3D stage.
+    const view = document.querySelector("#animation-view");
     if (document.fullscreenElement) document.exitFullscreen();
-    else stage.requestFullscreen();
+    else view.requestFullscreen();
   });
   document.addEventListener("fullscreenchange", () => {
     const button = document.querySelector("#playback-fullscreen");
@@ -613,18 +623,26 @@ function renderTradeoff(rows) {
   const nominal = rows.find((row) => cleanMethodName(row.method).includes("Nominal") && finiteNumber(row.validation_score));
   if (nominal) {
     const y = logScale(nominal.validation_score, yExtent[0], yExtent[1], margin.top + plotHeight, margin.top);
-    add("text", {
-      x: margin.left + plotWidth * 0.5,
-      y: Math.max(margin.top + 34, y - 18),
-      "text-anchor": "middle",
-      class: "known-label",
-    }, "known");
-    add("text", {
-      x: margin.left + plotWidth * 0.5,
-      y: Math.min(margin.top + plotHeight - 18, y + 34),
-      "text-anchor": "middle",
-      class: "unknown-label",
-    }, "unknown");
+    // Labels stay strictly on their own side of the nominal line and are
+    // dropped when that region is too thin to hold them.
+    const knownY = y - 10;
+    if (knownY > margin.top + 16) {
+      add("text", {
+        x: margin.left + plotWidth * 0.5,
+        y: knownY,
+        "text-anchor": "middle",
+        class: "known-label",
+      }, "known");
+    }
+    const unknownY = y + 22;
+    if (unknownY < margin.top + plotHeight - 6) {
+      add("text", {
+        x: margin.left + plotWidth * 0.5,
+        y: unknownY,
+        "text-anchor": "middle",
+        class: "unknown-label",
+      }, "unknown");
+    }
     add("line", {
       x1: margin.left,
       y1: y,
@@ -716,6 +734,33 @@ function toggleMethodSelection(key) {
   }
   window.dispatchEvent(new CustomEvent("methods-changed", { detail: { methods: Array.from(state.selectedMethods) } }));
   render();
+}
+
+function renderPlaybackMethodPicker() {
+  // Quick picker of browser-runnable prediction methods in the playback
+  // controls, so a method can be chosen in fullscreen without the
+  // leaderboard. It mirrors the leaderboard selection both ways.
+  const wrap = document.querySelector("#playback-method-wrap");
+  const select = document.querySelector("#playback-method");
+  if (!wrap || !select) return;
+  const methods = state.browserMethods || [];
+  const showing = Boolean(state.playbackTrackOverride) && methods.length > 0;
+  wrap.hidden = !showing;
+  if (!showing) return;
+  // With no leaderboard selection the explorer falls back to LinearSS, so
+  // the picker shows that reality instead of a separate "default" entry.
+  const selected = methods.find((m) => state.selectedMethods.has(methodKey(m))) || "6DOF-LinearSS";
+  const signature = `${methods.join("|")}#${selected}`;
+  if (select.dataset.signature === signature) return;
+  select.dataset.signature = signature;
+  select.innerHTML = "";
+  for (const method of methods) {
+    const option = document.createElement("option");
+    option.value = method;
+    option.textContent = method.replace("6DOF-", "");
+    select.append(option);
+  }
+  select.value = selected;
 }
 
 function renderDatasets() {
@@ -1423,6 +1468,14 @@ function setPlaybackTrack(track, force = false) {
         new THREE.BufferGeometry().setFromPoints(predPoints),
         new THREE.LineBasicMaterial({ color: prediction.color, linewidth: 2, transparent: true, opacity: 0.85 }),
       );
+      if (prediction.times?.length > 1) {
+        const predTimes = prediction.times;
+        predLine.userData.times = {
+          t0: predTimes[0],
+          dt: (predTimes[predTimes.length - 1] - predTimes[0]) / (predTimes.length - 1),
+          count: predPoints.length,
+        };
+      }
       playback.methodLines.push(predLine);
       playback.scene.add(predLine);
       if (prediction.times && prediction.quats) {
@@ -1440,8 +1493,12 @@ function setPlaybackTrack(track, force = false) {
       }
     }
   }
-  const methodColors = [0x111827, 0x7c3aed, 0x059669, 0xb45309, 0xbe123c];
-  selectedTraceSegments().forEach((trace, index) => {
+  const methodColors = [0x7c3aed, 0x059669, 0xb45309, 0xbe123c];
+  // The full-flight explorer computes free-run predictions on the fly, so the
+  // exported benchmark chunk traces would only duplicate them as stray dark
+  // lines and ghosts; they remain the overlay for non-explorer playback.
+  const traceOverlays = state.explorerOverlay ? [] : selectedTraceSegments();
+  traceOverlays.forEach((trace, index) => {
     if (!trace.position_enu_m?.length) return;
     const color = methodColors[index % methodColors.length];
     const tracePoints = trace.position_enu_m.map(enuToThree);
@@ -1453,6 +1510,14 @@ function setPlaybackTrack(track, force = false) {
       opacity: 0.78,
     });
     const traceLine = new THREE.Line(traceGeometry, traceMaterial);
+    if (trace.time_s?.length > 1) {
+      const traceTimes = trace.time_s;
+      traceLine.userData.times = {
+        t0: (trace.flightOffsetS || 0) + traceTimes[0],
+        dt: (traceTimes[traceTimes.length - 1] - traceTimes[0]) / (traceTimes.length - 1),
+        count: tracePoints.length,
+      };
+    }
     playback.methodLines.push(traceLine);
     playback.scene.add(traceLine);
     const traceAircraft = makeTransparentAircraftMesh(color);
@@ -1529,8 +1594,8 @@ function sampleTrack(trackOrSegment, elapsedS, options = {}) {
 }
 
 function applyTrailWindow(playback, segment) {
-  // Qualisys-style trail: only the measured track within [t - past, t + future]
-  // is drawn; predictions stay fully visible.
+  // Qualisys-style trail: every line (measured track, free-run predictions,
+  // chunk traces) is windowed to [t - past, t + future] of playback time.
   const tNow = state.playbackTimeS;
   const a = tNow - state.trailPastS;
   const b = tNow + state.trailFutureS;
@@ -1651,6 +1716,7 @@ function renderPlaybackControls(track) {
     const wrapper = segmentSelect.closest("label");
     if (wrapper) wrapper.style.display = state.playbackTrackOverride ? "none" : "";
   }
+  renderPlaybackMethodPicker();
   if (segmentSelect && track && !state.playbackTrackOverride) {
     const segments = track.segments?.length ? track.segments : [track];
     segmentSelect.innerHTML = "";

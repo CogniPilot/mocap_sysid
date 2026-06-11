@@ -393,6 +393,10 @@ button:hover {
   flex: 0 1 200px;
 }
 
+.playback-controls .method-label {
+  flex: 0 1 170px;
+}
+
 .playback-controls .speed-label {
   width: 120px;
 }
@@ -427,6 +431,7 @@ button:hover {
 
 .scrub-label,
 .speed-label,
+.method-label,
 .segment-label {
   min-width: 0;
 }
@@ -823,16 +828,28 @@ svg text {
 
 
 
-.playback-stage:fullscreen {
+#animation-view:fullscreen {
   width: 100vw;
   height: 100vh;
+  display: flex;
+  flex-direction: column;
   background: #262b31;
 }
 
-.playback-stage:fullscreen .aircraft-playback {
-  height: 100vh;
+#animation-view:fullscreen .playback-stage {
+  flex: 1;
+  min-height: 0;
+}
+
+#animation-view:fullscreen .aircraft-playback {
+  height: 100%;
   border: none;
   border-radius: 0;
+}
+
+#animation-view:fullscreen .playback-controls {
+  padding: 0.6rem 1rem;
+  background: #1a1f24;
 }
 
 #playback-fullscreen {

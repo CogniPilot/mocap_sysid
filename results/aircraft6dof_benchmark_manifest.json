@@ -14,6 +14,7 @@
     "6DOF-Frequency-Stitching",
     "6DOF-Frequency-Welch",
     "6DOF-GP-RBF",
+    "6DOF-GreyBoxOEM",
     "6DOF-Koopman-EDMD",
     "6DOF-LinearSS",
     "6DOF-Model-Stitching",
@@ -31,7 +32,7 @@
   ],
   "metric": "Validation score is full-state mean NRMSE for state predictors and mocap-output NRMSE for 6DOF-OEM-MocapOutput.",
   "model_family": "aircraft6dof",
-  "result_rows": 234,
+  "result_rows": 238,
   "scenarios": [
     "aircraft_6dof_aggressive",
     "aircraft_6dof_open_loop",
