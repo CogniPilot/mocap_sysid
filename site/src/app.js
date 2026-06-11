@@ -1006,6 +1006,12 @@ new GLTFLoader().load(
       if (!mesh) continue;
       const source = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry;
       const pos = source.getAttribute("position");
+      const materialIndexOf = (tri) => {
+        for (const group of source.groups) {
+          if (tri >= group.start && tri < group.start + group.count) return group.materialIndex || 0;
+        }
+        return 0;
+      };
       const kept = [];
       for (let tri = 0; tri < pos.count; tri += 3) {
         const cx = (pos.getX(tri) + pos.getX(tri + 1) + pos.getX(tri + 2)) / 3;
@@ -1025,6 +1031,22 @@ new GLTFLoader().load(
       }
       const cleaned = new THREE.BufferGeometry();
       for (const [attrName, attr] of Object.entries(attributes)) cleaned.setAttribute(attrName, attr);
+      // Multi-material meshes (the wheels: black tire + light hub) address
+      // their materials through geometry groups; rebuild them for the kept
+      // triangles or everything renders with material 0.
+      if (source.groups && source.groups.length) {
+        let runStart = 0;
+        let runMaterial = kept.length ? materialIndexOf(kept[0]) : 0;
+        kept.forEach((tri, idx) => {
+          const m = materialIndexOf(tri);
+          if (m !== runMaterial) {
+            cleaned.addGroup(runStart * 3, (idx - runStart) * 3, runMaterial);
+            runStart = idx;
+            runMaterial = m;
+          }
+        });
+        if (kept.length) cleaned.addGroup(runStart * 3, (kept.length - runStart) * 3, runMaterial);
+      }
       mesh.geometry = cleaned;
     }
     // The asset authors pivots as hinge-location empties that are siblings of
