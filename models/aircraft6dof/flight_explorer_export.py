@@ -301,16 +301,16 @@ def train_methods(train_path: Path) -> dict[str, object]:
     protected = 1 + (x.shape[-1] - 3) + u.shape[-1]
     phi_lin = suite.linear_features(xk, uk)
     phi_poly = suite.poly_features(xk, uk, degree=2)
-    eq_w, eq_m, eq_s = suite.fit_standardized_ridge(phi_lin, dxdt, RIDGE)
-    sindy_w, sindy_m, sindy_s = suite.stlsq_fit(phi_poly, dxdt, 10.0 * RIDGE, fraction=0.06, protected=protected)
-    edmd_w, edmd_m, edmd_s = suite.fit_standardized_ridge(phi_poly, xkp1 - xk, 100.0 * RIDGE)
-    sym_w, sym_m, sym_s = suite.fit_standardized_ridge(phi_poly, xkp1 - xk, RIDGE)
+    eq_w, eq_m, eq_s = suite.fit_standardized_ridge(phi_lin, dxdt[:, 3:], RIDGE)
+    sindy_w, sindy_m, sindy_s = suite.stlsq_fit(phi_poly, dxdt[:, 3:], 10.0 * RIDGE, fraction=0.06, protected=protected)
+    edmd_w, edmd_m, edmd_s = suite.fit_standardized_ridge(phi_poly, (xkp1 - xk)[:, 3:], 100.0 * RIDGE)
+    sym_w, sym_m, sym_s = suite.fit_standardized_ridge(phi_poly, (xkp1 - xk)[:, 3:], RIDGE)
     sym_w = suite.sparsify_weights(sym_w, fraction=0.12, protected=protected)
     history, targets = [], []
     for trial in range(x.shape[0]):
         for index in range(HANKEL_LAG - 1, x.shape[1] - 1):
             history.append(np.concatenate((x[trial, index - HANKEL_LAG + 1 : index + 1, 3:].reshape(-1), u[trial, index], [1.0])))
-            targets.append(x[trial, index + 1] - x[trial, index])
+            targets.append(x[trial, index + 1, 3:] - x[trial, index, 3:])
     hankel_w = suite.ridge_fit(np.asarray(history)[:, None, :], np.asarray(targets)[:, None, :], RIDGE)
     rng = np.random.default_rng(7)
     z_all = np.concatenate((xk[:, 3:], uk), axis=1)
@@ -319,7 +319,7 @@ def train_methods(train_path: Path) -> dict[str, object]:
     length_scale = np.where(length_scale > 1e-6, length_scale, 1.0)
     phi_rbf = np.concatenate((suite.rbf_features(z_all, centers, length_scale), np.ones((len(z_all), 1))), axis=1)
     residual_flat = residual_target.reshape(-1, x.shape[-1])
-    gp_w = np.linalg.solve(phi_rbf.T @ phi_rbf + 5.0 * RIDGE * np.eye(phi_rbf.shape[1]), phi_rbf.T @ residual_flat)
+    gp_w = np.linalg.solve(phi_rbf.T @ phi_rbf + 5.0 * RIDGE * np.eye(phi_rbf.shape[1]), phi_rbf.T @ residual_flat[:, 3:])
     surrogates = {
         "6DOF-GP-RBF": {"kind": "rbf_residual", "weights": gp_w, "centers": centers, "length_scale": length_scale},
         "6DOF-EquationError-LS": {"kind": "derivative", "degree": 1, "weights": eq_w, "mean": eq_m, "scale": eq_s},
@@ -361,7 +361,7 @@ def make_stepper(method: str, weights, dt: float, config: Aircraft6DOFConfig):
                 if memory["last"] is None or not np.array_equal(memory["last"], x):
                     memory["hist"] = [np.asarray(x, dtype=float).copy()] * lag
                 phi = np.concatenate((np.concatenate([h[3:] for h in memory["hist"][-lag:]]), u, [1.0]))
-                nxt = suite.normalize_state(x + phi @ spec["weights"])
+                nxt = suite.kinematic_step(x, x[3:] + phi @ spec["weights"], dt)
                 memory["hist"] = (memory["hist"] + [nxt.copy()])[-lag:]
                 memory["last"] = nxt
                 return nxt
@@ -374,7 +374,7 @@ def make_stepper(method: str, weights, dt: float, config: Aircraft6DOFConfig):
                 base = nominal_rk4_step(x, u, dt, config)
                 z = np.concatenate((x[3:], u))[None, :]
                 phi = np.concatenate((suite.rbf_features(z, spec["centers"], spec["length_scale"]), np.ones((1, 1))), axis=1)[0]
-                return suite.normalize_state(base + phi @ spec["weights"])
+                return suite.normalize_state(np.concatenate((base[0:3], base[3:] + phi @ spec["weights"])))
 
             return rbf_step
 
@@ -386,8 +386,8 @@ def make_stepper(method: str, weights, dt: float, config: Aircraft6DOFConfig):
             )[0]
             delta = suite.apply_standardized(phi, spec["weights"], spec["mean"], spec["scale"])
             if spec["kind"] == "derivative":
-                return suite.normalize_state(x + dt * delta)
-            return suite.normalize_state(x + delta)
+                return suite.kinematic_step(x, x[3:] + dt * delta, dt)
+            return suite.kinematic_step(x, x[3:] + delta, dt)
 
         return surrogate_step
 

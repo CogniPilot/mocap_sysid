@@ -419,6 +419,8 @@ function renderPlaybackTabs() {
   const animation = document.querySelector("#animation-view");
   const history = document.querySelector("#history-view");
   const splits = document.querySelector("#splits-view");
+  const modelsView = document.querySelector("#models-view");
+  if (modelsView) modelsView.hidden = state.playbackView !== "models";
   if (animation) animation.hidden = state.playbackView !== "animation";
   if (history) history.hidden = state.playbackView !== "history";
   if (splits) splits.hidden = state.playbackView !== "splits";
