@@ -460,6 +460,12 @@ function recomputePredictions() {
   }
 }
 
+function safeScoreNote() {
+  const scores = ex.data?.models?.safe_scores;
+  if (!scores || scores.validation_pos_err_5s_m == null) return "";
+  return ` (currently ${scores.validation_pos_err_5s_m.toFixed(1)} m mean over ${scores.validation_windows} held-out windows)`;
+}
+
 function renderSplitsView() {
   // "Data Splits" tab: every flight as a timeline colored by segmentation
   // class, with the manual maneuver windows marked by their train/validation
@@ -496,15 +502,25 @@ function renderSplitsView() {
     bar.className = "splits-bar";
     bar.style.background = `linear-gradient(to right, ${stops.join(", ")})`;
     lane.append(bar);
-    // Train/validation membership strips over the manual maneuver windows.
+    // Train/validation membership strips: manual maneuver windows (bare
+    // airframe methods) above the bar, stabilized windows (closed-loop SAFE
+    // model) below it.
+    const addStrip = (start, stop, split, title, below) => {
+      const strip = document.createElement("div");
+      strip.className = `splits-window splits-${split}${below ? " splits-below" : ""}`;
+      strip.style.left = `${(100 * start) / duration}%`;
+      strip.style.width = `${(100 * (stop - start)) / duration}%`;
+      strip.title = title;
+      lane.append(strip);
+    };
     for (const segment of f.segments) {
       if (!segment.split) continue;
-      const strip = document.createElement("div");
-      strip.className = `splits-window splits-${segment.split}`;
-      strip.style.left = `${(100 * segment.start_s) / duration}%`;
-      strip.style.width = `${(100 * (segment.stop_s - segment.start_s)) / duration}%`;
-      strip.title = `${segment.kind} ${segment.start_s}-${segment.stop_s} s -> ${segment.split}`;
-      lane.append(strip);
+      addStrip(segment.start_s, segment.stop_s, segment.split,
+        `${segment.kind} ${segment.start_s}-${segment.stop_s} s -> ${segment.split} (airframe methods)`, false);
+    }
+    for (const window of f.stabilized_splits || []) {
+      addStrip(window.start_s, window.stop_s, window.split,
+        `stabilized ${window.start_s}-${window.stop_s} s -> ${window.split} (closed-loop SAFE model)`, true);
     }
     row.append(lane);
     chart.append(row);
@@ -514,7 +530,7 @@ function renderSplitsView() {
   legend.innerHTML = [
     ...Object.entries(LABEL_COLORS).map(([label, color]) => `<span><i style="background:${color}"></i>${label.replace("_", " ")}</span>`),
     '<span><i style="background:#4a5159"></i>mocap dropout</span>',
-    '<span><i class="splits-train-key"></i>train window</span>',
+    '<span><i class="splits-train-key"></i>train window (above: airframe methods, below: SAFE model)</span>',
     '<span><i class="splits-validation-key"></i>validation window</span>',
   ].join("");
   chart.append(legend);
@@ -527,10 +543,12 @@ function renderSplitsView() {
       window becomes validation), so both splits span multiple flights and battery states; models are fitted on
       the train chunks only and scored on held-out validation chunks.</p>
       <p>Stabilized segments (blue) never train the bare-airframe methods: the SAFE inner loop adds hidden surface
-      corrections. Instead, every tracked stabilized sample — excluding the autonomous flight, whose lateral
-      commands bypass the recorded sticks — trains the separate closed-loop SAFE model used to free-run through
-      SAFE segments. Ground (brown) windows feed the rolling-friction and thrust analysis, ground effect (teal)
-      is kept out of all airframe fits, and mocap dropouts (gray) are never trained on or scored.</p>`;
+      corrections. They train the separate <em>closed-loop SAFE model</em> instead, with the same discipline as the
+      manual windows: the tracked stabilized spans are cut into ~10&nbsp;s windows (strips below the bar), every third
+      window per flight is held out, the model fits on the train windows only, and the held-out windows score it by
+      5&nbsp;s free-run position error${safeScoreNote()}. The autonomous flight is excluded: its lateral commands
+      bypass the recorded sticks. Ground (brown) windows feed the rolling-friction and thrust analysis, ground
+      effect (teal) is kept out of all airframe fits, and mocap dropouts (gray) are never trained on or scored.</p>`;
   }
 }
 

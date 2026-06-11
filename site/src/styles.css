@@ -474,6 +474,14 @@ button:hover {
   text-transform: uppercase;
 }
 
+.select-rect {
+  fill: rgba(110, 168, 254, 0.12);
+  stroke: var(--accent);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+}
+
 .nominal-line {
   stroke: var(--nominal);
   stroke-width: 1.8;
@@ -851,12 +859,12 @@ svg text {
 
 .splits-lane {
   position: relative;
-  height: 26px;
+  height: 32px;
 }
 
 .splits-bar {
   position: absolute;
-  inset: 6px 0 0;
+  inset: 6px 0;
   border: 1px solid var(--line);
   border-radius: 4px;
 }
@@ -866,6 +874,11 @@ svg text {
   top: 0;
   height: 5px;
   border-radius: 2px;
+}
+
+.splits-window.splits-below {
+  top: auto;
+  bottom: 0;
 }
 
 .splits-train,

@@ -1872,10 +1872,14 @@ flight-mode channel with the state carried continuously across each switch:
 while the pilot flies manual the bare airframe integrates the recorded
 sticks re-referenced by the per-flight trim bias, and while SAFE is engaged
 the free run uses a \emph{directly identified closed-loop model}
-ridge-fitted on every tracked
-stabilized sample of the session rather than composing the bare airframe
-with the inverse-dynamics controller estimate: the closed loop is abundantly
-excited by the lap data and is exactly what stabilized segments replay,
+ridge-fitted on the tracked stabilized data rather than composing the bare
+airframe with the inverse-dynamics controller estimate: the closed loop is
+abundantly excited by the lap data and is exactly what stabilized segments
+replay. The stabilized spans receive the same train/validation discipline
+as the manual maneuver windows: they are cut into ten-second windows
+assigned round-robin per flight with every third window held out, the model
+fits on the train windows only, and the held-out windows score it by
+free-run position error,
 whereas the decomposition route inherits the weakly conditioned controller
 estimate (on five-second stabilized free-runs the direct fit is roughly
 four-fold better). The regression is restricted to the heading- and

@@ -530,7 +530,7 @@ function renderTradeoff(rows) {
 
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-  svg.setAttribute("aria-label", "Cost-error tradeoff. Mouse wheel zooms, drag pans, double-click resets.");
+  svg.setAttribute("aria-label", "Cost-error tradeoff. Mouse wheel zooms, drag pans, shift-drag selects a zoom box, double-click resets.");
   const eventPoint = (event) => {
     const rect = svg.getBoundingClientRect();
     const x = (event.clientX - rect.left) * width / Math.max(rect.width, 1);
@@ -564,6 +564,47 @@ function renderTradeoff(rows) {
     if (event.button !== 0 || event.target.classList?.contains("tradeoff-point")) return;
     const point = eventPoint(event);
     if (!inPlot(point)) return;
+    if (event.shiftKey) {
+      // Shift-drag: rectangular select, zooming to the released box.
+      event.preventDefault();
+      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      rect.setAttribute("class", "select-rect");
+      svg.append(rect);
+      const clampPoint = (p) => ({
+        x: clamp(p.x, margin.left, margin.left + plotWidth),
+        y: clamp(p.y, margin.top, margin.top + plotHeight),
+      });
+      const start = clampPoint(point);
+      const update = (moveEvent) => {
+        const now = clampPoint(eventPoint(moveEvent));
+        rect.setAttribute("x", Math.min(start.x, now.x));
+        rect.setAttribute("y", Math.min(start.y, now.y));
+        rect.setAttribute("width", Math.abs(now.x - start.x));
+        rect.setAttribute("height", Math.abs(now.y - start.y));
+        return now;
+      };
+      const finish = (upEvent) => {
+        document.removeEventListener("pointermove", update);
+        document.removeEventListener("pointerup", finish);
+        document.removeEventListener("pointercancel", finish);
+        rect.remove();
+        const end = clampPoint(eventPoint(upEvent));
+        if (Math.abs(end.x - start.x) < 8 || Math.abs(end.y - start.y) < 8) return;
+        const a = logAtPoint(start);
+        const b = logAtPoint(end);
+        setLogView({
+          xMin: Math.min(a.x, b.x),
+          xMax: Math.max(a.x, b.x),
+          yMin: Math.min(a.y, b.y),
+          yMax: Math.max(a.y, b.y),
+        });
+      };
+      document.addEventListener("pointermove", update);
+      document.addEventListener("pointerup", finish);
+      document.addEventListener("pointercancel", finish);
+      svg.setPointerCapture(event.pointerId);
+      return;
+    }
     const dragStart = { clientX: event.clientX, clientY: event.clientY, view: { ...state.tradeoffZoom } };
     const moveDrag = (moveEvent) => {
       const dx = (moveEvent.clientX - dragStart.clientX) * width / Math.max(svg.getBoundingClientRect().width, 1);
@@ -620,28 +661,30 @@ function renderTradeoff(rows) {
   add("rect", { x: margin.left, y: margin.top, width: plotWidth, height: plotHeight, fill: "none", stroke: "var(--line)" });
   add("text", { x: margin.left + plotWidth / 2, y: height - 8, "text-anchor": "middle", class: "axis-label" }, "training time [s]");
   add("text", { x: 18, y: margin.top + plotHeight / 2, transform: `rotate(-90 18 ${margin.top + plotHeight / 2})`, "text-anchor": "middle", class: "axis-label" }, "validation score (lower is better)");
-  add("text", { x: margin.left + plotWidth, y: margin.top - 6, "text-anchor": "end", class: "plot-hint" }, "wheel zoom | drag pan | double-click reset");
+  add("text", { x: margin.left + plotWidth, y: margin.top - 6, "text-anchor": "end", class: "plot-hint" }, "wheel zoom | drag pan | shift-drag select | double-click reset");
 
   const nominal = rows.find((row) => cleanMethodName(row.method).includes("Nominal") && finiteNumber(row.validation_score));
   if (nominal) {
     const y = logScale(nominal.validation_score, yExtent[0], yExtent[1], margin.top + plotHeight, margin.top);
     // Labels stay strictly on their own side of the nominal line and are
-    // dropped when that region is too thin to hold them.
-    const knownY = y - 10;
-    if (knownY > margin.top + 16) {
+    // dropped when that region is too thin to hold the 42 px glyphs:
+    // "known" hangs its baseline above the line, "unknown" hangs its top
+    // below it (dominant-baseline so no part of a glyph crosses the line).
+    const labelHeight = 46;
+    if (y - margin.top > labelHeight) {
       add("text", {
         x: margin.left + plotWidth * 0.5,
-        y: knownY,
+        y: y - 10,
         "text-anchor": "middle",
         class: "known-label",
       }, "known");
     }
-    const unknownY = y + 22;
-    if (unknownY < margin.top + plotHeight - 6) {
+    if (margin.top + plotHeight - y > labelHeight) {
       add("text", {
         x: margin.left + plotWidth * 0.5,
-        y: unknownY,
+        y: y + 10,
         "text-anchor": "middle",
+        "dominant-baseline": "hanging",
         class: "unknown-label",
       }, "unknown");
     }
