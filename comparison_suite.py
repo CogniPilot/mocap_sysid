@@ -2597,8 +2597,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--input-channel",
         choices=["u_act", "u_cmd"],
-        default="u_act",
-        help="input channel supplied to identification methods; u_cmd represents practical external pilot commands",
+        default="u_cmd",
+        help=(
+            "input channel supplied to identification methods. u_cmd (default) is the external "
+            "pilot command -- the only signal a fair predictor may consume. u_act is the true "
+            "actuator deflection after the hidden controller and lag: an oracle diagnostic that "
+            "leaks the closed-loop response into validation rollouts."
+        ),
     )
     parser.add_argument(
         "--state-source",
