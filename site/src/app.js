@@ -1074,9 +1074,9 @@ new GLTFLoader().load(
     scene.position.sub(center);
     const wrapper = new THREE.Group();
     wrapper.add(scene);
-    // Static cosmetic pitch: the mesh sits ~5 deg nose-low relative to the
-    // body frame; tip the nose up (asset X is the span axis).
-    scene.rotation.x = -5 * Math.PI / 180;
+    // Static cosmetic pitch: the mesh sits nose-low relative to the body
+    // frame; tip the nose up (asset X is the span axis).
+    scene.rotation.x = -10 * Math.PI / 180;
     // glTF assets face +Z with +Y up; the playback body frame is x-forward.
     wrapper.rotation.y = Math.PI / 2;
     // Normalize the span to the procedural model's 2.2 units so the existing
