@@ -471,7 +471,10 @@ function renderAll() {
     const used = Object.keys(ex.predictions).map((m) => m.replace("6DOF-", "")).join(", ");
     const fallback = ex.selectedMethods.size ? "" : " (no browser-runnable method selected in the leaderboard; using LinearSS)";
     const note = ex.anchorNote ? ` [${ex.anchorNote}]` : "";
-    status.textContent = `Free run from t = ${ex.anchorTimeS.toFixed(2)} s with ${used}${fallback}${note}; SAFE controller closes the loop through stabilized segments.`;
+    const dead = flight().autonomous
+      ? " Warning: this autonomous flight was flown by an offboard autopilot whose lateral commands are not in the recorded sticks, so free runs cannot anticipate its turns."
+      : "";
+    status.textContent = `Free run from t = ${ex.anchorTimeS.toFixed(2)} s with ${used}${fallback}${note}; SAFE controller closes the loop through stabilized segments.${dead}`;
   }
 }
 
@@ -505,6 +508,8 @@ function publishOverlay(timeS) {
         flightIndex: ex.flightIndex,
         timeS: timeS == null ? 0 : timeS,
         overlay,
+        // Browser-runnable methods, so the playback can offer a quick picker.
+        methods: ex.data.methods,
         // Carry the full-flight track with the event so registration can
         // never be lost to module load order.
         track: ex.playbackTrack,

@@ -101,6 +101,20 @@ def ned_to_enu_pos(pos_ned: np.ndarray) -> np.ndarray:
     return np.column_stack([pos_ned[:, 1], pos_ned[:, 0], -pos_ned[:, 2]])
 
 
+def is_autonomous(name: str) -> bool:
+    """Whether a flight record was flown by the offboard autopilot.
+
+    The autopilot's lateral commands never reach the recorded transmitter
+    channels (the aileron stick barely moves and the rudder is constant while
+    the aircraft banks through laps), so stick-driven identification and
+    prediction are unsound for these records. A stick-variance test cannot
+    separate them from piloted elevator-only flights (the autopilot passes
+    pitch commands through the elevator channel), so the recording name is
+    the authoritative marker.
+    """
+    return name.startswith("auto")
+
+
 def euler_from_quat_array(quat: np.ndarray) -> np.ndarray:
     q = quat / np.maximum(np.linalg.norm(quat, axis=1, keepdims=True), 1e-12)
     q0, q1, q2, q3 = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
@@ -141,6 +155,12 @@ def train_safe_closed_loop(data: np.lib.npyio.NpzFile) -> np.ndarray:
             else np.ones(len(x), dtype=bool)
         )
         labels = sample_labels(x, mode)
+        if is_autonomous(str(data["segment_names"][flight_index])):
+            # The autopilot's lateral commands bypass the recorded sticks, so
+            # these stabilized samples teach the model that a neutral stick
+            # keeps turning.
+            print(f"closed-loop SAFE fit: excluding {data['segment_names'][flight_index]} (autonomous)")
+            continue
         keep = (labels == 2) & tracked
         keep_next = keep[:-1] & keep[1:]
         euler = euler_from_quat_array(x[:, 6:10])
@@ -343,6 +363,7 @@ def main() -> int:
                 "tracked": tracked[ds].astype(int).tolist(),
                 "tracked_full": tracked.astype(int).tolist(),
                 "bias": np.round(bias, 4).tolist(),
+                "autonomous": is_autonomous(name),
                 "segments": segment_rows,
             }
         )

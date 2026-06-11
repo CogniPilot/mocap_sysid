@@ -232,6 +232,8 @@ function bindControls() {
   window.addEventListener("explorer-set-ic", (event) => {
     const { flightIndex, timeS } = event.detail;
     state.explorerOverlay = event.detail.overlay || null;
+    if (event.detail.methods) state.browserMethods = event.detail.methods;
+    renderPlaybackMethodPicker();
     document.querySelector("#playback-predict")?.classList.toggle("active", Boolean(event.detail.overlay?.anchored));
     if (event.detail.track) {
       state.playback = state.playback.filter((track) => track.id !== event.detail.track.id);
@@ -354,10 +356,18 @@ function bindControls() {
   document.querySelector("#playback-predict").addEventListener("click", () => {
     window.dispatchEvent(new CustomEvent("explorer-anchor-request", { detail: { timeS: state.playbackTimeS } }));
   });
+  document.querySelector("#playback-method").addEventListener("change", (event) => {
+    state.selectedMethods.clear();
+    state.selectedMethods.add(methodKey(event.target.value));
+    window.dispatchEvent(new CustomEvent("methods-changed", { detail: { methods: Array.from(state.selectedMethods) } }));
+    render();
+  });
   document.querySelector("#playback-fullscreen").addEventListener("click", () => {
-    const stage = document.querySelector(".playback-stage");
+    // Fullscreen the whole animation view so the playback controls (time
+    // bar, trail handles, Predict here) stay usable, not just the 3D stage.
+    const view = document.querySelector("#animation-view");
     if (document.fullscreenElement) document.exitFullscreen();
-    else stage.requestFullscreen();
+    else view.requestFullscreen();
   });
   document.addEventListener("fullscreenchange", () => {
     const button = document.querySelector("#playback-fullscreen");
@@ -724,6 +734,33 @@ function toggleMethodSelection(key) {
   }
   window.dispatchEvent(new CustomEvent("methods-changed", { detail: { methods: Array.from(state.selectedMethods) } }));
   render();
+}
+
+function renderPlaybackMethodPicker() {
+  // Quick picker of browser-runnable prediction methods in the playback
+  // controls, so a method can be chosen in fullscreen without the
+  // leaderboard. It mirrors the leaderboard selection both ways.
+  const wrap = document.querySelector("#playback-method-wrap");
+  const select = document.querySelector("#playback-method");
+  if (!wrap || !select) return;
+  const methods = state.browserMethods || [];
+  const showing = Boolean(state.playbackTrackOverride) && methods.length > 0;
+  wrap.hidden = !showing;
+  if (!showing) return;
+  // With no leaderboard selection the explorer falls back to LinearSS, so
+  // the picker shows that reality instead of a separate "default" entry.
+  const selected = methods.find((m) => state.selectedMethods.has(methodKey(m))) || "6DOF-LinearSS";
+  const signature = `${methods.join("|")}#${selected}`;
+  if (select.dataset.signature === signature) return;
+  select.dataset.signature = signature;
+  select.innerHTML = "";
+  for (const method of methods) {
+    const option = document.createElement("option");
+    option.value = method;
+    option.textContent = method.replace("6DOF-", "");
+    select.append(option);
+  }
+  select.value = selected;
 }
 
 function renderDatasets() {
@@ -1456,8 +1493,12 @@ function setPlaybackTrack(track, force = false) {
       }
     }
   }
-  const methodColors = [0x111827, 0x7c3aed, 0x059669, 0xb45309, 0xbe123c];
-  selectedTraceSegments().forEach((trace, index) => {
+  const methodColors = [0x7c3aed, 0x059669, 0xb45309, 0xbe123c];
+  // The full-flight explorer computes free-run predictions on the fly, so the
+  // exported benchmark chunk traces would only duplicate them as stray dark
+  // lines and ghosts; they remain the overlay for non-explorer playback.
+  const traceOverlays = state.explorerOverlay ? [] : selectedTraceSegments();
+  traceOverlays.forEach((trace, index) => {
     if (!trace.position_enu_m?.length) return;
     const color = methodColors[index % methodColors.length];
     const tracePoints = trace.position_enu_m.map(enuToThree);
@@ -1675,6 +1716,7 @@ function renderPlaybackControls(track) {
     const wrapper = segmentSelect.closest("label");
     if (wrapper) wrapper.style.display = state.playbackTrackOverride ? "none" : "";
   }
+  renderPlaybackMethodPicker();
   if (segmentSelect && track && !state.playbackTrackOverride) {
     const segments = track.segments?.length ? track.segments : [track];
     segmentSelect.innerHTML = "";
