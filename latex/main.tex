@@ -1940,6 +1940,40 @@ rotating the airframe by hand in Experienced mode produces no surface
 response, so no rate feedback is active there and the fitted rate-damping
 coefficients are genuine bare-airframe aerodynamic derivatives.
 
+\paragraph{Identifiability and uncertainty.} Cram\'er--Rao lower bounds
+from the output-error Jacobian at the solution (residual coloring
+uncorrected, so the bounds are optimistic) split the 22 parameters into
+three classes. Well identified (1--8\% relative standard deviation): the
+lift line ($C_{L_0}$ 1.0\%, $C_{L_\alpha}$ 3.1\%), all primary damping
+and stiffness terms ($K_{M_q}$ 2.7\%, $K_{L_p}$ 3.5\%, $K_{N_\beta}$
+2.5\%), and the control effectivenesses. Weakly identified: $K_T$
+(14.8\%), $K_{L_{\delta a}}$ (17.2\%), $K_{N_0}$ (27\%). Unidentifiable:
+$C_{D_{CL^2}}$ at 368\% --- the formal confirmation of its physical
+zero-bound pin. Four parameter pairs are strongly coupled
+($|r|>0.9$): $C_{L_0}\!\leftrightarrow\!C_{L_\alpha}$ and
+$K_{M_0}\!\leftrightarrow\!K_{M_\alpha}$ (the laps occupy a narrow
+angle-of-attack band, so intercept and slope trade off), and
+$K_{L_0}\!\leftrightarrow\!K_{L_{\delta r}}$,
+$K_{N_0}\!\leftrightarrow\!K_{N_{\delta r}}$ (the rudder rides near a
+constant trim, aliasing its effectiveness with the moment biases). The
+remedies are input-design items: wider angle-of-attack excitation and
+rudder doublets about varied trims. The full covariance diagnostics are
+written into the fitted-parameter artifact.
+
+\paragraph{Actuator lag and battery decay: tested, not identifiable here.}
+A 25-parameter extension adding first-order servo and motor lag states and
+a linear battery thrust-decay term was fitted and gated on held-out data:
+all three new parameters pinned at their bounds (both lags at their minima,
+the decay at its maximum) and validation NRMSE \emph{worsened} from 0.106
+to 0.130. The mechanism is observability: the 3-2-1-1 excitation at
+2--4\,rad/s cannot see a $\sim$30\,ms servo pole, and within-flight
+maneuver placement confounds the per-flight-time decay term, which then
+absorbs unrelated trends. The lag-augmented model is retained in the code
+for reuse once dedicated excitation exists; the battery effect remains
+quantified independently by the ground-roll analysis, and folding those
+throttle-step ground runs into the flight fit is the identified path to a
+recoverable $K_B$.
+
 \subsection{6-DOF Baseline Methods}
 
 \paragraph{6DOF-NominalGreyBox.}
@@ -2400,8 +2434,27 @@ Future methods should be added only when the repository contains executable code
 This appendix presents each implemented method as a self-contained unit ---
 approach, implementation, and results --- so a reviewer can audit the code
 against the stated algorithm and the claims against the generated numbers.
-Validation scores are full-state mean NRMSE over open-loop rollouts (lower is
-better); ``synthetic'' results average the four simulated scenarios and
+Unless stated otherwise, every score in this appendix is one of the
+following precisely defined quantities, all computed on open-loop rollouts
+that receive only an initial state and the recorded pilot commands (rule
+R1). \emph{Full-state mean NRMSE} (the leaderboard ``validation score''):
+for each of the 13 state channels, the root-mean-square error between the
+rollout and the measured validation states, pooled over all validation
+chunks and samples, is divided by that channel's min-to-max range in the
+validation truth; the score is the unweighted mean of the 13 normalized
+values. Quaternion signs are aligned to the truth before scoring (a gauge
+fix, $q\equiv-q$); non-finite rollouts score $10^9$ and physically
+diverged rollouts are flagged in a separate column rather than masked.
+\emph{Pose RMSE} (reported in meters): the RMSE of the 3-D position
+channels alone over the same rollouts, unnormalized. \emph{Grey-box
+chunk NRMSE}: the same range-normalized construction applied to the
+grey-box's 60\,Hz chunk rollouts over its twelve Euler states.
+\emph{One-step dynamic residual}: the Euclidean norm of the model's
+single-step prediction error restricted to the six dynamic states
+(body velocities and rates, in their native mixed units), used only for
+regime comparisons such as the saturation analysis. The five-second
+free-run position metric used for the SAFE model is defined in its results
+paragraph. ``Synthetic'' results average the four simulated scenarios and
 ``real'' results are the Sport Cub motion-capture datasets (4/17 and 5/22)
 with mocap-derived states. The authoritative code is
 \texttt{models/aircraft6dof/comparison\_suite.py},
@@ -2497,12 +2550,25 @@ the original $K_T$ cap of 0.85\,m/s$^2$ per unit throttle could not balance
 cruise drag ($\approx$2.3 required), pinning $K_T$, $C_{L_0}$, and
 $C_{L_\alpha}$; the fitter now records parameters within 1\% of the box.
 $C_{D_{CL^2}}$ at its physical zero bound is accepted (induced drag is
-weakly identifiable over the narrow $C_L$ range).
+weakly identifiable over the narrow $C_L$ range). A 25-parameter extension
+adding servo/motor lag states and battery thrust decay was implemented and
+gated out on held-out data (all three added parameters pinned at bounds,
+validation worsened 0.106 $\rightarrow$ 0.130): the recorded 2--4\,rad/s
+excitation cannot observe a $\sim$30\,ms servo pole, and maneuver
+placement confounds the per-flight-time decay term.
 \paragraph{Results.} Real data 0.158 (4/17) and 0.102 (5/22) --- the
 reference physical model. Fitted values are physically plausible
 ($C_{L_0}=1.21$, $C_{L_\alpha}=3.59$ for a low-Reynolds cambered foam wing;
 $K_T=1.36$; $C_{m_q}$-type damping $-24.7$) and the lateral control signs
-match the real airframe (opposite the synthetic convention). Not run on
+match the real airframe (opposite the synthetic convention).
+Cram\'er--Rao analysis identifies the lift line, damping/stiffness, and
+control effectivenesses to 1--8\% relative standard deviation, finds
+$C_{D_{CL^2}}$ unidentifiable (368\%), and exposes four strong couplings
+($C_{L_0}\!\leftrightarrow\!C_{L_\alpha}$,
+$K_{M_0}\!\leftrightarrow\!K_{M_\alpha}$,
+$K_{L_0}\!\leftrightarrow\!K_{L_{\delta r}}$,
+$K_{N_0}\!\leftrightarrow\!K_{N_{\delta r}}$) traced to the narrow
+angle-of-attack band and the near-constant rudder trim. Not run on
 synthetic scenarios (the spec encodes the Sport Cub airframe).
 
 \subsection{6DOF-LinearSS}
@@ -2703,9 +2769,21 @@ it with no structure change. Stabilized spans are cut into ten-second
 windows, round-robin per flight, every third held out; the autonomous
 flight is excluded (its lateral commands bypass the recorded sticks --- the
 rudder channel is constant while the aircraft banks).
-\paragraph{Results.} Held-out five-second free-run position error 2.98\,m
-over 11 windows (52k training samples; 3.41\,m before the simulation-error
-refinement, against a 21.9\,m naive constant-turn baseline); free runs fly
+\paragraph{Results.} The headline metric is defined as follows. The
+tracked stabilized spans are cut into ten-second windows and every third
+window per flight is held out of all fitting (11 held-out windows across
+the piloted flights; 52k samples remain for training). For each held-out
+window, the model is initialized from the measured state at the window
+start and integrated forward \emph{open loop} for five seconds (1{,}200
+steps at 240\,Hz), driven only by the recorded stick history --- no
+measurement updates of any kind. The error for that window is the
+Euclidean distance in meters between the predicted and mocap-measured 3-D
+position at exactly $t=+5$\,s, and the reported number is the mean over
+the 11 windows. By this metric the refined model scores 2.98\,m ---
+roughly 13\% of the $\sim$23\,m the aircraft travels in five seconds at
+lap speed --- versus 3.41\,m for the same structure fitted one-step only,
+and 21.9\,m for a naive baseline that freezes the body velocity and turn
+rate at the anchor and coasts along the resulting arc. Free runs fly
 complete laps. Envelope-protection saturation was hypothesized to dominate
 the residual error and tested: one-step residuals are 74\% higher near
 command saturation, but only $\sim$4\% of stabilized samples are affected
@@ -2747,7 +2825,15 @@ gains and saturations: $\delta=K_p(\mathrm{sat}(c\cdot\mathrm{stick},
 gain, yaw-rate gain, bias).
 \paragraph{Implementation.} Staged grid search over $(c,\ell)$ with Huber
 regression for the gains, fitted from stabilized segments by inverse
-dynamics against the nominal airframe.
+dynamics against the nominal airframe. The law is
+proportional--derivative only --- no integral action --- consistent with
+three observations: the transmitter carries manual elevator trim buttons
+(integral action would make them redundant in stabilized mode), the fitted
+closed-loop residuals show no unexplained slow mode, and attitude
+integrators wind up in exactly the low-authority regime this airframe
+occupies. A ten-second ground test discriminates directly: hold the
+airframe tilted --- a ramping surface deflection indicates integral action,
+a steady deflection pure PD.
 \paragraph{Results.} Retained for interpretability and as the free-run
 fallback; identified against the nominal airframe, which is why its
 composition with each method's airframe currently loses to the direct
