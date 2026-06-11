@@ -2,8 +2,9 @@
 
 Benchmark website: https://jgoppert.github.io/sysid_litreview_26/
 
-Per-method implementation details and design justifications:
-[docs/method_implementations.md](docs/method_implementations.md)
+Per-method implementation details and design justifications: the
+"Implementation Details and Design Justifications" appendix of the paper
+(latex/main.tex).
 
 This project compares the latest machine-learning-based and classical
 system-identification methods on fixed-wing aircraft problems. The goal is to
