@@ -32,8 +32,8 @@ to `[x_e, z_u, theta]`. Both should contain the best available
 ground-truth-like pose after dataset-specific cleanup. `control_meas` is fixed
 to `[thrust, aileron, elevator, rudder]`.
 
-Datasets may include `direct_state_meas` for direct-state experiments. The 3DOF
-direct-state order is `[V, alpha, gamma, q]`.
+Datasets may include `direct_state_meas` carrying the converter's canonical
+state estimate; the benchmark itself scores methods from the pose channel.
 
 Each segment should be fixed-rate in `time_s`. Raw asynchronous logs are aligned
 by the canonicalization script before these NPZ files are committed.

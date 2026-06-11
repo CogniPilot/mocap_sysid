@@ -1283,8 +1283,8 @@ def run_methods(
     )
 
     if training_scenario_override and "sportcub" in training_scenario_override:
-        # Real filter-error EKF over the grey-box parameters (port of the
-        # 3DOF implementation): training data only, frozen-theta validation.
+        # Real filter-error EKF over the grey-box parameters: training
+        # data only, frozen-theta validation.
         from .greybox_oem_fit import fit_greybox_ekf, greybox_rollout_quat as _gb_rollout
 
         _scenario, train, train_x, train_samples = training_context("6DOF-EKF-ParamID")

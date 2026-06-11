@@ -61,8 +61,8 @@ Quaternions are scalar-first, normalized, and represent body attitude in the ENU
 inertial frame.
 
 For `system_dof = 3`, `pose_names` is fixed as `[x_e, z_u, theta]`, where
-`theta` is pitch attitude in radians. This is the compact pose-only channel used
-for longitudinal 3DOF experiments.
+`theta` is pitch attitude in radians. This is the compact pose-only layout for
+longitudinal datasets.
 
 `control_names` is fixed as `[thrust, aileron, elevator, rudder]`. Use physical
 units when available and document units/scaling in the dataset contract or
@@ -77,15 +77,15 @@ flight dataset, it may be a surveyed GNSS/INS reference solution if that is the
 best available reference. The source and cleanup steps belong in documented
 processing code, not as raw data committed beside the NPZ files.
 
-Optional direct-state measurements are allowed when a benchmark intentionally
-exposes state histories:
+An optional direct-state channel records the converter's canonical state
+estimate:
 
-- 3DOF `direct_state_meas` uses `direct_state_names = [V, alpha, gamma, q]`.
 - 6DOF `direct_state_meas` uses
   `direct_state_names = [x_n, y_e, z_d, u, v, w, q_w, q_x, q_y, q_z, p, q, r]`.
 
-Direct state is separate from pose so methods can be compared in a direct-state
-condition and a pose-only condition using the same underlying dataset split.
+Direct state is separate from pose because the benchmark scores methods from
+the pose channel only; `direct_state_meas` supports tooling such as the flight
+explorer and dataset validation, not a separate scored observation condition.
 
 ## Time Base
 

@@ -30,7 +30,7 @@
 
 \begin{center}
 {\LARGE\bfseries Aircraft System Identification Benchmark Repository Reference}\\[0.75em]
-{\large Classical, Grey-Box, Surrogate, and Learning-Based Methods for 3-DOF and 6-DOF Aircraft Data}\\[0.75em]
+{\large Classical, Grey-Box, Surrogate, and Learning-Based Methods for 6-DOF Aircraft Data}\\[0.75em]
 {\normalsize Generated reference document for the \texttt{system\_identification} repository}\\[0.5em]
 {\normalsize \today}
 \end{center}
@@ -94,21 +94,18 @@ The primary motivation is small fixed-wing system identification in indoor test 
 
 \section{Repository Method Inventory}
 
-This section lists only the method families currently represented in repository code or generated benchmark tables. The implementations are centered in \texttt{methods/comparison\_suite.py}, with the emerging public plugin interface under \texttt{methods/plugins/}. Each method is evaluated by training on its assigned dataset and then performing validation rollouts using the validation initial condition and pilot-command input history. Validation measurements are used for scoring, not for feedback during the rollout, unless a method is explicitly categorized as a measurement-assimilating estimator.
+This section lists only the method families currently represented in repository code or generated benchmark tables. The implementations are centered in \texttt{models/aircraft6dof/comparison\_suite.py}, with the public plugin interface under \texttt{methods/plugins/}. Each method is evaluated by training on its assigned dataset and then performing validation rollouts using the validation initial condition and pilot-command input history. Validation measurements are used for scoring, not for feedback during the rollout, unless a method is explicitly categorized as a measurement-assimilating estimator.
 
 \subsection{Baselines and Fixed-Structure Aircraft Identification}
 
 \paragraph{Nominal grey-box model.}
-The nominal grey-box row evaluates the coded 3-DOF aircraft model without the hidden nonlinear aerodynamic residuals. It is a no-fit baseline and appears in the result figures as the reference performance level.
+The nominal grey-box row evaluates the attached-flow 6-DOF aircraft model without the hidden nonlinear aerodynamic residuals. It is a no-fit baseline and appears in the result figures as the reference performance level.
 
 \paragraph{EquationError-LS.}
 The equation-error least-squares row fits aerodynamic coefficients from reconstructed state derivatives, the classical regression formulation of aircraft parameter estimation \cite{KleinMorelli2006,morelli_system_2002}. It is fast and interpretable, but it is sensitive to measurement noise because the dependent variables require numerical differentiation.
 
-\paragraph{OEM-SS.}
-The output-error single-shooting row estimates fixed aerodynamic parameters by optimizing trajectory error through the longitudinal model. The implementation uses CasADi/IPOPT and is the main deterministic fixed-structure aircraft identification baseline for direct-state data \cite{jategaonkar2006flight,Morelli2002SIDPAC}.
-
-\paragraph{OEM-MocapOutput.}
-The mocap-output OEM row treats $V,\alpha,\gamma,Q$ as latent states and fits measured position and pitch attitude directly. This is the most relevant deterministic baseline for the motion-capture-only setting because it avoids differentiating position and attitude to construct aerodynamic states.
+\paragraph{GreyBoxOEM.}
+The grey-box output-error row estimates the physical Sport Cub aerodynamic parameters by optimizing trajectory error through the 6-DOF model with multiple shooting over the training maneuver chunks. It is the main deterministic fixed-structure aircraft identification baseline \cite{jategaonkar2006flight,Morelli2002SIDPAC}, and the same fitted parameters drive the browser free-runs and serve as the UDE base model.
 
 \paragraph{Variational-Mocap.}
 The variational/multiple-shooting mocap row adds process-residual flexibility while estimating latent states from mocap outputs. It is included as a practical bridge between fixed-structure output error and process-noise or smoothing formulations.
@@ -144,17 +141,17 @@ The SINDy row \cite{brunton2016discovering,champion2019data} uses a structured c
 \paragraph{Symbolic-Stepwise.}
 The symbolic-stepwise row uses the same candidate-library idea with forward stepwise selection. It is a lightweight symbolic baseline rather than a full genetic-programming symbolic-regression implementation \cite{koza1990genetic,makke_interpretable_2024}.
 
-\paragraph{GP-CoeffClosure.}
+\paragraph{GP-RBF.}
 The GP/RBF coefficient-closure row learns a smooth residual aerodynamic coefficient map with kernel features \cite{rasmussen2006gaussian,hemakumara2013learning}. It represents the repository's current kernel surrogate closure method.
 
-\paragraph{NN-CoeffSurrogate.}
+\paragraph{NN-Surrogate.}
 The neural coefficient surrogate row learns aerodynamic coefficient residuals from labels available in the synthetic benchmark. Because real flight tests do not provide those coefficient labels directly, this row is an upper-bound diagnostic for what a supervised closure could achieve.
 
-\paragraph{PINN-CoeffClosure and PINN-HiddenElevator.}
-The PINN-style rows \cite{raissi2017physics,lagaris1998artificial} use flight-dynamics-level residuals, not full CFD or Navier--Stokes constraints. The coefficient-closure row learns aerodynamic closures, while the hidden-elevator row tests whether a neural model can infer a hidden command correction in SAFE-like cases.
+\paragraph{PINN-Closure.}
+The PINN-style row \cite{raissi2017physics,lagaris1998artificial} uses flight-dynamics-level residuals, not full CFD or Navier--Stokes constraints, learning aerodynamic coefficient closures consistent with the rollout dynamics.
 
-\paragraph{UDE-Residual and UDE-HiddenControl.}
-The UDE rows \cite{rackauckas2020universal} retain the known longitudinal dynamics and learn residual terms. The residual row targets missing aerodynamics, while the hidden-control row targets unknown input reshaping from a proprietary SAFE-like controller.
+\paragraph{UDE-Residual and UDE-NN.}
+The UDE rows \cite{rackauckas2020universal} retain the known 6-DOF dynamics and learn residual terms targeting the missing aerodynamics. The residual row uses a ridge feature map; the UDE-NN row trains a neural residual through the RK4 rollout (ODE-in-the-loop) on top of the fitted grey-box.
 
 \section{Dataset and Result Artifacts}
 
@@ -267,7 +264,7 @@ C_l &= -0.12\beta + 0.42\eta_\delta\delta_a - 0.50\hat{p} + 0.10\hat{r}
 C_n &= 0.18\beta - 0.26\eta_\delta\delta_r - 0.08\delta_a - 0.42\hat{r}
  +\sigma(0.10\beta-0.05\delta_a). \label{eq:sixdof_cn_truth}
 \end{align}
-The nominal 6-DOF model used by \texttt{nominal\_rk4\_step} sets $\sigma=0$ and removes every explicitly nonlinear stall/residual term in \eqref{eq:sixdof_cl_truth}--\eqref{eq:sixdof_cn_truth}. The truth model used by \texttt{rk4\_step} keeps those terms. This nominal/truth split is the 6-DOF analogue of the hidden residual-aerodynamics problem in the 3-DOF benchmark.
+The nominal 6-DOF model used by \texttt{nominal\_rk4\_step} sets $\sigma=0$ and removes every explicitly nonlinear stall/residual term in \eqref{eq:sixdof_cl_truth}--\eqref{eq:sixdof_cn_truth}. The truth model used by \texttt{rk4\_step} keeps those terms. This nominal/truth split creates the benchmark's hidden residual-aerodynamics identification problem.
 
 Body aerodynamic forces are then
 \[
@@ -952,7 +949,7 @@ The resulting training objective is
 \]
 where $\mathbf{r}_{\mathrm{dyn}}=[r_V,r_\gamma,r_q]^T$. The regularization term can encode weak aerodynamic priors such as smoothness, dynamic-pressure scaling, drag positivity, boundedness, and local derivative signs near trim. These priors are much weaker than enforcing a complete aerodynamic model and are therefore more consistent with the goal of identifying unmodeled force and moment behavior.
 
-This setup places the present benchmark in the same family as the Non-Determinant and Modified Non-Determinant PINNs of Michek et al.~\citep{michek2026flight}, but at a deliberately smaller scale. Their work learns aerodynamic coefficients for a nonlinear 6-DOF simulation using many randomized flight intervals. Here, the same conceptual role is isolated in a 3-DOF longitudinal problem with known nominal coefficients and hidden nonlinear residual terms, making it possible to compare PINN-style closure learning directly against OEM, SINDy, and UDE residual models.
+This setup places the present benchmark in the same family as the Non-Determinant and Modified Non-Determinant PINNs of Michek et al.~\citep{michek2026flight}, but at a deliberately smaller scale. Their work learns aerodynamic coefficients for a nonlinear 6-DOF simulation using many randomized flight intervals. In the legacy 3-DOF tier, the same conceptual role was isolated in a longitudinal problem with known nominal coefficients and hidden nonlinear residual terms, making it possible to compare PINN-style closure learning directly against OEM, SINDy, and UDE residual models.
 
 A UDE formulation uses the same logic but augments a nominal coefficient model with learned residuals,
 \[
@@ -1039,7 +1036,7 @@ initial-condition and maneuver variation reveal when global linearity is no
 longer adequate.
 
 \section{Repository Roadmap}
-The immediate roadmap is repository-driven rather than submission-driven. The first priority is to keep the 3-DOF benchmark reproducible: generated datasets, figures, tables, website artifacts, and this reference document should be regenerated from the same command-line entry points. The second priority is to mature the 6-DOF nonlinear benchmark methods beyond the initial attached-flow, linear, residual, and mocap-output baselines. A useful future extension is a separate F-16 model family based on the Stevens--Lewis table-lookup aerodynamics, which would test high-performance aircraft identification without replacing the present small-RC, mocap-motivated benchmark. The third priority is to stabilize the method-plugin interface so external contributors can add methods without editing the core comparison harness.
+The immediate roadmap is repository-driven rather than submission-driven. The first priority is to keep the 6-DOF benchmark reproducible: generated datasets, figures, tables, website artifacts, and this reference document should be regenerated from the same command-line entry points. The second priority is to mature the remaining placeholder methods (the frequency-domain rows toward a CIFER-style identification, and the variational, PINN-closure, and neural-surrogate rows toward genuine implementations). A useful future extension is a separate F-16 model family based on the Stevens--Lewis table-lookup aerodynamics, which would test high-performance aircraft identification without replacing the present small-RC, mocap-motivated benchmark. The third priority is to stabilize the method-plugin interface so external contributors can add methods without editing the core comparison harness.
 
 Future methods should be added only when the repository contains executable code, benchmark metadata, and validation results for the new row. Candidate additions include input-output nonlinear predictors, richer local/LPV model stitching, Bayesian uncertainty-aware variants of the existing grey-box methods, and high-fidelity aerodynamic surrogate closures. Until those implementations exist in the repository, this reference limits detailed method descriptions to the rows already represented by code and generated results.
 
@@ -1087,7 +1084,7 @@ methods unless stated.
 Every validation rollout receives one initial state and the pilot-command
 history; no method filters, smooths, or conditions on validation
 measurements mid-rollout, and measured states reappear only in scoring. The
-one audit violation (the 3-DOF suite defaulting to the post-controller
+one audit violation (the legacy 3-DOF suite defaulting to the post-controller
 actuator signal $u_{\mathrm{act}}$) was fixed: $u_{\mathrm{cmd}}$ is the
 default and $u_{\mathrm{act}}$ is documented as an oracle diagnostic.
 
@@ -1117,10 +1114,10 @@ raw one-step differences of 240\,Hz mocap states have measured per-channel
 signal-to-noise of only 0.24--0.77.
 
 \paragraph{R5 --- Physical envelopes catch divergence honestly.}
-6-DOF rollouts clamp speed and rates; 3-DOF rollouts freeze on leaving a
-generous physical box, keeping one clipped sample so the diverged flag
-triggers (previously an exponential blowup posted an $\alpha$-RMSE of
-1{,}160 radians as a finite, unflagged score).
+6-DOF rollouts clamp speed and rates and keep clipped samples so the
+diverged flag triggers honestly (in the legacy 3-DOF tier an exponential
+blowup once posted an $\alpha$-RMSE of 1{,}160 radians as a finite,
+unflagged score).
 
 \paragraph{R6 --- Identical real-data preprocessing.}
 Manual maneuvers split into quasi-steady lead-ins (pooled per-flight
@@ -1321,8 +1318,8 @@ variance-aware rollouts are the planned upgrades.
 known physics plus a learned residual \cite{rackauckas2020universal}. On
 real scenarios the base is the \emph{fitted grey-box}; on synthetic
 scenarios, the nominal grey-box. Labeled \emph{analogue}: the residual is a
-ridge map, not a trained network (the 3-DOF tier carries the genuine
-ODE-in-the-loop torch UDE).
+ridge map, not a trained network (the genuine ODE-in-the-loop torch UDE
+is the separate 6DOF-UDE-NN row).
 \paragraph{Implementation.} Residual targets are smoothed next dynamic
 states minus the base one-step prediction; shrinkage scales with sample
 count --- the standardized Gram grows with $n$, so the previous fixed
@@ -1489,9 +1486,9 @@ composition with each method's airframe currently loses to the direct
 closed-loop fit --- re-identification against the fitted grey-box is the
 planned route to per-method SAFE handoff.
 
-\subsection{3-DOF Implementation Decisions}
-The 3-DOF formulations appear in the supplemental sections; decisions worth
-review: the suite OEM is CasADi multiple shooting (soft continuity
+\subsection{Legacy 3-DOF Implementation Decisions}
+The legacy 3-DOF formulations appear in the supplemental sections; decisions
+worth review: the suite OEM is CasADi multiple shooting (soft continuity
 residuals, IPOPT budget 200, convergence status recorded; non-converged
 solves are not published); the filter-error EKF (augmented state, Joseph
 form, CasADi Jacobians) trains on training data only with frozen-$\theta$

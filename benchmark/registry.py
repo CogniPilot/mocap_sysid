@@ -4,33 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import dataclass
 from pathlib import Path
 
 from .method_api import MethodMetadata, load_method_metadata
 
-
-@dataclass(frozen=True)
-class MethodSpec:
-    name: str
-    model_family: str
-    training_scenario: str
-    observation_types: tuple[str, ...]
-    requires_gpu: bool = False
-    heavy: bool = False
-    entry_point: str = "comparison_suite:builtin"
-    description: str = "Built-in method currently dispatched by comparison_suite.py."
-
-
-BUILTIN_3DOF_METHOD_SPECS: tuple[MethodSpec, ...] = (
-)
-
-BUILTIN_METHOD_TRAINING = {method.name: method.training_scenario for method in BUILTIN_3DOF_METHOD_SPECS}
-
-GPU_BUILTINS = {method.name for method in BUILTIN_3DOF_METHOD_SPECS if method.requires_gpu}
-HEAVY_BUILTINS = {method.name for method in BUILTIN_3DOF_METHOD_SPECS if method.heavy}
-
-MOCAP_ONLY_BUILTINS = {method.name for method in BUILTIN_3DOF_METHOD_SPECS if method.observation_types == ("mocap",)}
 
 SIX_DOF_BUILTINS = {
     "6DOF-NominalGreyBox": ("mocap",),
@@ -59,19 +36,6 @@ def builtin_method_metadata() -> list[MethodMetadata]:
     """Return plugin-style metadata for methods still implemented in comparison_suite.py."""
 
     methods = []
-    for method in BUILTIN_3DOF_METHOD_SPECS:
-        methods.append(
-            MethodMetadata(
-                name=method.name,
-                entry_point=method.entry_point,
-                model_families=(method.model_family,),
-                observation_types=method.observation_types,
-                training_scenarios=(method.training_scenario,),
-                requires_gpu=method.requires_gpu,
-                heavy=method.heavy,
-                description=method.description,
-            )
-        )
     for name, observation_types in SIX_DOF_BUILTINS.items():
         requires_gpu = any(token in name for token in ("UDE", "PINN", "NN"))
         heavy = requires_gpu or any(token in name for token in ("GP", "Koopman", "Symbolic"))
@@ -100,24 +64,6 @@ def builtin_method_metadata() -> list[MethodMetadata]:
             )
         )
     return methods
-
-
-def worker_method_names() -> tuple[str, ...]:
-    """Return the canonical 3DOF built-in worker order."""
-
-    return tuple(method.name for method in BUILTIN_3DOF_METHOD_SPECS)
-
-
-def heavy_method_names() -> set[str]:
-    return set(HEAVY_BUILTINS)
-
-
-def gpu_method_names() -> set[str]:
-    return set(GPU_BUILTINS)
-
-
-def method_training_modes() -> dict[str, str]:
-    return dict(BUILTIN_METHOD_TRAINING)
 
 
 def discover_plugin_metadata(plugin_root: Path) -> list[MethodMetadata]:

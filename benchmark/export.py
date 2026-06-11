@@ -12,7 +12,7 @@ from typing import Any
 
 import numpy as np
 
-from .schema import METHOD_RESULT_FIELDS, MODEL_FAMILY_3DOF, MODEL_FAMILY_6DOF, SCHEMA_VERSION
+from .schema import METHOD_RESULT_FIELDS, MODEL_FAMILY_6DOF, SCHEMA_VERSION
 from .registry import all_method_metadata, metadata_to_dict
 from .scenarios import SCENARIOS_6DOF, SIX_DOF_SCENARIO_TITLES
 from dataset_tools.registry import discover_manifests
@@ -109,35 +109,6 @@ def _coerce_value(key: str, value: str | None) -> Any:
             return int(number)
         return number
     return text
-
-
-def _method_rows(
-    results_dir: Path,
-    dataset_modes: tuple[str, ...],
-    dataset_titles: dict[str, str],
-    method_training_modes: dict[str, str],
-) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for scenario in dataset_modes:
-        path = results_dir / f"{scenario}_shared_method_comparison.csv"
-        for raw in _read_csv(path):
-            method = raw.get("method", "")
-            clean_method = method.removesuffix(" (mocap)")
-            record = {field: _coerce_value(field, raw.get(field)) for field in METHOD_RESULT_FIELDS}
-            record["scenario"] = scenario
-            record["scenario_title"] = dataset_titles.get(scenario, scenario.replace("_", " ").title())
-            record["model_family"] = MODEL_FAMILY_3DOF
-            record["method"] = method
-            record["training_scenario"] = method_training_modes.get(clean_method)
-            rows.append(record)
-    rows.sort(
-        key=lambda row: (
-            str(row.get("scenario") or ""),
-            float(row.get("validation_score") or math.inf),
-            str(row.get("method") or ""),
-        )
-    )
-    return rows
 
 
 def _six_dof_rows(results_dir: Path) -> list[dict[str, Any]]:
@@ -273,11 +244,7 @@ def _generated_dataset_registry(root: Path) -> list[dict[str, Any]]:
                 "source_type": "synthetic_simulation",
                 "observation_type": "direct_state_and_pose",
                 "local_data_dir": str(scenario.default_path.relative_to(root)),
-                "generator": scenario.generator or (
-                    "models.aircraft6dof.generate_dataset"
-                    if scenario.model_family == MODEL_FAMILY_6DOF
-                    else "dataset_tools.synthetic_3dof.compact"
-                ),
+                "generator": scenario.generator or "models.aircraft6dof.generate_dataset",
                 "local_data_files": local_files,
                 "tags": list(scenario.tags),
             }
@@ -550,15 +517,11 @@ def export_web_data(
     root: Path,
     output_dir: Path,
     results_dir: Path,
-    dataset_modes: tuple[str, ...],
-    dataset_titles: dict[str, str],
-    method_training_modes: dict[str, str],
 ) -> dict[str, Any]:
     """Write JSON files consumed by the static benchmark website."""
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    method_rows = _method_rows(results_dir, dataset_modes, dataset_titles, method_training_modes)
-    method_rows.extend(_six_dof_rows(results_dir))
+    method_rows = _six_dof_rows(results_dir)
     method_rows.extend(_real_dataset_rows(results_dir))
     method_rows = _dedupe_method_rows(method_rows)
     maneuver_rows = _maneuver_rows(results_dir)
@@ -568,15 +531,7 @@ def export_web_data(
     trace_rows = _method_trace_registry(results_dir)
     generated_at = datetime.now(UTC).isoformat()
     git_sha = _git_sha(root)
-    scenarios = [
-        {
-            "id": scenario,
-            "title": dataset_titles.get(scenario, scenario.replace("_", " ").title()),
-            "model_family": MODEL_FAMILY_3DOF,
-            "method_result_count": sum(1 for row in method_rows if row.get("scenario") == scenario),
-        }
-        for scenario in dataset_modes
-    ]
+    scenarios = []
     for scenario, title in SIX_DOF_SCENARIO_TITLES.items():
         scenarios.append(
             {

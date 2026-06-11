@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 SCHEMA_VERSION = "0.1.0"
-MODEL_FAMILY_3DOF = "aircraft3dof"
 MODEL_FAMILY_6DOF = "aircraft6dof"
 
 METHOD_RESULT_FIELDS = (

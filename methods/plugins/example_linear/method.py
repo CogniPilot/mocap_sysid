@@ -11,9 +11,9 @@ class ExampleLinearMethod:
     metadata = MethodMetadata(
         name="ExampleLinear",
         entry_point="method:ExampleLinearMethod",
-        model_families=("aircraft3dof",),
+        model_families=("aircraft6dof",),
         observation_types=("mocap",),
-        training_scenarios=("trim_grid",),
+        training_scenarios=("aircraft_6dof_trim_grid",),
         requires_gpu=False,
         description="Minimal contributor example for the benchmark plugin API.",
     )

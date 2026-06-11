@@ -29,7 +29,7 @@ Generate the default aggressive 6DOF dataset:
 ./results.py simulate-6dof
 ```
 
-Generate the 3DOF-like 6DOF dataset family:
+Generate the full synthetic 6DOF dataset family:
 
 ```bash
 ./results.py simulate-6dof --dataset-modes open_loop sine_sweep aggressive trim_grid

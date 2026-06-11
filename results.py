@@ -31,7 +31,6 @@ from benchmark.paths import (
     WORK,
     WORK_DATA,
 )
-from benchmark.registry import gpu_method_names, heavy_method_names, method_training_modes, worker_method_names
 from benchmark.scenarios import (
     SIX_DOF_DATASET_MODES,
     SIX_DOF_DATASET_OUTPUTS,
@@ -41,10 +40,6 @@ from benchmark.scenarios import (
 
 METHOD_FIG = LATEX_FIG
 METHOD_TABLES = LATEX_TABLES
-METHOD_WORKERS = worker_method_names()
-HEAVY_METHOD_WORKERS = heavy_method_names()
-GPU_METHOD_WORKERS = gpu_method_names()
-METHOD_TRAINING_MODES = method_training_modes()
 
 SIX_DOF_FIGURE_EXPORTS = {
     "aircraft6dof_validation_score_comparison.svg": "generated_aircraft6dof_validation_score_comparison.svg",
@@ -409,9 +404,6 @@ def web_data(args: argparse.Namespace) -> None:
         root=ROOT,
         output_dir=args.output,
         results_dir=METHOD_RESULTS,
-        dataset_modes=(),
-        dataset_titles={},
-        method_training_modes=METHOD_TRAINING_MODES,
     )
     print(f"Wrote web benchmark data to {args.output}")
     print(f"Exported {len(manifest['scenarios'])} scenarios at schema {manifest['schema_version']}")
@@ -494,50 +486,6 @@ def serve_site(args: argparse.Namespace) -> None:
     print(f"Serving benchmark site at http://127.0.0.1:{port}")
     print("Press Ctrl-C to stop.")
     run([sys.executable, str(ROOT / "site" / "serve.py"), "--port", str(port), "--bind", "127.0.0.1", "--directory", str(ROOT / "site")])
-
-
-def add_shared_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--dataset-modes",
-        nargs="+",
-        choices=list(DATASET_MODES),
-        default=list(DATASET_MODES),
-        help="experiment datasets to generate or benchmark",
-    )
-    parser.add_argument("--train-trials", type=int, default=64)
-    parser.add_argument("--validation-trials", type=int, default=16)
-    parser.add_argument("--duration", type=float, default=40.0)
-    parser.add_argument("--no-plot", action="store_true")
-    parser.add_argument("--input-channel", choices=["u_act", "u_cmd"], default="u_cmd")
-    parser.add_argument("--epochs", type=int, default=700)
-    parser.add_argument("--max-samples", type=int, default=50000)
-    parser.add_argument("--max-oem-trials", type=int, default=2)
-    parser.add_argument("--oem-stride", type=int, default=10)
-    parser.add_argument("--max-oem-nfev", type=int, default=200)
-    parser.add_argument("--max-vi-trials", type=int, default=2)
-    parser.add_argument("--vi-stride", type=int, default=40)
-    parser.add_argument("--max-vi-nfev", type=int, default=25)
-    parser.add_argument("--frequency-nperseg", type=int, default=1024)
-    parser.add_argument("--frequency-min-coherence", type=float, default=0.08)
-    parser.add_argument("--device", default="cuda")
-    parser.add_argument("--skip-oem", action="store_true")
-    parser.add_argument("--include-methods", nargs="*", default=["all"], help="methods to include when running the suite")
-    parser.add_argument(
-        "--jobs",
-        type=int,
-        default=max(1, min(30, 2 * len(DATASET_MODES) * len(METHOD_WORKERS), (os.cpu_count() or 2) - 2)),
-        help="parallel suite workers; default targets 30 workers on a 32-thread workstation and is capped internally",
-    )
-    parser.add_argument("--threads-per-worker", type=int, default=1, help="BLAS/OpenMP threads per worker process")
-    parser.add_argument("--max-heavy-workers", type=int, default=1, help="maximum concurrent memory-heavy method workers")
-    parser.add_argument("--max-gpu-workers", type=int, default=2, help="maximum concurrent GPU-training method workers")
-    parser.add_argument("--progress-interval", type=float, default=30.0, help="seconds between global suite progress and ETA reports")
-    parser.add_argument("--no-heavy-first", dest="heavy_first", action="store_false", help="do not force memory-heavy methods to run before the rest of the suite")
-    parser.add_argument("--no-split-sources", dest="split_sources", action="store_false", help="do not split direct and mocap source runs into separate parallel workers")
-    parser.add_argument("--no-split-methods", dest="split_methods", action="store_false", help="do not split individual methods into separate parallel workers")
-    parser.set_defaults(heavy_first=True)
-    parser.set_defaults(split_sources=True)
-    parser.set_defaults(split_methods=True)
 
 
 def parse_args() -> argparse.Namespace:

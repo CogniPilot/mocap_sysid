@@ -25,7 +25,7 @@ const ex = {
   selectedMethods: new Set(),
   predictions: {},
   // Whether the playback is showing this module's dataset. While another
-  // dataset (3DOF, synthetic 6DOF) is displayed the explorer must stay
+  // dataset (synthetic 6DOF) is displayed the explorer must stay
   // silent: publishing an overlay would hijack the view back to the Sport
   // Cub flights.
   active: true,

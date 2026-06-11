@@ -54,20 +54,17 @@ The `.github/workflows/benchmark-self-hosted.yml` workflow runs only when manual
 - creates or refreshes `.venv`,
 - installs the project with the `gpu` extra from `pyproject.toml`, using the CUDA PyTorch wheel index,
 - optionally regenerates datasets,
-- runs the benchmark suite with `--device cuda`,
+- runs the 6-DOF comparison suite over the synthetic family and both Sport Cub datasets,
 - regenerates LaTeX and website data assets,
 - uploads benchmark artifacts.
 
 The default workflow settings use:
 
 ```text
-jobs=30
-threads_per_worker=1
-max_gpu_workers=2
-input_channel=u_cmd
+workers=30
 ```
 
-Those match the current local workstation assumptions: high CPU parallelism, one BLAS thread per worker, and at most two concurrent GPU-training methods.
+That matches the current local workstation assumption of high CPU parallelism for validation rollouts; torch-based rows use the GPU when available.
 
 ## Local Dry Run
 
@@ -77,7 +74,11 @@ Before using GitHub Actions, run this directly:
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install -e ".[gpu]" --index-url https://download.pytorch.org/whl/cu128 --extra-index-url https://pypi.org/simple
-./results.py suite --device cuda --jobs 30 --threads-per-worker 1 --max-gpu-workers 2 --input-channel u_cmd
+.venv/bin/python -m models.aircraft6dof.comparison_suite \
+  --datasets work/data/aircraft_6dof_open_loop work/data/aircraft_6dof_sine_sweep \
+    work/data/aircraft_6dof_aggressive work/data/aircraft_6dof_trim_grid \
+    data/sportcub_mocap_4_17_26_train.npz data/sportcub_mocap_5_22_26_train.npz \
+  --results-dir results --fig-dir latex/fig --table-dir latex/tables
 ./results.py latex-assets
 ./results.py web-data
 ```

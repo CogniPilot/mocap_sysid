@@ -2158,7 +2158,7 @@ async function init() {
   state.playback = await loadJson("playback.json");
   state.methodTraces = await loadJson("method_traces.json");
   if (!state.manifest.model_families.includes(state.modelFamily)) {
-    state.modelFamily = state.manifest.model_families[0] || "aircraft3dof";
+    state.modelFamily = state.manifest.model_families[0] || "aircraft6dof";
   }
   setDefaultScenario();
   bindControls();
