@@ -31,7 +31,7 @@
   ],
   "metric": "Validation score is full-state mean NRMSE over open-loop rollouts.",
   "model_family": "aircraft6dof",
-  "result_rows": 204,
+  "result_rows": 102,
   "scenarios": [
     "aircraft_6dof_aggressive",
     "aircraft_6dof_open_loop",
@@ -39,10 +39,6 @@
     "aircraft_6dof_trim_grid",
     "sportcub_mocap_4_17_26",
     "sportcub_mocap_5_22_26"
-  ],
-  "state_sources": [
-    "direct",
-    "mocap"
   ],
   "training_scenarios": [
     "aircraft_6dof_aggressive",

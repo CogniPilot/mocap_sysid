@@ -46,12 +46,11 @@ Recommended local command sequence:
 
 ```bash
 git pull
-./results.py suite \
-  --device cuda \
-  --jobs 30 \
-  --threads-per-worker 1 \
-  --max-gpu-workers 2 \
-  --input-channel u_cmd
+.venv/bin/python -m models.aircraft6dof.comparison_suite \
+  --datasets work/data/aircraft_6dof_open_loop work/data/aircraft_6dof_sine_sweep \
+    work/data/aircraft_6dof_aggressive work/data/aircraft_6dof_trim_grid \
+    data/sportcub_mocap_4_17_26_train.npz data/sportcub_mocap_5_22_26_train.npz \
+  --results-dir results --fig-dir latex/fig --table-dir latex/tables
 ./results.py latex-assets
 ./results.py web-data
 python3 latex/paper.py build

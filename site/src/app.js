@@ -27,7 +27,6 @@ const state = {
   tradeoffZoom: null,
   modelFamily: "aircraft6dof",
   scenario: "sportcub_mocap_5_22_26",
-  source: "mocap",
 };
 
 const ENU_TO_THREE_QUAT = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
@@ -78,7 +77,7 @@ function datasetsForModel() {
 
 function selectedRows() {
   return allRows()
-    .filter((row) => row.scenario === state.scenario && row.state_source === state.source)
+    .filter((row) => row.scenario === state.scenario)
     .filter((row) => finiteNumber(row.validation_score))
     .sort((a, b) => a.validation_score - b.validation_score);
 }
@@ -113,7 +112,7 @@ function activeSegment(track = selectedPlayback()) {
 
 function traceSegmentForMethod(key) {
   const trace = state.methodTraces.find((item) =>
-    item.scenario === state.scenario && item.state_source === state.source && methodKey(item.method) === key
+    item.scenario === state.scenario && methodKey(item.method) === key
   );
   const segment = trace?.segments?.[state.playbackSegmentIndex];
   return segment ? { ...segment, method: key } : null;
@@ -132,7 +131,7 @@ function traceSegmentsForFlight(key) {
   const flightName = activeSegment(selectedPlayback())?.name || "";
   const overlay = state.explorerOverlay;
   const trace = state.methodTraces.find((item) =>
-    item.scenario === state.scenario && item.state_source === state.source && methodKey(item.method) === key
+    item.scenario === state.scenario && methodKey(item.method) === key
   );
   if (!trace || !overlay) return [];
   const out = [];
@@ -168,28 +167,22 @@ function selectedTraceSegments() {
 function setDefaultScenario() {
   const scenarios = scenariosForModel();
   const hasScenario = scenarios.some((scenario) => scenario.id === state.scenario);
-  const sourceRows = (source) => allRows().filter((row) => row.model_family === state.modelFamily && row.state_source === source);
-  if (!sourceRows(state.source).length) {
-    const fallbackSource = ["mocap", "direct"].find((source) => sourceRows(source).length);
-    if (fallbackSource) state.source = fallbackSource;
-  }
   if (!hasScenario || !selectedRows().length) {
     const withRows = scenarios.find((scenario) =>
-      allRows().some((row) => row.scenario === scenario.id && row.state_source === state.source && finiteNumber(row.validation_score))
+      allRows().some((row) => row.scenario === scenario.id && finiteNumber(row.validation_score))
     );
     state.scenario = withRows?.id || scenarios[0]?.id || "";
-  }
-  if (!selectedRows().length) {
-    const fallbackSource = ["mocap", "direct"].find((source) =>
-      allRows().some((row) => row.scenario === state.scenario && row.state_source === source && finiteNumber(row.validation_score))
-    );
-    if (fallbackSource) state.source = fallbackSource;
   }
 }
 
 function renderModelTabs() {
   const host = document.querySelector("#model-tabs");
   host.innerHTML = "";
+  // A selector with one option is noise; hide the whole Model control.
+  // The labeled wrapper is the parent div; the hidden attribute alone is
+  // insufficient on #model-tabs because .segmented sets display.
+  const wrap = host.parentElement;
+  if (wrap) wrap.style.display = state.manifest.model_families.length <= 1 ? "none" : "";
   for (const family of state.manifest.model_families) {
     const button = document.createElement("button");
     button.type = "button";
@@ -243,9 +236,9 @@ function bindControls() {
       state.playback = state.playback.filter((track) => track.id !== event.detail.track.id);
       state.playback.push(event.detail.track);
     }
-    state.playbackTrackOverride = "sportcub_flights_5_22";
+    state.playbackTrackOverride = event.detail.track?.id || `explorer_${event.detail.scenario}`;
     state.modelFamily = "aircraft6dof";
-    state.scenario = "sportcub_mocap_5_22_26";
+    state.scenario = event.detail.scenario || "sportcub_mocap_5_22_26";
     state.playbackSegmentIndex = flightIndex;
     state.playbackTimeS = timeS || 0;
     state.playbackLastMs = null;
@@ -271,15 +264,6 @@ function bindControls() {
     state.explorerOverlay = null;
     resetTradeoffZoom();
     notifyExplorerContext();
-    render();
-  });
-
-  document.querySelector("#source-filter").addEventListener("click", (event) => {
-    const button = event.target.closest("button[data-source]");
-    if (!button) return;
-    state.source = button.dataset.source;
-    state.selectedMethods.clear();
-    resetTradeoffZoom();
     render();
   });
 
@@ -458,7 +442,7 @@ function logScale(value, min, max, start, end) {
 }
 
 function tradeoffKey() {
-  return `${state.modelFamily}:${state.scenario}:${state.source}`;
+  return `${state.modelFamily}:${state.scenario}`;
 }
 
 function resetTradeoffZoom() {
@@ -542,7 +526,7 @@ function renderTradeoff(rows) {
   state.tradeoffZoom = { key: tradeoffKey(), ...constrainedLogView(state.tradeoffZoom, baseLogView) };
   const xExtent = [10 ** state.tradeoffZoom.xMin, 10 ** state.tradeoffZoom.xMax];
   const yExtent = [10 ** state.tradeoffZoom.yMin, 10 ** state.tradeoffZoom.yMax];
-  const color = state.source === "direct" ? "var(--direct)" : "var(--mocap)";
+  const color = "var(--mocap)";
 
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
@@ -802,7 +786,7 @@ function notifyExplorerContext() {
   // dataset's screen.
   window.dispatchEvent(new CustomEvent("playback-context-changed", {
     detail: {
-      explorerActive: state.modelFamily === "aircraft6dof" && state.scenario === "sportcub_mocap_5_22_26",
+      scenario: state.modelFamily === "aircraft6dof" ? state.scenario : null,
     },
   }));
 }
@@ -2157,9 +2141,6 @@ function render() {
   renderPlaybackTabs();
   renderModelTabs();
   renderScenarioSelect();
-  for (const node of document.querySelectorAll("#source-filter button")) {
-    node.classList.toggle("active", node.dataset.source === state.source);
-  }
   const rows = selectedRows();
   renderSummary(rows);
   renderTradeoff(rows);
@@ -2177,7 +2158,7 @@ async function init() {
   state.playback = await loadJson("playback.json");
   state.methodTraces = await loadJson("method_traces.json");
   if (!state.manifest.model_families.includes(state.modelFamily)) {
-    state.modelFamily = state.manifest.model_families[0] || "aircraft3dof";
+    state.modelFamily = state.manifest.model_families[0] || "aircraft6dof";
   }
   setDefaultScenario();
   bindControls();

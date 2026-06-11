@@ -15,7 +15,7 @@ and a static benchmark browser published through GitHub Pages.
 ## Repository Layout
 
 - `benchmark/`: orchestration, registries, schema, website export, and plugin API.
-- `models/`: canonical 3DOF/6DOF aircraft dynamics and synthetic dataset helpers.
+- `models/`: canonical 6DOF aircraft dynamics and synthetic dataset helpers.
 - `methods/`: method implementations and plugin examples.
 - `dataset_tools/`: contributed dataset manifests, validation, and preprocessing code.
 - `data/`: compact committed real datasets only, as flat NPZ split files.
@@ -60,9 +60,10 @@ Each NPZ stores the canonical ragged time-series arrays plus scalar
 ./results.py check-data
 ```
 
-The current real dataset is `sportcub_mocap_4_17_26`; its raw Sport Cub data is
-not committed. The dataset manifest and canonicalization code live under
-`dataset_tools/sportcub_mocap_4_17_26/`.
+The current real datasets are `sportcub_mocap_4_17_26` (maneuver windows) and
+`sportcub_mocap_5_22_26` (full flights); their raw Sport Cub data is not
+committed. The dataset manifests and conversion code live under
+`dataset_tools/<dataset_id>/`.
 
 See [docs/DATASET_CONTRACT.md](docs/DATASET_CONTRACT.md) for the required NPZ
 schema and [docs/BENCHMARK.md](docs/BENCHMARK.md) for the full workflow.
@@ -94,20 +95,19 @@ mocap-style position/quaternion measurements.
 
 ## Sport Cub Real Data
 
-The provisional Sport Cub motion-capture dataset is registered as
-`sportcub_mocap_4_17_26`.
+The Sport Cub motion-capture datasets are registered as
+`sportcub_mocap_4_17_26` and `sportcub_mocap_5_22_26`.
 
 ```bash
-./results.py process-dataset sportcub_mocap_4_17_26
-./results.py canonicalize-dataset sportcub_mocap_4_17_26
-./results.py check-data sportcub_mocap_4_17_26
-./results.py sportcub-real
+./results.py process-dataset sportcub_mocap_5_22_26
+./results.py canonicalize-dataset sportcub_mocap_5_22_26
+./results.py check-data sportcub_mocap_5_22_26
 ```
 
-`canonicalize-dataset` writes the flat committed NPZ files under `data/`.
-`sportcub-real` summarizes the current 6DOF grey-box OEM result into
-`results/sportcub_mocap_4_17_26_method_comparison.csv` and refreshes the
-website data bundle.
+`canonicalize-dataset` writes the flat committed NPZ files under `data/`. The
+comparison suite consumes those splits directly (see below), and the browser
+flight explorer payloads are exported by
+`python3 -m models.aircraft6dof.flight_explorer_export`.
 
 ## Method Contributions
 
@@ -127,17 +127,17 @@ refreshes that bundle locally. GitHub Actions runs CI on PRs, `main`, and
 release tags matching `v*`; the Pages workflow deploys only after a successful
 CI workflow run.
 
-## Local GPU Benchmark
+## Full Local Benchmark
 
-For a full local run on an NVIDIA workstation:
+For a full local run over the synthetic family and both real datasets (use the
+project `.venv` so the torch-based UDE-NN row is included):
 
 ```bash
-./results.py suite \
-  --device cuda \
-  --jobs 30 \
-  --threads-per-worker 1 \
-  --max-gpu-workers 2 \
-  --input-channel u_cmd
+.venv/bin/python -m models.aircraft6dof.comparison_suite \
+  --datasets work/data/aircraft_6dof_open_loop work/data/aircraft_6dof_sine_sweep \
+    work/data/aircraft_6dof_aggressive work/data/aircraft_6dof_trim_grid \
+    data/sportcub_mocap_4_17_26_train.npz data/sportcub_mocap_5_22_26_train.npz \
+  --results-dir results --fig-dir latex/fig --table-dir latex/tables
 ./results.py latex-assets
 ./results.py web-data
 python3 latex/paper.py build

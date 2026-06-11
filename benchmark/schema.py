@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 SCHEMA_VERSION = "0.1.0"
-MODEL_FAMILY_3DOF = "aircraft3dof"
 MODEL_FAMILY_6DOF = "aircraft6dof"
 
 METHOD_RESULT_FIELDS = (
@@ -14,7 +13,6 @@ METHOD_RESULT_FIELDS = (
     "description",
     "implementation_status",
     "backend",
-    "state_source",
     "input_channel",
     "evaluation_mode",
     "training_scenario",
