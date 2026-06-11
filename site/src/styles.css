@@ -91,6 +91,10 @@ h2 {
   margin-bottom: 18px;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 label,
 .control-label {
   display: grid;
