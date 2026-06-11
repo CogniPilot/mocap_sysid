@@ -1024,10 +1024,12 @@ new GLTFLoader().load(
         let w = 0;
         for (const tri of kept) {
           for (let v = 0; v < 3; v++) {
-            for (let c = 0; c < itemSize; c++) out[w++] = attr.array[(tri + v) * itemSize + c];
+            // getComponent handles interleaved and normalized attributes;
+            // raw array indexing corrupted the UVs (white tires).
+            for (let c = 0; c < itemSize; c++) out[w++] = attr.getComponent(tri + v, c);
           }
         }
-        attributes[attrName] = new THREE.BufferAttribute(out, itemSize);
+        attributes[attrName] = new THREE.BufferAttribute(out, itemSize, attr.normalized);
       }
       const cleaned = new THREE.BufferGeometry();
       for (const [attrName, attr] of Object.entries(attributes)) cleaned.setAttribute(attrName, attr);
