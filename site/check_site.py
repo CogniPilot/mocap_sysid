@@ -48,7 +48,7 @@ def main() -> int:
     families = set(manifest.get("model_families") or [])
     require(scenarios, "site manifest has no scenarios")
     require(datasets, "site manifest has no datasets")
-    require({"aircraft3dof", "aircraft6dof"}.issubset(families), "site manifest must include 3DOF and 6DOF families")
+    require("aircraft6dof" in families, "site manifest must include the 6DOF family")
     require(any(dataset.get("source_type") == "synthetic_simulation" for dataset in datasets), "generated simulation datasets are missing")
     require(any(dataset.get("source_type") == "real_mocap" for dataset in datasets), "real datasets are missing")
     require(method_results, "site has no method results")

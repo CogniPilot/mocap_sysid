@@ -4,23 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       dataset_modes:
-        description: "Space-separated dataset modes, or all"
+        description: "Space-separated synthetic 6DOF dataset modes, or all"
         default: "all"
         required: true
-      include_methods:
-        description: "Space-separated methods, or all"
-        default: "all"
-        required: true
-      jobs:
-        description: "Parallel worker processes"
+      workers:
+        description: "Parallel rollout worker processes"
         default: "30"
         required: true
-      max_gpu_workers:
-        description: "Maximum concurrent GPU-training methods"
-        default: "2"
-        required: true
       regenerate_datasets:
-        description: "Regenerate simulation datasets before benchmarking"
+        description: "Regenerate synthetic datasets before benchmarking"
         type: boolean
         default: false
       build_pdf:
@@ -68,41 +60,40 @@ jobs:
         run: |
           DATASET_MODES="${{ inputs.dataset_modes }}"
           if [ "$DATASET_MODES" = "all" ]; then
-            DATASET_MODES="open_loop sine_sweep aggressive trim_grid open_loop_safe sine_sweep_safe aggressive_safe safe_loop"
+            DATASET_MODES="open_loop sine_sweep aggressive trim_grid"
           fi
-          INCLUDE_METHODS="${{ inputs.include_methods }}"
+          DATASET_PATHS=""
+          for mode in $DATASET_MODES; do
+            DATASET_PATHS="$DATASET_PATHS work/data/aircraft_6dof_$mode"
+          done
           echo "dataset_modes=$DATASET_MODES" >> "$GITHUB_OUTPUT"
-          echo "include_methods=$INCLUDE_METHODS" >> "$GITHUB_OUTPUT"
+          echo "dataset_paths=$DATASET_PATHS" >> "$GITHUB_OUTPUT"
 
-      - name: Regenerate datasets
+      - name: Regenerate synthetic datasets
         if: ${{ inputs.regenerate_datasets }}
         run: |
-          ./results.py simulate \
-            --dataset-modes ${{ steps.inputs.outputs.dataset_modes }} \
-            --state-source both \
-            --input-channel u_cmd
+          .venv/bin/python results.py simulate-6dof \
+            --dataset-modes ${{ steps.inputs.outputs.dataset_modes }}
 
-      - name: Run benchmark suite
+      - name: Run 6DOF benchmark suite
         run: |
-          ./results.py suite \
-            --dataset-modes ${{ steps.inputs.outputs.dataset_modes }} \
-            --include-methods ${{ steps.inputs.outputs.include_methods }} \
-            --state-source both \
-            --input-channel u_cmd \
-            --device cuda \
-            --jobs ${{ inputs.jobs }} \
-            --threads-per-worker 1 \
-            --max-gpu-workers ${{ inputs.max_gpu_workers }} \
-            --progress-interval 30
+          .venv/bin/python -m models.aircraft6dof.comparison_suite \
+            --datasets ${{ steps.inputs.outputs.dataset_paths }} \
+              data/sportcub_mocap_4_17_26_train.npz \
+              data/sportcub_mocap_5_22_26_train.npz \
+            --results-dir results \
+            --fig-dir latex/fig \
+            --table-dir latex/tables \
+            --workers ${{ inputs.workers }}
 
       - name: Export paper and web assets
         run: |
-          ./results.py latex-assets
-          ./results.py web-data
+          .venv/bin/python results.py latex-assets
+          .venv/bin/python results.py web-data
 
       - name: Build paper
         if: ${{ inputs.build_pdf }}
-        run: ./results.py build
+        run: .venv/bin/python results.py build
 
       - name: Upload benchmark artifacts
         uses: actions/upload-artifact@v4

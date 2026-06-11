@@ -17,9 +17,9 @@ README.md
   "name": "MyMethod",
   "entry_point": "method:MyMethod",
   "description": "Short method description.",
-  "model_families": ["aircraft3dof"],
-  "observation_types": ["direct", "mocap"],
-  "training_scenarios": ["aggressive"],
+  "model_families": ["aircraft6dof"],
+  "observation_types": ["mocap"],
+  "training_scenarios": ["aircraft_6dof_aggressive"],
   "requires_gpu": false
 }
 ```

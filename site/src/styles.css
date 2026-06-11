@@ -6,7 +6,6 @@
   --muted: #97a3b1;
   --line: #353d47;
   --accent: #6ea8fe;
-  --direct: #7fa8d4;
   --mocap: #f0a040;
   --nominal: #e57373;
 }
@@ -1034,30 +1033,13 @@ svg text {
   border-top: 7px solid #cbd5e1;
 }
 
-/* Model inspector */
+/* Model inspector: picker above a full-width detail card; the card's
+   internal parameter groups spread across the width on their own grid. */
 .models-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 14px;
-  align-items: start;
-}
-
-.model-card {
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #1a1f24;
-}
-
-.model-card h3 {
-  margin: 0 0 4px;
-  font-size: 14px;
-}
-
-.model-card > p {
-  margin: 0 0 8px;
-  color: var(--muted);
-  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-start;
 }
 
 .model-table {
@@ -1156,10 +1138,11 @@ svg text {
 
 #model-inspect-select {
   min-width: 280px;
-  margin-bottom: 12px;
 }
 
 .model-detail {
+  width: 100%;
+  box-sizing: border-box;
   padding: 14px 16px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1173,7 +1156,7 @@ svg text {
 
 .model-columns {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px 28px;
   margin: 8px 0;
 }

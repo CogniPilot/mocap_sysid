@@ -21,3 +21,4 @@ __pycache__/
 # Local development notes and review experiments (not part of the benchmark).
 /dev/
 /data/data_20260522/
+*.egg-info/

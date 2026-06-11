@@ -1,134 +1,6 @@
 {
   "dataset_registry": [
     {
-      "generator": "dataset_tools.synthetic_3dof.compact",
-      "id": "open_loop",
-      "local_data_dir": "work/data/longitudinal_3dof_nonlinear_open_loop",
-      "local_data_files": {
-        "train": "work/data/longitudinal_3dof_nonlinear_open_loop/train.npz",
-        "validation": "work/data/longitudinal_3dof_nonlinear_open_loop/validation.npz"
-      },
-      "model_family": "aircraft3dof",
-      "observation_type": "direct_state_and_pose",
-      "source_type": "synthetic_simulation",
-      "status": "generated",
-      "tags": [],
-      "title": "Open-loop maneuver"
-    },
-    {
-      "generator": "dataset_tools.synthetic_3dof.compact",
-      "id": "sine_sweep",
-      "local_data_dir": "work/data/longitudinal_3dof_nonlinear_sine_sweep",
-      "local_data_files": {
-        "train": "work/data/longitudinal_3dof_nonlinear_sine_sweep/train.npz",
-        "validation": "work/data/longitudinal_3dof_nonlinear_sine_sweep/validation.npz"
-      },
-      "model_family": "aircraft3dof",
-      "observation_type": "direct_state_and_pose",
-      "source_type": "synthetic_simulation",
-      "status": "generated",
-      "tags": [],
-      "title": "Aggressive sine-sweep maneuver"
-    },
-    {
-      "generator": "dataset_tools.synthetic_3dof.compact",
-      "id": "aggressive",
-      "local_data_dir": "work/data/longitudinal_3dof_nonlinear_aggressive",
-      "local_data_files": {
-        "train": "work/data/longitudinal_3dof_nonlinear_aggressive/train.npz",
-        "validation": "work/data/longitudinal_3dof_nonlinear_aggressive/validation.npz"
-      },
-      "model_family": "aircraft3dof",
-      "observation_type": "direct_state_and_pose",
-      "source_type": "synthetic_simulation",
-      "status": "generated",
-      "tags": [],
-      "title": "Aggressive nonlinear maneuver"
-    },
-    {
-      "generator": "dataset_tools.synthetic_3dof.compact",
-      "id": "trim_grid",
-      "local_data_dir": "work/data/longitudinal_3dof_nonlinear_trim_grid",
-      "local_data_files": {
-        "train": "work/data/longitudinal_3dof_nonlinear_trim_grid/train.npz",
-        "validation": "work/data/longitudinal_3dof_nonlinear_trim_grid/validation.npz"
-      },
-      "model_family": "aircraft3dof",
-      "observation_type": "direct_state_and_pose",
-      "source_type": "synthetic_simulation",
-      "status": "generated",
-      "tags": [],
-      "title": "Local trim-grid small-deviation maneuver"
-    },
-    {
-      "generator": "dataset_tools.synthetic_3dof.compact",
-      "id": "open_loop_safe",
-      "local_data_dir": "work/data/longitudinal_3dof_nonlinear_open_loop_safe",
-      "local_data_files": {
-        "train": "work/data/longitudinal_3dof_nonlinear_open_loop_safe/train.npz",
-        "validation": "work/data/longitudinal_3dof_nonlinear_open_loop_safe/validation.npz"
-      },
-      "model_family": "aircraft3dof",
-      "observation_type": "direct_state_and_pose",
-      "source_type": "synthetic_simulation",
-      "status": "generated",
-      "tags": [
-        "safe"
-      ],
-      "title": "Open-loop maneuver with SAFE enabled"
-    },
-    {
-      "generator": "dataset_tools.synthetic_3dof.compact",
-      "id": "sine_sweep_safe",
-      "local_data_dir": "work/data/longitudinal_3dof_nonlinear_sine_sweep_safe",
-      "local_data_files": {
-        "train": "work/data/longitudinal_3dof_nonlinear_sine_sweep_safe/train.npz",
-        "validation": "work/data/longitudinal_3dof_nonlinear_sine_sweep_safe/validation.npz"
-      },
-      "model_family": "aircraft3dof",
-      "observation_type": "direct_state_and_pose",
-      "source_type": "synthetic_simulation",
-      "status": "generated",
-      "tags": [
-        "safe"
-      ],
-      "title": "Aggressive sine-sweep with SAFE enabled"
-    },
-    {
-      "generator": "dataset_tools.synthetic_3dof.compact",
-      "id": "aggressive_safe",
-      "local_data_dir": "work/data/longitudinal_3dof_nonlinear_aggressive_safe",
-      "local_data_files": {
-        "train": "work/data/longitudinal_3dof_nonlinear_aggressive_safe/train.npz",
-        "validation": "work/data/longitudinal_3dof_nonlinear_aggressive_safe/validation.npz"
-      },
-      "model_family": "aircraft3dof",
-      "observation_type": "direct_state_and_pose",
-      "source_type": "synthetic_simulation",
-      "status": "generated",
-      "tags": [
-        "safe"
-      ],
-      "title": "Aggressive maneuver with SAFE enabled"
-    },
-    {
-      "generator": "dataset_tools.synthetic_3dof.compact",
-      "id": "safe_loop",
-      "local_data_dir": "work/data/longitudinal_3dof_nonlinear_safe_loop",
-      "local_data_files": {
-        "train": "work/data/longitudinal_3dof_nonlinear_safe_loop/train.npz",
-        "validation": "work/data/longitudinal_3dof_nonlinear_safe_loop/validation.npz"
-      },
-      "model_family": "aircraft3dof",
-      "observation_type": "direct_state_and_pose",
-      "source_type": "synthetic_simulation",
-      "status": "generated",
-      "tags": [
-        "safe"
-      ],
-      "title": "Aggressive SAFE recovery-probe maneuver"
-    },
-    {
       "generator": "models.aircraft6dof.generate_dataset",
       "id": "aircraft_6dof_open_loop",
       "local_data_dir": "work/data/aircraft_6dof_open_loop",
@@ -277,8 +149,8 @@
     "method_traces": "method_traces.json",
     "playback": "playback.json"
   },
-  "generated_at": "2026-06-11T19:19:20.063377+00:00",
-  "git_sha": "5fbdd24588636cc2899e8ed1e99a7ad07bf7dcab",
+  "generated_at": "2026-06-11T22:00:22.822862+00:00",
+  "git_sha": "ec050ec8f655aad4d7c2f4ea6b54d73a89bead01",
   "method_registry": [
     {
       "description": "Built-in 6DOF baseline dispatched by models/aircraft6dof/comparison_suite.py.",
@@ -289,7 +161,6 @@
       ],
       "name": "6DOF-EKF-ParamID",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -309,7 +180,6 @@
       ],
       "name": "6DOF-EquationError-LS",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -329,7 +199,6 @@
       ],
       "name": "6DOF-Fisher-UQ",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -349,7 +218,6 @@
       ],
       "name": "6DOF-Frequency-Stitching",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -369,7 +237,6 @@
       ],
       "name": "6DOF-Frequency-Welch",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -389,7 +256,6 @@
       ],
       "name": "6DOF-GP-RBF",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -425,7 +291,6 @@
       ],
       "name": "6DOF-Koopman-EDMD",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -445,7 +310,6 @@
       ],
       "name": "6DOF-LinearSS",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -465,7 +329,6 @@
       ],
       "name": "6DOF-Model-Stitching",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -485,7 +348,6 @@
       ],
       "name": "6DOF-NN-Surrogate",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": true,
@@ -505,7 +367,6 @@
       ],
       "name": "6DOF-NominalGreyBox",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -525,7 +386,6 @@
       ],
       "name": "6DOF-PINN-Closure",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": true,
@@ -545,7 +405,6 @@
       ],
       "name": "6DOF-RidgeResidual",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -565,7 +424,6 @@
       ],
       "name": "6DOF-SINDy",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -585,7 +443,6 @@
       ],
       "name": "6DOF-Subspace-Hankel",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -605,7 +462,6 @@
       ],
       "name": "6DOF-Symbolic-Stepwise",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -625,7 +481,6 @@
       ],
       "name": "6DOF-UDE-Residual",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": true,
@@ -645,7 +500,6 @@
       ],
       "name": "6DOF-Variational-Mocap",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -657,391 +511,19 @@
       ]
     },
     {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": false,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "EKF-ParamID",
-      "observation_types": [
-        "direct",
-        "mocap"
-      ],
-      "requires_gpu": false,
-      "training_scenarios": [
-        "aggressive"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": false,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "EquationError-LS",
-      "observation_types": [
-        "direct",
-        "mocap"
-      ],
-      "requires_gpu": false,
-      "training_scenarios": [
-        "aggressive"
-      ]
-    },
-    {
       "description": "Minimal contributor example for the benchmark plugin API.",
       "entry_point": "method:ExampleLinearMethod",
       "heavy": false,
       "model_families": [
-        "aircraft3dof"
+        "aircraft6dof"
       ],
       "name": "ExampleLinear",
       "observation_types": [
-        "direct"
-      ],
-      "requires_gpu": false,
-      "training_scenarios": [
-        "trim_grid"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": false,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "Fisher-UQ",
-      "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
       "training_scenarios": [
-        "aggressive"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": false,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "Frequency-Stitching",
-      "observation_types": [
-        "direct",
-        "mocap"
-      ],
-      "requires_gpu": false,
-      "training_scenarios": [
-        "trim_grid"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": false,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "Frequency-Welch",
-      "observation_types": [
-        "direct",
-        "mocap"
-      ],
-      "requires_gpu": false,
-      "training_scenarios": [
-        "trim_grid"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": true,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "GP-CoeffClosure",
-      "observation_types": [
-        "direct",
-        "mocap"
-      ],
-      "requires_gpu": false,
-      "training_scenarios": [
-        "aggressive"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": false,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "Koopman-EDMD",
-      "observation_types": [
-        "direct",
-        "mocap"
-      ],
-      "requires_gpu": false,
-      "training_scenarios": [
-        "aggressive"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": false,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "Linear-SS",
-      "observation_types": [
-        "direct",
-        "mocap"
-      ],
-      "requires_gpu": false,
-      "training_scenarios": [
-        "trim_grid"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": false,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "Model-Stitching",
-      "observation_types": [
-        "direct",
-        "mocap"
-      ],
-      "requires_gpu": false,
-      "training_scenarios": [
-        "trim_grid"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": true,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "NN-CoeffSurrogate",
-      "observation_types": [
-        "direct",
-        "mocap"
-      ],
-      "requires_gpu": true,
-      "training_scenarios": [
-        "aggressive"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": false,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "Nominal-GreyBox",
-      "observation_types": [
-        "direct",
-        "mocap"
-      ],
-      "requires_gpu": false,
-      "training_scenarios": [
-        "open_loop"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": false,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "OEM-HiddenController",
-      "observation_types": [
-        "direct",
-        "mocap"
-      ],
-      "requires_gpu": false,
-      "training_scenarios": [
-        "safe_loop"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": false,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "OEM-MocapOutput",
-      "observation_types": [
-        "mocap"
-      ],
-      "requires_gpu": false,
-      "training_scenarios": [
-        "aggressive"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": false,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "OEM-SS",
-      "observation_types": [
-        "direct",
-        "mocap"
-      ],
-      "requires_gpu": false,
-      "training_scenarios": [
-        "aggressive"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": true,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "PINN-CoeffClosure",
-      "observation_types": [
-        "direct",
-        "mocap"
-      ],
-      "requires_gpu": true,
-      "training_scenarios": [
-        "aggressive"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": true,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "PINN-HiddenElevator",
-      "observation_types": [
-        "direct",
-        "mocap"
-      ],
-      "requires_gpu": true,
-      "training_scenarios": [
-        "safe_loop"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": false,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "SINDy",
-      "observation_types": [
-        "direct",
-        "mocap"
-      ],
-      "requires_gpu": false,
-      "training_scenarios": [
-        "aggressive"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": false,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "Subspace-Hankel",
-      "observation_types": [
-        "direct",
-        "mocap"
-      ],
-      "requires_gpu": false,
-      "training_scenarios": [
-        "trim_grid"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": false,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "Symbolic-Stepwise",
-      "observation_types": [
-        "direct",
-        "mocap"
-      ],
-      "requires_gpu": false,
-      "training_scenarios": [
-        "aggressive"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": true,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "UDE-HiddenControl",
-      "observation_types": [
-        "direct",
-        "mocap"
-      ],
-      "requires_gpu": true,
-      "training_scenarios": [
-        "safe_loop"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": true,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "UDE-Residual",
-      "observation_types": [
-        "direct",
-        "mocap"
-      ],
-      "requires_gpu": true,
-      "training_scenarios": [
-        "aggressive"
-      ]
-    },
-    {
-      "description": "Built-in method currently dispatched by comparison_suite.py.",
-      "entry_point": "comparison_suite:builtin",
-      "heavy": false,
-      "model_families": [
-        "aircraft3dof"
-      ],
-      "name": "Variational-Mocap",
-      "observation_types": [
-        "mocap"
-      ],
-      "requires_gpu": false,
-      "training_scenarios": [
-        "aggressive"
+        "aircraft_6dof_trim_grid"
       ]
     }
   ],
@@ -1051,86 +533,37 @@
     "validation_score": "Mean state NRMSE over open-loop validation rollouts; lower is better."
   },
   "model_families": [
-    "aircraft3dof",
     "aircraft6dof"
   ],
   "scenarios": [
     {
-      "id": "open_loop",
-      "method_result_count": 40,
-      "model_family": "aircraft3dof",
-      "title": "Open-loop maneuver"
-    },
-    {
-      "id": "sine_sweep",
-      "method_result_count": 40,
-      "model_family": "aircraft3dof",
-      "title": "Aggressive sine-sweep maneuver"
-    },
-    {
-      "id": "aggressive",
-      "method_result_count": 40,
-      "model_family": "aircraft3dof",
-      "title": "Aggressive nonlinear maneuver"
-    },
-    {
-      "id": "trim_grid",
-      "method_result_count": 40,
-      "model_family": "aircraft3dof",
-      "title": "Local trim-grid small-deviation maneuver"
-    },
-    {
-      "id": "open_loop_safe",
-      "method_result_count": 42,
-      "model_family": "aircraft3dof",
-      "title": "Open-loop maneuver with SAFE enabled"
-    },
-    {
-      "id": "sine_sweep_safe",
-      "method_result_count": 42,
-      "model_family": "aircraft3dof",
-      "title": "Aggressive sine-sweep with SAFE enabled"
-    },
-    {
-      "id": "aggressive_safe",
-      "method_result_count": 42,
-      "model_family": "aircraft3dof",
-      "title": "Aggressive maneuver with SAFE enabled"
-    },
-    {
-      "id": "safe_loop",
-      "method_result_count": 42,
-      "model_family": "aircraft3dof",
-      "title": "Aggressive SAFE recovery-probe maneuver"
-    },
-    {
       "id": "aircraft_6dof_open_loop",
-      "method_result_count": 32,
+      "method_result_count": 16,
       "model_family": "aircraft6dof",
       "title": "6-DOF open-loop maneuver"
     },
     {
       "id": "aircraft_6dof_sine_sweep",
-      "method_result_count": 32,
+      "method_result_count": 16,
       "model_family": "aircraft6dof",
       "title": "6-DOF sine-sweep maneuver"
     },
     {
       "id": "aircraft_6dof_aggressive",
-      "method_result_count": 32,
+      "method_result_count": 16,
       "model_family": "aircraft6dof",
       "title": "6-DOF aggressive nonlinear stall maneuver"
     },
     {
       "id": "aircraft_6dof_trim_grid",
-      "method_result_count": 32,
+      "method_result_count": 16,
       "model_family": "aircraft6dof",
       "title": "6-DOF local trim-grid small-deviation maneuver"
     },
     {
       "dataset_status": "provisional",
       "id": "sportcub_mocap_4_17_26",
-      "method_result_count": 43,
+      "method_result_count": 19,
       "model_family": "aircraft6dof",
       "source_type": "real_mocap",
       "title": "Sport Cub S 2 motion-capture 6DOF dataset, 2026-04-17"
@@ -1138,7 +571,7 @@
     {
       "dataset_status": "provisional",
       "id": "sportcub_mocap_5_22_26",
-      "method_result_count": 38,
+      "method_result_count": 19,
       "model_family": "aircraft6dof",
       "source_type": "real_mocap",
       "title": "Sport Cub S 2 motion-capture full-lap 6DOF dataset, 2026-05-22"

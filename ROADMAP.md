@@ -1,57 +1,59 @@
 # System Identification Benchmark Roadmap
 
-This roadmap turns the repository into a public, reproducible benchmark platform with a static GitHub Pages site, a contribution path for new methods, and both 3DOF and 6DOF aircraft model families.
+This roadmap tracks the repository's evolution into a public, reproducible
+benchmark platform with a static GitHub Pages site, a contribution path for
+new methods, and a nonlinear 6DOF aircraft model family evaluated on both
+synthetic and real motion-capture flight data.
 
 ## Goals
 
 - Publish current benchmark results as an interactive public website.
 - Make benchmark data machine-readable so figures, tables, and the website use the same source of truth.
 - Let contributors add new identification methods through a small, documented plugin interface.
-- Keep 3DOF longitudinal benchmarks as the fast, interpretable baseline.
-- Add 6DOF aircraft benchmarks as the realism and coupled-dynamics benchmark family.
+- Center the benchmark on real indoor motion-capture flight data, with synthetic 6DOF maneuver families for controlled comparisons.
 - Preserve the paper workflow so generated figures and tables remain reproducible.
 
 ## Architecture
 
 ```text
 system_identification/
-  methods/
-    benchmark/
-      schema.py
-      method_api.py
-      export.py
-    models/
-      aircraft3dof/
-      aircraft6dof/
-    plugins/
-      <method_name>/
-        method.py
-        method.json
-        README.md
-        test_smoke.py
-    results/
-  site/
-    src/
-    public/data/
-  latex/
+  benchmark/            # schema, method API, registry, web export
+  models/
+    aircraft6dof/       # dynamics, dataset generator, comparison suite, grey-box methods
+  methods/plugins/
+    <method_name>/
+      method.py
+      method.json
+      README.md
+      test_smoke.py
+  dataset_tools/        # manifests, validation, real-flight converters
+  data/                 # compact committed datasets
+  results/              # raw metrics and metadata
+  site/                 # static website incl. flight explorer
+  latex/                # paper sources and generated assets
   .github/workflows/
 ```
 
-The benchmark runner remains Python-native. The website is static and data-driven. WASM is used only for interactive client-side data exploration, not for trusted benchmark execution.
+The benchmark runner remains Python-native. The website is static and
+data-driven; client-side prediction free-runs are for exploration, not for
+trusted benchmark execution.
 
 ## Data Contract
 
 Every published dataset and result bundle should identify:
 
-- `model_family`: `aircraft3dof` or `aircraft6dof`
-- `scenario`: trim grid, open-loop, sine sweep, aggressive, SAFE enabled, recovery probe, or future variants
-- `observation_type`: direct state, mocap-derived state, mocap at 100 Hz, mocap at 10 Hz, mocap at 2 Hz, or future sensor suites
-- `controller`: off, hidden SAFE-like loop, or future controller variants
+- `model_family`: `aircraft6dof`
+- `scenario`: trim grid, open-loop, sine sweep, aggressive, or a real-flight dataset id
+- `controller`: off, or the stock SAFE stabilization recorded in the real flights
 - `inputs`: pilot commands used for validation rollouts
-- `states`: true states when available
-- `observations`: measured channels exposed to methods
+- `states`: true states when available (synthetic only)
+- `observations`: measured channels exposed to methods (pose; states derived by the suite)
 - `metrics`: validation NRMSE, per-state errors, training time, validation rollout time, failure status, and run metadata
 - `provenance`: git SHA, command line, package versions, data-generation seed, and benchmark version
+
+There is a single observation policy: methods receive motion-capture
+position/attitude, and any further smoothing or state estimation is part of
+the method under test.
 
 Large contributed datasets are indexed in git but stored out-of-band. During
 early review a dataset may use a provisional Google Drive, SharePoint, Dropbox,
@@ -67,89 +69,23 @@ practical. Raw ROS 2 bags and large exported CSV trees remain external; dataset
 processors convert asynchronous topics onto a documented time grid and write the
 canonical binary format described in `docs/DATASET_CONTRACT.md`.
 
-## Model Families
+## Completed Milestones
 
-### 3DOF Longitudinal Aircraft
+- Static GitHub Pages site with leaderboard, cost-error tradeoff, 3D playback, and the flight explorer (segmentation, browser free-runs, model inspector, data-splits view).
+- Method plugin API with metadata schema, registry bridge, and CI smoke checks.
+- Nonlinear 6DOF model with stall/residual aerodynamics and four synthetic maneuver families.
+- Two real Sport Cub indoor mocap datasets (2026-04-17 maneuver windows, 2026-05-22 full flights) converted to the canonical format.
+- Grey-box output-error fit, filter-error EKF, and torch ODE-in-the-loop UDE on the 6DOF tier.
+- Closed-loop SAFE-mode model identified from the real flights.
+- Single mocap observation policy; the former direct/mocap dual-run was removed.
 
-Purpose: fast nonlinear benchmark for method development, paper figures, and CI smoke tests.
+## Current Roadmap
 
-Required scenarios:
-
-- Near-trim small maneuvers
-- Trim-grid local excitation
-- Aggressive nonlinear maneuvers with stall onset, drag rise, pull-up, and recovery regimes
-- SAFE off and SAFE-on hidden-controller variants
-- Direct-state and mocap-derived validation views
-
-### 6DOF Aircraft
-
-Purpose: coupled-dynamics benchmark for methods that must handle roll, yaw, attitude representation, hidden stabilization, and richer observation models.
-
-Required scenarios:
-
-- Longitudinal-only maneuvers for comparison against 3DOF
-- Lateral-directional maneuvers
-- Coupled aggressive maneuvers
-- Hidden roll/pitch stabilization
-- Mocap position/attitude observations, with optional IMU, pitot, GPS, and mixed-rate sensor variants later
-
-## Commit-Sized Implementation Chunks
-
-Each chunk should be reviewed and committed before moving to the next one.
-
-1. **Roadmap document**
-   - Add this roadmap.
-   - Commit: `Add benchmark platform roadmap`
-
-2. **Benchmark export contract**
-   - Add a small Python exporter that converts current CSV outputs into website-ready JSON.
-   - Include benchmark metadata and a manifest.
-   - Commit: `Add benchmark web data export`
-
-3. **Static website scaffold**
-   - Add a minimal `site/` app.
-   - Load exported JSON and render an initial leaderboard, dataset selector, and cost-error plot.
-   - Commit: `Add benchmark website scaffold`
-
-4. **GitHub Pages workflow**
-   - Add a workflow that exports benchmark data, builds the site, and publishes Pages.
-   - Keep full benchmark execution out of untrusted PRs.
-   - Commit: `Add GitHub Pages deployment workflow`
-
-5. **Method plugin contract**
-   - Add `benchmark/method_api.py` and a metadata schema.
-   - Document how a contributor adds a method.
-   - Add a smoke-test fixture.
-   - Commit: `Add method plugin API`
-
-6. **Current-method registry bridge**
-   - Register existing methods through the plugin-style metadata without rewriting every implementation yet.
-   - Preserve the current `comparison_suite.py` behavior.
-   - Commit: `Bridge existing methods into plugin registry`
-
-7. **3DOF model package cleanup**
-   - Move or alias current longitudinal simulator code under `models/aircraft3dof/`.
-   - Keep backward-compatible imports.
-   - Commit: `Package 3DOF aircraft benchmark model`
-
-8. **6DOF model interface**
-   - Add a 6DOF model package skeleton with state, input, observation, and scenario definitions.
-   - Include a deterministic smoke simulation before adding full nonlinear aerodynamics.
-   - Commit: `Add 6DOF benchmark model skeleton`
-
-9. **6DOF nonlinear scenarios**
-   - Add nonlinear aerodynamic effects, hidden stabilization options, and mocap observation generation.
-   - Add CI-scale sample datasets.
-   - Commit: `Add 6DOF nonlinear benchmark scenarios`
-
-10. **Public contribution workflow**
-    - Add contributor docs, PR checks, benchmark-preview instructions, and self-hosted GPU runner guidance.
-    - Commit: `Document benchmark contribution workflow`
-
-11. **Paper and website synchronization**
-    - Ensure paper figures and website data are generated from the same manifest.
-    - Add consistency checks.
-    - Commit: `Synchronize paper and website benchmark data`
+1. **Frequency-domain maturity.** Replace the Frequency-Welch/Stitching placeholder rows with a CIFER-style multi-window coherence-weighted identification.
+2. **Gap-aware canonical format.** Represent mocap dropouts as gaps in timestamps rather than interpolated samples, with segmenters breaking at timing discontinuities.
+3. **Method placeholders.** Promote Variational-Mocap, PINN-Closure, and NN-Surrogate from placeholder implementations to genuine baselines.
+4. **Durable dataset archiving.** Mirror the Sport Cub datasets from provisional cloud links to a durable archive and flip manifests to `archived`.
+5. **Additional model families.** A possible F-16 family based on Stevens--Lewis table-lookup aerodynamics would test high-performance aircraft identification without replacing the small-RC, mocap-motivated benchmark.
 
 ## Security Policy
 
@@ -163,7 +99,3 @@ Method contributions use a two-phase process:
 2. After review and merge, a maintainer runs the full benchmark on trusted local GPU hardware and commits regenerated result artifacts separately.
 
 This keeps untrusted code away from self-hosted GPU machines and separates method review from benchmark-result review.
-
-## Initial Milestone
-
-The first public milestone is a static GitHub Pages site that shows the current 3DOF benchmark results from committed CSV files. The site should make the existing benchmark easier to inspect before the 6DOF work expands the problem size.

@@ -299,7 +299,7 @@ def fit_greybox_lag(split: suite.Split6DOF, dt: float, max_nfev: int = 150) -> d
 def fit_greybox_ekf(x_quat: np.ndarray, u_cmd: np.ndarray, dt: float, stride: int = 4) -> dict:
     """Filter-error parameter estimation: augmented-state EKF over the grey-box.
 
-    Port of the 3DOF filter-error EKF: the 12 Euler states are augmented with
+    The 12 Euler states are augmented with
     the 22 aerodynamic parameters, propagated chunk by chunk over the manual
     training windows with CasADi step and parameter Jacobians, and corrected
     by Joseph-form updates against the measured states. The parameter

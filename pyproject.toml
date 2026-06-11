@@ -22,19 +22,13 @@ gpu = [
 
 [tool.setuptools]
 py-modules = [
-  "comparison_suite",
-  "observation_rate_study",
   "results",
-  "run",
 ]
 packages = [
   "benchmark",
-  "common",
   "dataset_tools",
   "dataset_tools.sportcub_mocap_4_17_26",
-  "dataset_tools.synthetic_3dof",
+  "dataset_tools.sportcub_mocap_5_22_26",
   "models",
-  "models.aircraft3dof",
   "models.aircraft6dof",
-  "simulation",
 ]

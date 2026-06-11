@@ -31,11 +31,6 @@ jobs:
       - name: Validate website bundle
         run: python3 site/check_site.py
 
-      - name: Validate method entry points
-        run: |
-          python3 run.py frequency --help
-          python3 run.py sindy --help
-
       - name: Validate synthetic 6DOF generation
         run: |
           python3 -m models.aircraft6dof.generate_dataset \
