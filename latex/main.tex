@@ -1940,6 +1940,40 @@ rotating the airframe by hand in Experienced mode produces no surface
 response, so no rate feedback is active there and the fitted rate-damping
 coefficients are genuine bare-airframe aerodynamic derivatives.
 
+\paragraph{Identifiability and uncertainty.} Cram\'er--Rao lower bounds
+from the output-error Jacobian at the solution (residual coloring
+uncorrected, so the bounds are optimistic) split the 22 parameters into
+three classes. Well identified (1--8\% relative standard deviation): the
+lift line ($C_{L_0}$ 1.0\%, $C_{L_\alpha}$ 3.1\%), all primary damping
+and stiffness terms ($K_{M_q}$ 2.7\%, $K_{L_p}$ 3.5\%, $K_{N_\beta}$
+2.5\%), and the control effectivenesses. Weakly identified: $K_T$
+(14.8\%), $K_{L_{\delta a}}$ (17.2\%), $K_{N_0}$ (27\%). Unidentifiable:
+$C_{D_{CL^2}}$ at 368\% --- the formal confirmation of its physical
+zero-bound pin. Four parameter pairs are strongly coupled
+($|r|>0.9$): $C_{L_0}\!\leftrightarrow\!C_{L_\alpha}$ and
+$K_{M_0}\!\leftrightarrow\!K_{M_\alpha}$ (the laps occupy a narrow
+angle-of-attack band, so intercept and slope trade off), and
+$K_{L_0}\!\leftrightarrow\!K_{L_{\delta r}}$,
+$K_{N_0}\!\leftrightarrow\!K_{N_{\delta r}}$ (the rudder rides near a
+constant trim, aliasing its effectiveness with the moment biases). The
+remedies are input-design items: wider angle-of-attack excitation and
+rudder doublets about varied trims. The full covariance diagnostics are
+written into the fitted-parameter artifact.
+
+\paragraph{Actuator lag and battery decay: tested, not identifiable here.}
+A 25-parameter extension adding first-order servo and motor lag states and
+a linear battery thrust-decay term was fitted and gated on held-out data:
+all three new parameters pinned at their bounds (both lags at their minima,
+the decay at its maximum) and validation NRMSE \emph{worsened} from 0.106
+to 0.130. The mechanism is observability: the 3-2-1-1 excitation at
+2--4\,rad/s cannot see a $\sim$30\,ms servo pole, and within-flight
+maneuver placement confounds the per-flight-time decay term, which then
+absorbs unrelated trends. The lag-augmented model is retained in the code
+for reuse once dedicated excitation exists; the battery effect remains
+quantified independently by the ground-roll analysis, and folding those
+throttle-step ground runs into the flight fit is the identified path to a
+recoverable $K_B$.
+
 \subsection{6-DOF Baseline Methods}
 
 \paragraph{6DOF-NominalGreyBox.}

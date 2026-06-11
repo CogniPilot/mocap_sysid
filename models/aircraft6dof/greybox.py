@@ -75,6 +75,9 @@ SPORTCUB_PARAMETER_NAMES = (
     "KNr",
     "KNda",
     "KNdr",
+    "TAUS",
+    "TAUM",
+    "KB",
 )
 
 
@@ -133,6 +136,11 @@ class SportCubGreyboxConfig:
             "KNr": Bounds1D(-100.00, -8.00, 20.00),
             "KNda": Bounds1D(-30.00, -1.00, 30.00),
             "KNdr": Bounds1D(-50.00, -10.00, 50.00),
+            # First-order servo and motor lags plus linear battery thrust
+            # decay with flight time (packs sag over a 5-10 minute flight).
+            "TAUS": Bounds1D(0.02, 0.08, 0.30),
+            "TAUM": Bounds1D(0.04, 0.15, 0.80),
+            "KB": Bounds1D(-0.0020, -0.0005, 0.0),
         }
     )
     literature_parameter_bounds: dict[str, Bounds1D] = field(
@@ -269,7 +277,7 @@ def build_casadi_dynamics(config: SportCubGreyboxConfig, dt: float):
         KNr,
         KNda,
         KNdr,
-    ) = (p_sym[i] for i in range(n_params))
+    ) = (p_sym[i] for i in range(32))  # fixed(10) + aero(22); TAUS/TAUM/KB unused here
 
     max_defl = config.max_deflection_deg
     thr = ca.fmax(thr_cmd, 0.0)
@@ -391,3 +399,111 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+STATE_NAMES_LAG = STATE_NAMES_EULER + ("delta_e", "delta_a", "delta_r", "thr_f")
+CONTROL_NAMES_LAG = CONTROL_NAMES_OEM + ("t_flight",)
+
+
+def build_casadi_dynamics_lag(config: SportCubGreyboxConfig, dt: float):
+    """Grey-box dynamics with first-order actuator lags and battery decay.
+
+    Sixteen states: the twelve Euler states plus lagged surface deflections
+    (rad) and filtered throttle. Controls gain a fifth channel, the flight
+    time in seconds, entering only the battery thrust multiplier
+    ``(1 + KB * t_flight)``. The aerodynamics consume the lag states instead
+    of the instantaneous commands.
+    """
+
+    n_states = len(STATE_NAMES_LAG)
+    n_params = len(FIXED_PARAMETER_NAMES) + len(SPORTCUB_PARAMETER_NAMES)
+    x_sym = ca.SX.sym("x", n_states)
+    u_sym = ca.SX.sym("u", len(CONTROL_NAMES_LAG))
+    p_sym = ca.SX.sym("p", n_params)
+
+    u_b, v_b, w_b = x_sym[3], x_sym[4], x_sym[5]
+    phi, theta, psi = x_sym[6], x_sym[7], x_sym[8]
+    p_r, q_r, r_r = x_sym[9], x_sym[10], x_sym[11]
+    elev_rad, ail_rad, rud_rad, thr_f = x_sym[12], x_sym[13], x_sym[14], x_sym[15]
+    ail_cmd, elev_cmd, thr_cmd, rud_cmd, t_flight = (u_sym[i] for i in range(5))
+
+    p = {name: p_sym[i] for i, name in enumerate(FIXED_PARAMETER_NAMES + SPORTCUB_PARAMETER_NAMES)}
+    m, S, b_span, cbar, rho, g = p["m"], p["S"], p["b"], p["cbar"], p["rho"], p["g"]
+
+    max_defl = config.max_deflection_deg
+    deg = ca.pi / 180.0
+
+    speed = ca.sqrt(u_b**2 + v_b**2 + w_b**2 + 1e-9)
+    speed_safe = ca.fmax(speed, 1e-3)
+    alpha = ca.atan2(w_b, u_b)
+    beta = ca.asin(ca.fmin(ca.fmax(v_b / speed_safe, -0.99), 0.99))
+    qbar = 0.5 * rho * speed_safe**2
+    c_a, s_a, c_b, s_b = ca.cos(alpha), ca.sin(alpha), ca.cos(beta), ca.sin(beta)
+
+    CL = p["CL0"] + p["CLa"] * alpha
+    CD = p["CD0"] + p["CDCLS"] * CL**2
+    lift = qbar * S * CL
+    drag = qbar * S * CD
+    side = qbar * S * (p["CYb"] * beta)
+    battery = ca.fmax(1.0 + p["KB"] * t_flight, 0.3)
+    thrust = p["KT"] * m * ca.fmax(thr_f, 0.0) * battery
+
+    force_x_b = -drag * c_a * c_b - side * c_a * s_b + lift * s_a + thrust
+    force_y_b = -drag * s_b + side * c_b
+    force_z_b = -drag * s_a * c_b - side * s_a * s_b - lift * c_a
+
+    c_phi, s_phi = ca.cos(phi), ca.sin(phi)
+    c_th, s_th = ca.cos(theta), ca.sin(theta)
+    c_psi, s_psi = ca.cos(psi), ca.sin(psi)
+
+    u_dot = force_x_b / m - g * s_th + r_r * v_b - q_r * w_b
+    v_dot = force_y_b / m + g * s_phi * c_th + p_r * w_b - r_r * u_b
+    w_dot = force_z_b / m + g * c_phi * c_th + q_r * u_b - p_r * v_b
+
+    bV = b_span / (2.0 * speed_safe)
+    cV = cbar / (2.0 * speed_safe)
+    roll_accel = qbar * (p["KL0"] + p["KLb"] * beta + p["KLp"] * bV * p_r + p["KLr"] * bV * r_r + p["KLda"] * ail_rad + p["KLdr"] * rud_rad)
+    pitch_accel = qbar * (p["KM0"] + p["KMa"] * alpha + p["KMq"] * cV * q_r + p["KMe"] * elev_rad)
+    yaw_accel = qbar * (p["KN0"] + p["KNb"] * beta + p["KNp"] * bV * p_r + p["KNr"] * bV * r_r + p["KNda"] * ail_rad + p["KNdr"] * rud_rad)
+
+    Ixx, Iyy, Izz, Ixz = p["Ixx"], p["Iyy"], p["Izz"], p["Ixz"]
+    p_dot = roll_accel + ((Iyy - Izz) / Ixx) * q_r * r_r + (Ixz / Ixx) * p_r * q_r
+    q_dot = pitch_accel + ((Izz - Ixx) / Iyy) * p_r * r_r + (Ixz / Iyy) * (r_r**2 - p_r**2)
+    r_dot = yaw_accel + ((Ixx - Iyy) / Izz) * p_r * q_r + (Ixz / Izz) * q_r * r_r
+
+    c_th_safe = ca.sign(c_th) * ca.fmax(ca.fabs(c_th), 1e-3)
+    common = q_r * s_phi + r_r * c_phi
+    phi_dot = p_r + (s_th / c_th_safe) * common
+    theta_dot = q_r * c_phi - r_r * s_phi
+    psi_dot = common / c_th_safe
+
+    r00 = c_th * c_psi
+    r01 = s_phi * s_th * c_psi - c_phi * s_psi
+    r02 = c_phi * s_th * c_psi + s_phi * s_psi
+    r10 = c_th * s_psi
+    r11 = s_phi * s_th * s_psi + c_phi * c_psi
+    r12 = c_phi * s_th * s_psi - s_phi * c_psi
+
+    elev_dot = (max_defl["elevator"] * deg * elev_cmd - elev_rad) / p["TAUS"]
+    ail_dot = (max_defl["aileron"] * deg * ail_cmd - ail_rad) / p["TAUS"]
+    rud_dot = (max_defl["rudder"] * deg * rud_cmd - rud_rad) / p["TAUS"]
+    thr_dot = (ca.fmin(ca.fmax(thr_cmd, 0.0), 1.0) - thr_f) / p["TAUM"]
+
+    xdot = ca.vertcat(
+        r00 * u_b + r01 * v_b + r02 * w_b,
+        r10 * u_b + r11 * v_b + r12 * w_b,
+        -s_th * u_b + s_phi * c_th * v_b + c_phi * c_th * w_b,
+        u_dot, v_dot, w_dot,
+        phi_dot, theta_dot, psi_dot,
+        p_dot, q_dot, r_dot,
+        elev_dot, ail_dot, rud_dot, thr_dot,
+    )
+    dynamics = ca.Function("sportcub_lag_rhs", [x_sym, u_sym, p_sym], [xdot], ["x", "u", "p"], ["xdot"])
+    k1 = dynamics(x_sym, u_sym, p_sym)
+    k2 = dynamics(x_sym + 0.5 * dt * k1, u_sym, p_sym)
+    k3 = dynamics(x_sym + 0.5 * dt * k2, u_sym, p_sym)
+    k4 = dynamics(x_sym + dt * k3, u_sym, p_sym)
+    x_next = x_sym + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+    x_next = ca.vertcat(x_next[:8], ca.atan2(ca.sin(x_next[8]), ca.cos(x_next[8])), x_next[9:])
+    rk4_step = ca.Function("sportcub_lag_rk4", [x_sym, u_sym, p_sym], [x_next], ["x", "u", "p"], ["x_next"])
+    return dynamics, rk4_step

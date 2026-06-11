@@ -28,6 +28,8 @@ from . import comparison_suite as suite
 from .model import INPUT_NAMES
 from .greybox import (
     CONTROL_NAMES_OEM,
+    STATE_NAMES_LAG,
+    build_casadi_dynamics_lag,
     SPORTCUB_PARAMETER_NAMES,
     STATE_NAMES_EULER,
     build_casadi_dynamics,
@@ -186,6 +188,78 @@ def greybox_one_step(spec, theta_full: np.ndarray, xk: np.ndarray, uk: np.ndarra
         for k in range(xk.shape[1]):
             out[trial, k] = step(xk[trial, k], uk[trial, k])
     return out
+
+
+
+
+def lag_chunk_inputs(split: suite.Split6DOF, dt: float) -> tuple[np.ndarray, np.ndarray]:
+    """Augmented (16-state, 5-input) chunk arrays for the lag grey-box.
+
+    Lag states initialize at the commanded values (the lead-in is
+    quasi-steady) and the fifth input channel is the flight time at each
+    sample, parsed from the chunk name's full-rate start index, for the
+    battery thrust-decay term.
+    """
+    import re
+
+    spec = sportcub_greybox_spec()
+    deg = np.pi / 180.0
+    x12 = quat_states_to_euler(split.x_true)
+    u4 = split.u_cmd[:, :, OEM_CONTROL_ORDER]
+    n, length = x12.shape[:2]
+    x16 = np.concatenate([x12, np.zeros((n, length, 4))], axis=2)
+    u5 = np.concatenate([u4, np.zeros((n, length, 1))], axis=2)
+    throws = np.array([
+        spec.max_deflection_deg["elevator"],
+        spec.max_deflection_deg["aileron"],
+        spec.max_deflection_deg["rudder"],
+    ]) * deg
+    for trial in range(n):
+        # u4 order is CONTROL_NAMES_OEM = (aileron, elevator, throttle, rudder)
+        ail0, elev0, thr0, rud0 = u4[trial, 0]
+        x16[trial, :, 12] = throws[0] * elev0
+        x16[trial, :, 13] = throws[1] * ail0
+        x16[trial, :, 14] = throws[2] * rud0
+        x16[trial, :, 15] = np.clip(thr0, 0.0, 1.0)
+        name = str(split.segment_names[trial]) if split.segment_names is not None else ""
+        match = re.search(r"__manual_(\d+)(?:_w(\d+))?", name)
+        start = int(match.group(1)) if match else 0
+        window = int(match.group(2)) - 1 if match and match.group(2) else 0
+        t0 = (start + window * length) * dt
+        u5[trial, :, 4] = t0 + np.arange(length) * dt
+    return x16, u5
+
+
+def fit_greybox_lag(split: suite.Split6DOF, dt: float, max_nfev: int = 150) -> dict:
+    """Fit the 25-parameter lag-and-battery grey-box on benchmark chunks."""
+    spec = sportcub_greybox_spec()
+    x_train, u_train = lag_chunk_inputs(split, dt)
+    stride = max(1, int(round((1.0 / MODEL_RATE_HZ) / dt)))
+    _dynamics, rk4 = build_casadi_dynamics_lag(spec, dt * stride)
+    sigma = np.asarray(spec.output_sigma)
+    setup = spec.default_parameter_setup()
+    lower = np.array([row[1] for row in setup])
+    theta0 = np.array([row[2] for row in setup])
+    upper = np.array([row[3] for row in setup])
+
+    def residual(theta: np.ndarray) -> np.ndarray:
+        full = spec.full_parameter_vector(theta)
+        pred = chunk_rollouts(rk4, full, x_train, u_train, stride)
+        return output_residuals(pred, x_train, stride, sigma)
+
+    fit = least_squares(residual, theta0, bounds=(lower, upper), max_nfev=max_nfev, verbose=1)
+    full = spec.full_parameter_vector(fit.x)
+    return {
+        "spec": spec,
+        "theta": fit.x,
+        "theta_full": full,
+        "lower": lower,
+        "upper": upper,
+        "rk4": rk4,
+        "train_nrmse": rollout_nrmse(rk4, full, x_train, u_train, stride),
+        "cost": float(fit.cost),
+        "nfev": int(fit.nfev),
+    }
 
 
 def main() -> int:
