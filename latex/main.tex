@@ -2434,8 +2434,27 @@ Future methods should be added only when the repository contains executable code
 This appendix presents each implemented method as a self-contained unit ---
 approach, implementation, and results --- so a reviewer can audit the code
 against the stated algorithm and the claims against the generated numbers.
-Validation scores are full-state mean NRMSE over open-loop rollouts (lower is
-better); ``synthetic'' results average the four simulated scenarios and
+Unless stated otherwise, every score in this appendix is one of the
+following precisely defined quantities, all computed on open-loop rollouts
+that receive only an initial state and the recorded pilot commands (rule
+R1). \emph{Full-state mean NRMSE} (the leaderboard ``validation score''):
+for each of the 13 state channels, the root-mean-square error between the
+rollout and the measured validation states, pooled over all validation
+chunks and samples, is divided by that channel's min-to-max range in the
+validation truth; the score is the unweighted mean of the 13 normalized
+values. Quaternion signs are aligned to the truth before scoring (a gauge
+fix, $q\equiv-q$); non-finite rollouts score $10^9$ and physically
+diverged rollouts are flagged in a separate column rather than masked.
+\emph{Pose RMSE} (reported in meters): the RMSE of the 3-D position
+channels alone over the same rollouts, unnormalized. \emph{Grey-box
+chunk NRMSE}: the same range-normalized construction applied to the
+grey-box's 60\,Hz chunk rollouts over its twelve Euler states.
+\emph{One-step dynamic residual}: the Euclidean norm of the model's
+single-step prediction error restricted to the six dynamic states
+(body velocities and rates, in their native mixed units), used only for
+regime comparisons such as the saturation analysis. The five-second
+free-run position metric used for the SAFE model is defined in its results
+paragraph. ``Synthetic'' results average the four simulated scenarios and
 ``real'' results are the Sport Cub motion-capture datasets (4/17 and 5/22)
 with mocap-derived states. The authoritative code is
 \texttt{models/aircraft6dof/comparison\_suite.py},
