@@ -2531,12 +2531,25 @@ the original $K_T$ cap of 0.85\,m/s$^2$ per unit throttle could not balance
 cruise drag ($\approx$2.3 required), pinning $K_T$, $C_{L_0}$, and
 $C_{L_\alpha}$; the fitter now records parameters within 1\% of the box.
 $C_{D_{CL^2}}$ at its physical zero bound is accepted (induced drag is
-weakly identifiable over the narrow $C_L$ range).
+weakly identifiable over the narrow $C_L$ range). A 25-parameter extension
+adding servo/motor lag states and battery thrust decay was implemented and
+gated out on held-out data (all three added parameters pinned at bounds,
+validation worsened 0.106 $\rightarrow$ 0.130): the recorded 2--4\,rad/s
+excitation cannot observe a $\sim$30\,ms servo pole, and maneuver
+placement confounds the per-flight-time decay term.
 \paragraph{Results.} Real data 0.158 (4/17) and 0.102 (5/22) --- the
 reference physical model. Fitted values are physically plausible
 ($C_{L_0}=1.21$, $C_{L_\alpha}=3.59$ for a low-Reynolds cambered foam wing;
 $K_T=1.36$; $C_{m_q}$-type damping $-24.7$) and the lateral control signs
-match the real airframe (opposite the synthetic convention). Not run on
+match the real airframe (opposite the synthetic convention).
+Cram\'er--Rao analysis identifies the lift line, damping/stiffness, and
+control effectivenesses to 1--8\% relative standard deviation, finds
+$C_{D_{CL^2}}$ unidentifiable (368\%), and exposes four strong couplings
+($C_{L_0}\!\leftrightarrow\!C_{L_\alpha}$,
+$K_{M_0}\!\leftrightarrow\!K_{M_\alpha}$,
+$K_{L_0}\!\leftrightarrow\!K_{L_{\delta r}}$,
+$K_{N_0}\!\leftrightarrow\!K_{N_{\delta r}}$) traced to the narrow
+angle-of-attack band and the near-constant rudder trim. Not run on
 synthetic scenarios (the spec encodes the Sport Cub airframe).
 
 \subsection{6DOF-LinearSS}
@@ -2781,7 +2794,15 @@ gains and saturations: $\delta=K_p(\mathrm{sat}(c\cdot\mathrm{stick},
 gain, yaw-rate gain, bias).
 \paragraph{Implementation.} Staged grid search over $(c,\ell)$ with Huber
 regression for the gains, fitted from stabilized segments by inverse
-dynamics against the nominal airframe.
+dynamics against the nominal airframe. The law is
+proportional--derivative only --- no integral action --- consistent with
+three observations: the transmitter carries manual elevator trim buttons
+(integral action would make them redundant in stabilized mode), the fitted
+closed-loop residuals show no unexplained slow mode, and attitude
+integrators wind up in exactly the low-authority regime this airframe
+occupies. A ten-second ground test discriminates directly: hold the
+airframe tilted --- a ramping surface deflection indicates integral action,
+a steady deflection pure PD.
 \paragraph{Results.} Retained for interpretability and as the free-run
 fallback; identified against the nominal airframe, which is why its
 composition with each method's airframe currently loses to the direct
