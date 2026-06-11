@@ -190,6 +190,9 @@ function setDefaultScenario() {
 function renderModelTabs() {
   const host = document.querySelector("#model-tabs");
   host.innerHTML = "";
+  // A selector with one option is noise; hide the whole Model control.
+  const wrap = host.closest("div");
+  if (wrap) wrap.hidden = state.manifest.model_families.length <= 1;
   for (const family of state.manifest.model_families) {
     const button = document.createElement("button");
     button.type = "button";
