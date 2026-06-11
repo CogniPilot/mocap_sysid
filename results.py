@@ -50,8 +50,7 @@ SIX_DOF_FIGURE_EXPORTS = {
     "aircraft6dof_validation_score_comparison.svg": "generated_aircraft6dof_validation_score_comparison.svg",
     "aircraft6dof_validation_trajectory_overlay.svg": "generated_aircraft6dof_validation_trajectory_overlay.svg",
     "aircraft6dof_train_time_accuracy_tradeoff.svg": "generated_aircraft6dof_train_time_accuracy_tradeoff.svg",
-    "aircraft6dof_method_score_heatmap_direct.svg": "generated_aircraft6dof_method_score_heatmap_direct.svg",
-    "aircraft6dof_method_score_heatmap_mocap.svg": "generated_aircraft6dof_method_score_heatmap_mocap.svg",
+    "aircraft6dof_method_score_heatmap.svg": "generated_aircraft6dof_method_score_heatmap.svg",
 }
 LATEX_GENERATED_PATTERNS = ("*.tex",)
 LATEX_GENERATED_FIGURE_PATTERNS = ("generated_*",)
@@ -124,6 +123,18 @@ def read_csv(path: Path) -> list[dict[str, str]]:
         raise SystemExit(f"missing required results file: {path}")
     with path.open(newline="") as stream:
         return list(csv.DictReader(stream))
+
+
+def remove_matching(directory: Path, patterns: tuple[str, ...]) -> int:
+    if not directory.exists():
+        return 0
+    removed = 0
+    for pattern in patterns:
+        for path in directory.glob(pattern):
+            if path.is_file() or path.is_symlink():
+                path.unlink()
+                removed += 1
+    return removed
 
 
 def clean_latex_generated_assets() -> None:
@@ -202,8 +213,6 @@ def suite_6dof(args: argparse.Namespace) -> None:
         sys.executable,
         "-m",
         "models.aircraft6dof.comparison_suite",
-        "--state-source",
-        args.state_source,
         "--ridge",
         str(args.ridge),
         "--workers",
@@ -234,7 +243,6 @@ def all_6dof(args: argparse.Namespace) -> None:
         argparse.Namespace(
             dataset=dataset,
             dataset_modes=dataset_modes,
-            state_source=args.state_source,
             ridge=args.ridge,
             workers=args.workers,
             no_plot=args.no_plot,
@@ -500,7 +508,6 @@ def add_shared_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--validation-trials", type=int, default=16)
     parser.add_argument("--duration", type=float, default=40.0)
     parser.add_argument("--no-plot", action="store_true")
-    parser.add_argument("--state-source", choices=["direct", "mocap", "both"], default="both")
     parser.add_argument("--input-channel", choices=["u_act", "u_cmd"], default="u_cmd")
     parser.add_argument("--epochs", type=int, default=700)
     parser.add_argument("--max-samples", type=int, default=50000)
@@ -552,7 +559,6 @@ def parse_args() -> argparse.Namespace:
     p_suite6 = sub.add_parser("suite-6dof", help="run baseline methods on the 6DOF train/validation dataset")
     p_suite6.add_argument("--dataset", type=Path, default=SIX_DOF_DATASET_OUTPUTS["aggressive"])
     p_suite6.add_argument("--dataset-modes", nargs="+", choices=list(SIX_DOF_DATASET_MODES), default=None, help="standard generated 6DOF datasets to aggregate; omit to use --dataset")
-    p_suite6.add_argument("--state-source", choices=["direct", "mocap", "both"], default="both")
     p_suite6.add_argument("--ridge", type=float, default=1e-5)
     p_suite6.add_argument("--workers", type=int, default=max(1, min(30, (os.cpu_count() or 2) - 2)))
     p_suite6.add_argument("--no-plot", action="store_true")
@@ -567,7 +573,6 @@ def parse_args() -> argparse.Namespace:
     p_all6.add_argument("--seed", type=int, default=17)
     p_all6.add_argument("--dataset-mode", choices=list(SIX_DOF_DATASET_MODES), default="aggressive")
     p_all6.add_argument("--dataset-modes", nargs="+", choices=list(SIX_DOF_DATASET_MODES), default=list(SIX_DOF_DATASET_MODES))
-    p_all6.add_argument("--state-source", choices=["direct", "mocap", "both"], default="both")
     p_all6.add_argument("--ridge", type=float, default=1e-5)
     p_all6.add_argument("--workers", type=int, default=max(1, min(30, (os.cpu_count() or 2) - 2)))
     p_all6.add_argument("--no-plot", action="store_true")

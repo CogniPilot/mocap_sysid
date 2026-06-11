@@ -149,8 +149,8 @@
     "method_traces": "method_traces.json",
     "playback": "playback.json"
   },
-  "generated_at": "2026-06-11T20:57:22.119386+00:00",
-  "git_sha": "c1ea6d616575ef40ed0f552c7e2a5de3f737f6bb",
+  "generated_at": "2026-06-11T21:35:39.327905+00:00",
+  "git_sha": "5986867f85d7ad281344239b4dc4804defffec1c",
   "method_registry": [
     {
       "description": "Built-in 6DOF baseline dispatched by models/aircraft6dof/comparison_suite.py.",
@@ -161,7 +161,6 @@
       ],
       "name": "6DOF-EKF-ParamID",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -181,7 +180,6 @@
       ],
       "name": "6DOF-EquationError-LS",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -201,7 +199,6 @@
       ],
       "name": "6DOF-Fisher-UQ",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -221,7 +218,6 @@
       ],
       "name": "6DOF-Frequency-Stitching",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -241,7 +237,6 @@
       ],
       "name": "6DOF-Frequency-Welch",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -261,7 +256,6 @@
       ],
       "name": "6DOF-GP-RBF",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -297,7 +291,6 @@
       ],
       "name": "6DOF-Koopman-EDMD",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -317,7 +310,6 @@
       ],
       "name": "6DOF-LinearSS",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -337,7 +329,6 @@
       ],
       "name": "6DOF-Model-Stitching",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -357,7 +348,6 @@
       ],
       "name": "6DOF-NN-Surrogate",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": true,
@@ -377,7 +367,6 @@
       ],
       "name": "6DOF-NominalGreyBox",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -397,7 +386,6 @@
       ],
       "name": "6DOF-PINN-Closure",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": true,
@@ -417,7 +405,6 @@
       ],
       "name": "6DOF-RidgeResidual",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -437,7 +424,6 @@
       ],
       "name": "6DOF-SINDy",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -457,7 +443,6 @@
       ],
       "name": "6DOF-Subspace-Hankel",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -477,7 +462,6 @@
       ],
       "name": "6DOF-Symbolic-Stepwise",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -497,7 +481,6 @@
       ],
       "name": "6DOF-UDE-Residual",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": true,
@@ -517,7 +500,6 @@
       ],
       "name": "6DOF-Variational-Mocap",
       "observation_types": [
-        "direct",
         "mocap"
       ],
       "requires_gpu": false,
@@ -537,7 +519,7 @@
       ],
       "name": "ExampleLinear",
       "observation_types": [
-        "direct"
+        "mocap"
       ],
       "requires_gpu": false,
       "training_scenarios": [
@@ -556,32 +538,32 @@
   "scenarios": [
     {
       "id": "aircraft_6dof_open_loop",
-      "method_result_count": 32,
+      "method_result_count": 16,
       "model_family": "aircraft6dof",
       "title": "6-DOF open-loop maneuver"
     },
     {
       "id": "aircraft_6dof_sine_sweep",
-      "method_result_count": 32,
+      "method_result_count": 16,
       "model_family": "aircraft6dof",
       "title": "6-DOF sine-sweep maneuver"
     },
     {
       "id": "aircraft_6dof_aggressive",
-      "method_result_count": 32,
+      "method_result_count": 16,
       "model_family": "aircraft6dof",
       "title": "6-DOF aggressive nonlinear stall maneuver"
     },
     {
       "id": "aircraft_6dof_trim_grid",
-      "method_result_count": 32,
+      "method_result_count": 16,
       "model_family": "aircraft6dof",
       "title": "6-DOF local trim-grid small-deviation maneuver"
     },
     {
       "dataset_status": "provisional",
       "id": "sportcub_mocap_4_17_26",
-      "method_result_count": 43,
+      "method_result_count": 22,
       "model_family": "aircraft6dof",
       "source_type": "real_mocap",
       "title": "Sport Cub S 2 motion-capture 6DOF dataset, 2026-04-17"
@@ -589,7 +571,7 @@
     {
       "dataset_status": "provisional",
       "id": "sportcub_mocap_5_22_26",
-      "method_result_count": 38,
+      "method_result_count": 19,
       "model_family": "aircraft6dof",
       "source_type": "real_mocap",
       "title": "Sport Cub S 2 motion-capture full-lap 6DOF dataset, 2026-05-22"

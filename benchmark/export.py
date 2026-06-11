@@ -133,7 +133,6 @@ def _method_rows(
     rows.sort(
         key=lambda row: (
             str(row.get("scenario") or ""),
-            str(row.get("state_source") or ""),
             float(row.get("validation_score") or math.inf),
             str(row.get("method") or ""),
         )
@@ -182,13 +181,12 @@ def _dedupe_method_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     lets refreshed real-data rows override stale aggregate rows without
     duplicating website table entries.
     """
-    by_key: dict[tuple[str, str, str, str], dict[str, Any]] = {}
-    order: list[tuple[str, str, str, str]] = []
+    by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+    order: list[tuple[str, str, str]] = []
     for row in rows:
         key = (
             str(row.get("model_family") or ""),
             str(row.get("scenario") or ""),
-            str(row.get("state_source") or ""),
             str(row.get("method") or ""),
         )
         if key not in by_key:

@@ -100,8 +100,9 @@ python3 -m models.aircraft6dof.flight_explorer_export --dataset 4_17  # 4/17 man
 ## Benchmark Policy
 
 Every method consumes the same train/validation splits for a given dataset and
-is scored by the same open-loop validation rollout. The suite runs each
-dataset under both observation sources: `direct` (the canonical state
-channel) and `mocap` (states re-derived from the pose channel). Methods are
+is scored by the same open-loop validation rollout. There is a single
+observation policy: methods receive motion-capture position/attitude, with
+states derived by differentiation; any further smoothing or state estimation
+is part of the method under test. Methods are
 registered in `benchmark/registry.py`; contributed methods plug in via
 `methods/plugins/<name>/method.json` and are smoke-tested in CI.

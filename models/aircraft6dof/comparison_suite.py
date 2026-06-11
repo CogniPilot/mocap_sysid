@@ -40,7 +40,7 @@ DEFAULT_TABLES = LATEX_TABLES
 DEFAULT_WORKERS = max(1, min(30, (os.cpu_count() or 2) - 2))
 TRADEOFF_FAILURE_THRESHOLD = 1.0
 WEB_TRACE_MAX_POINTS = 100
-WEB_TRACE_TOP_METHODS_PER_SOURCE = 8
+WEB_TRACE_TOP_METHODS = 8
 SCENARIO_TITLES = {
     "aircraft_6dof_open_loop": "Open-loop",
     "aircraft_6dof_sine_sweep": "Sine sweep",
@@ -97,7 +97,6 @@ class Result6DOF:
     method: str
     description: str
     backend: str
-    state_source: str
     validation_score: float
     train_elapsed_s: float
     train_cpu_s: float
@@ -1057,7 +1056,6 @@ def score_state_method(
     method: str,
     description: str,
     backend: str,
-    state_source: str,
     train_elapsed: float,
     train_cpu: float,
     rollout_elapsed: float,
@@ -1076,7 +1074,6 @@ def score_state_method(
         method=method,
         description=description,
         backend=backend,
-        state_source=state_source,
         validation_score=score,
         train_elapsed_s=train_elapsed,
         train_cpu_s=train_cpu,
@@ -1095,19 +1092,13 @@ def score_state_method(
 def run_methods(
     train_splits: dict[str, Split6DOF],
     validation: Split6DOF,
-    state_source: str,
     ridge: float,
     workers: int,
     training_scenario_override: str | None = None,
 ) -> list[Result6DOF]:
     config = Aircraft6DOFConfig(duration=float(validation.t[-1] - validation.t[0]), dt=validation.dt)
-    if state_source == "direct":
-        validation_x0 = validation.x0_estimate if validation.x0_estimate is not None else validation.y_meas[:, 0, :]
-    elif state_source == "mocap":
-        x0_window = min(max(int(round(0.2 / max(validation.dt, 1e-6))), 5), len(validation.t))
-        validation_x0 = derive_state_from_mocap(validation.mocap_meas[:, :x0_window, :], validation.t[:x0_window])[:, 0, :]
-    else:
-        raise ValueError(f"unsupported state source: {state_source}")
+    x0_window = min(max(int(round(0.2 / max(validation.dt, 1e-6))), 5), len(validation.t))
+    validation_x0 = derive_state_from_mocap(validation.mocap_meas[:, :x0_window, :], validation.t[:x0_window])[:, 0, :]
 
     training_cache: dict[str, tuple[Split6DOF, np.ndarray]] = {}
 
@@ -1118,10 +1109,7 @@ def run_methods(
             return scenario, fallback, fallback.y_meas, 0
         if scenario not in training_cache:
             split = train_splits[scenario]
-            if state_source == "direct":
-                split_x = split.y_meas
-            else:
-                split_x = derive_state_from_mocap(split.mocap_meas, split.t)
+            split_x = derive_state_from_mocap(split.mocap_meas, split.t)
             training_cache[scenario] = (split, split_x)
         split, split_x = training_cache[scenario]
         train_samples = int(np.prod(split_x[:, :-1, :].shape[:2]))
@@ -1148,7 +1136,6 @@ def run_methods(
                 "6DOF-NominalGreyBox",
                 "Attached-flow nominal 6DOF rollout using pilot commands and no fitted stall correction.",
                 "numpy-rk4",
-                state_source,
                 0.0,
                 0.0,
                 rollout_elapsed,
@@ -1174,7 +1161,6 @@ def run_methods(
             "6DOF-LinearSS",
             "Global affine discrete state-space fit x[k+1]=A x[k]+B u_cmd[k]+c.",
             "numpy-ridge",
-            state_source,
             train_elapsed,
             train_cpu,
             rollout_elapsed,
@@ -1189,7 +1175,7 @@ def run_methods(
     start = time.perf_counter()
     cpu_start = time.process_time()
     _scenario, train, train_x, train_samples = training_context("6DOF-RidgeResidual")
-    print(f"  {state_source}: nominal residual targets using {workers} workers", flush=True)
+    print(f"  nominal residual targets using {workers} workers", flush=True)
     nominal_next = parallel_nominal_next(train_x, train.u_cmd, train.dt, config, workers)
     residual = train_x[:, 1:, :] - nominal_next
     weights = ridge_fit(design_matrix(train_x[:, :-1, :], train.u_cmd[:, :-1, :]), residual, ridge)
@@ -1203,7 +1189,6 @@ def run_methods(
             "6DOF-RidgeResidual",
             "Nominal RK4 model plus ridge-fitted one-step residual correction.",
             "numpy-rk4-ridge",
-            state_source,
             train_elapsed,
             train_cpu,
             rollout_elapsed,
@@ -1230,7 +1215,6 @@ def run_methods(
             "6DOF-Model-Stitching",
             "Airdata-scheduled family of local affine one-step state models.",
             "numpy-local-ridge",
-            state_source,
             train_elapsed,
             train_cpu,
             rollout_elapsed,
@@ -1256,7 +1240,6 @@ def run_methods(
             "6DOF-Frequency-Welch",
             "Frequency-domain-inspired global linear baseline approximated by a regularized one-step realization.",
             "numpy-regularized-realization",
-            state_source,
             train_elapsed,
             train_cpu,
             rollout_elapsed,
@@ -1286,7 +1269,6 @@ def run_methods(
             "6DOF-Frequency-Stitching",
             "Airdata-scheduled local realization residuals around the nominal 6DOF equations.",
             "numpy-local-realization",
-            state_source,
             train_elapsed,
             train_cpu,
             rollout_elapsed,
@@ -1319,7 +1301,6 @@ def run_methods(
                 "6DOF-EKF-ParamID",
                 "Filter-error estimation: augmented-state EKF over the grey-box parameters with CasADi Jacobians.",
                 "casadi-ad-ekf",
-                state_source,
                 train_elapsed,
                 train_cpu,
                 rollout_elapsed,
@@ -1342,7 +1323,7 @@ def run_methods(
     flat_u = uk.reshape(-1, len(INPUT_NAMES))
     flat_xkp1 = xkp1.reshape(-1, len(STATE_NAMES))
     flat_dxdt = dxdt.reshape(-1, len(STATE_NAMES))
-    fit_idx_poly = sample_indices(flat_x.shape[0], 90_000, 20_000 + (0 if state_source == "direct" else 1))
+    fit_idx_poly = sample_indices(flat_x.shape[0], 90_000, 20_001)
     fit_x = flat_x[fit_idx_poly]
     fit_u = flat_u[fit_idx_poly]
     fit_xkp1 = flat_xkp1[fit_idx_poly]
@@ -1362,7 +1343,6 @@ def run_methods(
             "6DOF-EquationError-LS",
             "Affine derivative regression rolled out open-loop with explicit integration.",
             "numpy-ridge-derivative",
-            state_source,
             train_elapsed,
             train_cpu,
             rollout_elapsed,
@@ -1391,7 +1371,6 @@ def run_methods(
             "6DOF-Variational-Mocap",
             "Smoothed weak-form derivative fit used as a lightweight variational baseline.",
             "numpy-smoothed-weak",
-            state_source,
             train_elapsed,
             train_cpu,
             rollout_elapsed,
@@ -1424,7 +1403,6 @@ def run_methods(
             "6DOF-SINDy",
             "Sparse quadratic-library derivative model fitted by iterated threshold-and-refit (STLSQ).",
             "numpy-stlsq",
-            state_source,
             train_elapsed,
             train_cpu,
             rollout_elapsed,
@@ -1451,7 +1429,6 @@ def run_methods(
             "6DOF-Symbolic-Stepwise",
             "Sparse stepwise quadratic one-step predictor.",
             "numpy-sparse-ridge",
-            state_source,
             train_elapsed,
             train_cpu,
             rollout_elapsed,
@@ -1477,7 +1454,6 @@ def run_methods(
             "6DOF-Koopman-EDMD",
             "Quadratic lifted one-step predictor rolled out in the original state coordinates.",
             "numpy-edmd",
-            state_source,
             train_elapsed,
             train_cpu,
             rollout_elapsed,
@@ -1494,7 +1470,7 @@ def run_methods(
     if training_scenario_override and "sportcub" in training_scenario_override:
         from .greybox_oem_fit import fit_greybox, greybox_one_step
 
-        print(f"  {state_source}: grey-box OEM fit (shared by UDE base and GreyBoxOEM row)", flush=True)
+        print("  grey-box OEM fit (shared by UDE base and GreyBoxOEM row)", flush=True)
         greybox_fit_start = time.perf_counter()
         greybox_fit_cpu = time.process_time()
         greybox = fit_greybox(train_x, train.u_cmd, train.dt)
@@ -1531,7 +1507,6 @@ def run_methods(
             "6DOF-UDE-Residual",
             "Attached-flow nominal dynamics plus quadratic learned residual map.",
             "numpy-residual-ridge",
-            state_source,
             train_elapsed,
             train_cpu,
             rollout_elapsed,
@@ -1560,7 +1535,6 @@ def run_methods(
             "6DOF-PINN-Closure",
             "Physics-structured residual closure constrained to the attached-flow 6DOF equations.",
             "numpy-sparse-closure",
-            state_source,
             train_elapsed,
             train_cpu,
             rollout_elapsed,
@@ -1595,7 +1569,6 @@ def run_methods(
             "6DOF-Subspace-Hankel",
             "Lagged ARX/Hankel linear predictor using a three-sample state history.",
             "numpy-hankel-ridge",
-            state_source,
             train_elapsed,
             train_cpu,
             rollout_elapsed,
@@ -1618,7 +1591,7 @@ def run_methods(
     cpu_start = time.process_time()
     z = np.concatenate((invariant_state(xk.reshape(-1, len(STATE_NAMES))), uk.reshape(-1, len(INPUT_NAMES))), axis=1)
     target_res = residual.reshape(-1, len(STATE_NAMES))
-    rng = np.random.default_rng(12_345 + (0 if state_source == "direct" else 1))
+    rng = np.random.default_rng(12_346)
     fit_count = min(60_000, z.shape[0])
     fit_idx = rng.choice(z.shape[0], size=fit_count, replace=False)
     center_count = min(96, fit_count)
@@ -1638,7 +1611,6 @@ def run_methods(
             "6DOF-GP-RBF",
             "Sparse RBF/Gaussian-process-style residual surrogate around attached-flow dynamics.",
             "numpy-rbf-ridge",
-            state_source,
             train_elapsed,
             train_cpu,
             rollout_elapsed,
@@ -1667,7 +1639,6 @@ def run_methods(
             "6DOF-NN-Surrogate",
             "Random-feature neural-surrogate analogue for residual dynamics.",
             "numpy-random-feature",
-            state_source,
             train_elapsed,
             train_cpu,
             rollout_elapsed,
@@ -1696,7 +1667,6 @@ def run_methods(
                 "6DOF-GreyBoxOEM",
                 "Physical lumped-parameter Sport Cub grey-box fitted by output-error multiple shooting over the training chunks.",
                 "casadi-rk4-trf",
-                state_source,
                 train_elapsed,
                 train_cpu,
                 rollout_elapsed,
@@ -1729,7 +1699,6 @@ def run_methods(
                     "6DOF-UDE-NN",
                     "Universal differential equation: fitted grey-box physics plus an MLP residual trained RK4-in-the-loop.",
                     "torch-rk4-shooting",
-                    state_source,
                     ude_train_elapsed,
                     ude_train_cpu,
                     ude_rollout_elapsed,
@@ -1743,9 +1712,9 @@ def run_methods(
                 )
             )
         except ImportError:
-            print(f"  {state_source}: torch unavailable, skipping 6DOF-UDE-NN", flush=True)
+            print("  torch unavailable, skipping 6DOF-UDE-NN", flush=True)
         except ValueError as error:
-            print(f"  {state_source}: skipping 6DOF-UDE-NN ({error})", flush=True)
+            print(f"  skipping 6DOF-UDE-NN ({error})", flush=True)
 
         weak = [n for n, sd, v in zip(greybox["parameter_names"], greybox["cr_std"], greybox["theta"]) if abs(v) > 1e-9 and sd / abs(v) > 0.25]
         couples = ", ".join(f"{c['a']}-{c['b']}" for c in greybox["couplings"])
@@ -1754,7 +1723,6 @@ def run_methods(
                 "6DOF-Fisher-UQ",
                 "Cramer-Rao parameter uncertainty and coupling analysis of the grey-box output-error fit.",
                 "casadi-jacobian-crlb",
-                state_source,
                 greybox_fit_elapsed,
                 greybox_fit_cpu,
                 rollout_elapsed,
@@ -1821,7 +1789,6 @@ def result_to_row(result: Result6DOF, validation_scenario: str) -> dict[str, obj
         "diverged": result.diverged,
         "backend": result.backend,
         "model_family": "aircraft6dof",
-        "state_source": result.state_source,
         "input_channel": "u_cmd",
         "evaluation_mode": "open_loop",
         "training_scenario": result.training_scenario,
@@ -1946,17 +1913,17 @@ def segment_label(validation: Split6DOF, index: int) -> str:
 
 def write_method_traces(results: list[Result6DOF], validation: Split6DOF, scenario: str, path: Path) -> None:
     traces: list[dict[str, object]] = []
-    selected_results: list[Result6DOF] = []
-    for source in sorted({result.state_source for result in results}):
-        source_results = [result for result in results if result.state_source == source and np.isfinite(result.validation_score)]
-        source_results = sorted(source_results, key=lambda result: result.validation_score)
-        keep: dict[str, Result6DOF] = {
-            result.method: result for result in source_results[:WEB_TRACE_TOP_METHODS_PER_SOURCE]
-        }
-        for result in source_results:
-            if "Nominal" in result.method:
-                keep[result.method] = result
-        selected_results.extend(keep.values())
+    finite_results = sorted(
+        [result for result in results if np.isfinite(result.validation_score)],
+        key=lambda result: result.validation_score,
+    )
+    keep: dict[str, Result6DOF] = {
+        result.method: result for result in finite_results[:WEB_TRACE_TOP_METHODS]
+    }
+    for result in finite_results:
+        if "Nominal" in result.method:
+            keep[result.method] = result
+    selected_results = list(keep.values())
     # Real-flight scenarios export every validation window so the viewer can
     # overlay traces anywhere in a flight; synthetic scenarios keep one.
     segment_limit = validation.u_cmd.shape[0] if not scenario.startswith("aircraft_6dof_") else 1
@@ -1973,7 +1940,6 @@ def write_method_traces(results: list[Result6DOF], validation: Split6DOF, scenar
                 "method": result.method,
                 "model_family": "aircraft6dof",
                 "scenario": scenario,
-                "state_source": result.state_source,
                 "segments": segments,
             }
         )
@@ -1983,17 +1949,17 @@ def write_method_traces(results: list[Result6DOF], validation: Split6DOF, scenar
 
 def write_table(rows: list[dict[str, object]], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    ordered = sorted(rows, key=lambda row: (str(row["state_source"]), str(row.get("scenario", "")), float(row["validation_score"])))
+    ordered = sorted(rows, key=lambda row: (str(row.get("scenario", "")), float(row["validation_score"])))
     include_scenario = len({str(row.get("scenario", "")) for row in rows}) > 1
     with path.open("w") as stream:
         stream.write("% Generated by aircraft6dof comparison suite. Do not edit by hand.\n")
         stream.write(r"\begingroup\scriptsize\setlength{\tabcolsep}{2pt}" + "\n")
         if include_scenario:
-            stream.write(r"\begin{longtable}{p{0.20\linewidth}p{0.10\linewidth}p{0.10\linewidth}lrrrrp{0.13\linewidth}}" + "\n")
-            header = r"Method & Train & Val. & Source & Score & Train [s] & Rollout [s] & Pos. RMSE & Backend \\"
+            stream.write(r"\begin{longtable}{p{0.20\linewidth}p{0.10\linewidth}p{0.10\linewidth}rrrrp{0.13\linewidth}}" + "\n")
+            header = r"Method & Train & Val. & Score & Train [s] & Rollout [s] & Pos. RMSE & Backend \\"
         else:
-            stream.write(r"\begin{longtable}{p{0.31\linewidth}lrrrrp{0.18\linewidth}}" + "\n")
-            header = r"Method & Source & Score & Train [s] & Rollout [s] & Pos. RMSE & Backend \\"
+            stream.write(r"\begin{longtable}{p{0.31\linewidth}rrrrp{0.18\linewidth}}" + "\n")
+            header = r"Method & Score & Train [s] & Rollout [s] & Pos. RMSE & Backend \\"
         stream.write(r"\caption{6-DOF aircraft benchmark baseline results. Lower validation score is better.}\label{tab:aircraft6dof_method_comparison}\\" + "\n")
         stream.write(r"\toprule" + "\n")
         stream.write(header + "\n")
@@ -2012,7 +1978,6 @@ def write_table(rows: list[dict[str, object]], path: Path) -> None:
                 fields.append(scenario_label(row.get("validation_scenario", row.get("scenario", ""))).replace("_", r"\_"))
             fields.extend(
                 [
-                    str(row["state_source"]),
                     f"{float(row['validation_score']):.3g}",
                     f"{float(row['train_elapsed_s']):.3g}",
                     f"{float(row['rollout_elapsed_s']):.3g}",
@@ -2044,30 +2009,26 @@ def scenario_label(scenario: object) -> str:
 
 
 def plot_scores(rows: list[dict[str, object]], output: Path) -> None:
-    groups = ["direct", "mocap"]
-    fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.6), sharey=True)
+    fig, ax = plt.subplots(figsize=(6.4, 4.6))
     rows = aggregate_method_rows(rows)
     finite = [max(float(row["validation_score"]), 1e-6) for row in rows]
     x_min = max(min(finite) * 0.65, 1e-5)
     x_max = max(finite) * 1.8
-    colors = {"direct": "#4c78a8", "mocap": "#f58518"}
-    for ax, source in zip(axes, groups):
-        source_rows = sorted([row for row in rows if row["state_source"] == source], key=lambda row: float(row["validation_score"]), reverse=True)
-        y = np.arange(len(source_rows))
-        scores = [max(float(row["validation_score"]), 1e-6) for row in source_rows]
-        labels = [str(row["method"]).replace("6DOF-", "") for row in source_rows]
-        for yi, score in zip(y, scores):
-            ax.plot([x_min, score], [yi, yi], color="0.82", linewidth=1.0)
-        ax.scatter(scores, y, color=colors[source], edgecolor="black", linewidth=0.4, s=44)
-        ax.set_yticks(y)
-        ax.set_yticklabels(labels, fontsize=8.0)
-        ax.set_xscale("log")
-        ax.set_xlim(x_min, x_max)
-        ax.set_title(f"{source} validation")
-        ax.set_xlabel("validation score")
-        ax.grid(True, axis="x", which="both", alpha=0.25)
-        ax.text(0.02, 0.04, "left is better", transform=ax.transAxes, fontsize=8.0, bbox={"facecolor": "white", "edgecolor": "0.75", "alpha": 0.9})
-    axes[0].set_ylabel("method")
+    ordered = sorted(rows, key=lambda row: float(row["validation_score"]), reverse=True)
+    y = np.arange(len(ordered))
+    scores = [max(float(row["validation_score"]), 1e-6) for row in ordered]
+    labels = [str(row["method"]).replace("6DOF-", "") for row in ordered]
+    for yi, score in zip(y, scores):
+        ax.plot([x_min, score], [yi, yi], color="0.82", linewidth=1.0)
+    ax.scatter(scores, y, color="#f58518", edgecolor="black", linewidth=0.4, s=44)
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels, fontsize=8.0)
+    ax.set_xscale("log")
+    ax.set_xlim(x_min, x_max)
+    ax.set_xlabel("validation score")
+    ax.grid(True, axis="x", which="both", alpha=0.25)
+    ax.text(0.02, 0.04, "left is better", transform=ax.transAxes, fontsize=8.0, bbox={"facecolor": "white", "edgecolor": "0.75", "alpha": 0.9})
+    ax.set_ylabel("method")
     fig.suptitle("6-DOF baseline validation score")
     fig.tight_layout()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -2076,16 +2037,16 @@ def plot_scores(rows: list[dict[str, object]], output: Path) -> None:
     plt.close(fig)
 
 
-def _source_rows(rows: list[dict[str, object]], source: str) -> list[dict[str, object]]:
-    return [row for row in rows if row["state_source"] == source and np.isfinite(float(row["validation_score"]))]
+def _finite_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [row for row in rows if np.isfinite(float(row["validation_score"]))]
 
 
 def aggregate_method_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
-    grouped: dict[tuple[str, str], list[dict[str, object]]] = {}
+    grouped: dict[str, list[dict[str, object]]] = {}
     for row in rows:
-        grouped.setdefault((str(row["method"]), str(row["state_source"])), []).append(row)
+        grouped.setdefault(str(row["method"]), []).append(row)
     aggregated: list[dict[str, object]] = []
-    for (_method, _source), group in grouped.items():
+    for _method, group in grouped.items():
         out = dict(group[0])
         for key in [
             "validation_score",
@@ -2149,10 +2110,8 @@ def add_failure_callout(ax, failed_rows: list[dict[str, object]], threshold: flo
 
 
 def plot_train_time_accuracy(rows: list[dict[str, object]], output: Path) -> None:
-    groups = ["direct", "mocap"]
-    colors = {"direct": "#4c78a8", "mocap": "#f58518"}
     rows = aggregate_method_rows(rows)
-    fig, axes = plt.subplots(1, 2, figsize=(11.2, 4.8), sharey=True)
+    fig, ax = plt.subplots(figsize=(6.8, 4.8))
     passed_scores = [
         max(float(row["validation_score"]), 1e-6)
         for row in rows
@@ -2162,14 +2121,11 @@ def plot_train_time_accuracy(rows: list[dict[str, object]], output: Path) -> Non
         max(min(passed_scores) * 0.65, 5e-2),
         max(min(max(passed_scores) * 2.2, TRADEOFF_FAILURE_THRESHOLD * 1.1), 0.25),
     ) if passed_scores else (5e-2, TRADEOFF_FAILURE_THRESHOLD * 1.1)
-    for ax, source in zip(axes, groups):
-        source_rows = _source_rows(rows, source)
-        if not source_rows:
-            continue
+    source_rows = _finite_rows(rows)
+    if source_rows:
         source_rows, failed_rows = split_tradeoff_rows(source_rows)
         add_failure_callout(ax, failed_rows)
-        if not source_rows:
-            continue
+    if source_rows:
         train_times = np.array([max(float(row["train_elapsed_s"]), 1e-2) for row in source_rows])
         scores = np.array([max(float(row["validation_score"]), 1e-6) for row in source_rows])
         rollout = np.array([max(float(row["rollout_elapsed_s"]), 1e-3) for row in source_rows])
@@ -2179,7 +2135,7 @@ def plot_train_time_accuracy(rows: list[dict[str, object]], output: Path) -> Non
             ax.axhline(nominal_score, color="#d62728", linestyle="--", linewidth=1.0)
             ax.text(max(train_times) * 0.82, nominal_score * 1.06, "NominalGreyBox", color="#d62728", fontsize=7.0)
         sizes = 34.0 + 130.0 * np.sqrt(rollout / max(float(np.max(rollout)), 1e-9))
-        ax.scatter(train_times, scores, s=sizes, color=colors[source], edgecolor="black", linewidth=0.45, alpha=0.78, zorder=3)
+        ax.scatter(train_times, scores, s=sizes, color="#f58518", edgecolor="black", linewidth=0.45, alpha=0.78, zorder=3)
         label_offsets = [(1.08, 1.10), (0.82, 1.18), (1.05, 0.75), (0.72, 0.82)]
         for index, row in enumerate(source_rows):
             label = tradeoff_label(row["method"])
@@ -2196,11 +2152,10 @@ def plot_train_time_accuracy(rows: list[dict[str, object]], output: Path) -> Non
         ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_ylim(*y_limits)
-        ax.set_title(f"{source.capitalize()} benchmark")
         ax.set_xlabel("training / solve time [s]")
         ax.grid(True, which="both", alpha=0.25)
         ax.text(0.02, 0.96, "lower error is better", transform=ax.transAxes, fontsize=8.0, va="top", bbox={"facecolor": "white", "edgecolor": "0.75", "alpha": 0.9})
-    axes[0].set_ylabel("validation score: mean state NRMSE")
+    ax.set_ylabel("validation score: mean state NRMSE")
     fig.suptitle("6-DOF training-time versus validation-error tradeoff")
     fig.tight_layout()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -2210,10 +2165,8 @@ def plot_train_time_accuracy(rows: list[dict[str, object]], output: Path) -> Non
 
 
 def plot_score_heatmaps(rows: list[dict[str, object]], fig_dir: Path) -> None:
-    for source, color in (("direct", "#4c78a8"), ("mocap", "#f58518")):
-        source_rows = _source_rows(rows, source)
-        if not source_rows:
-            continue
+    source_rows = _finite_rows(rows)
+    if source_rows:
         scenarios = [scenario for scenario in SCENARIO_ORDER if any(str(row.get("scenario")) == scenario for row in source_rows)]
         extras = sorted({str(row.get("scenario")) for row in source_rows if str(row.get("scenario")) not in scenarios})
         scenarios.extend(extras)
@@ -2252,7 +2205,7 @@ def plot_score_heatmaps(rows: list[dict[str, object]], fig_dir: Path) -> None:
             fontsize=8.0,
         )
         ax.set_ylabel("method")
-        ax.set_title(f"Validation trajectory error: 6-DOF {source} benchmark", color=color)
+        ax.set_title("Validation trajectory error: 6-DOF benchmark")
         for row_index in range(scores.shape[0]):
             for col_index in range(scores.shape[1]):
                 value = scores[row_index, col_index]
@@ -2263,7 +2216,7 @@ def plot_score_heatmaps(rows: list[dict[str, object]], fig_dir: Path) -> None:
         cbar.set_label("validation score, lower is better")
         fig.tight_layout()
         fig_dir.mkdir(parents=True, exist_ok=True)
-        output = fig_dir / f"aircraft6dof_method_score_heatmap_{source}.svg"
+        output = fig_dir / "aircraft6dof_method_score_heatmap.svg"
         fig.savefig(output, bbox_inches="tight")
         fig.savefig(output.with_suffix(".png"), dpi=220, bbox_inches="tight")
         plt.close(fig)
@@ -2276,17 +2229,15 @@ def plot_trajectory(results: list[Result6DOF], validation: Split6DOF, output: Pa
     truth_speed = np.linalg.norm(validation.x_true[trial, :, 3:6], axis=1)
     truth_coeff = np.array([aerodynamic_coefficients(state, command, config, nonlinear=True) for state, command in zip(validation.x_true[trial], validation.u_cmd[trial])])
     axes[0, 0].plot(validation.x_true[trial, :, 0], -validation.x_true[trial, :, 2], "k-", linewidth=2.0, label="truth")
-    selected: list[Result6DOF] = []
-    for source in ("direct", "mocap"):
-        selected.extend(sorted([r for r in results if r.x_pred is not None and r.state_source == source], key=lambda r: r.validation_score)[:3])
+    selected = sorted([r for r in results if r.x_pred is not None], key=lambda r: r.validation_score)[:5]
     for result in selected:
-        axes[0, 0].plot(result.x_pred[trial, :, 0], -result.x_pred[trial, :, 2], linewidth=1.0, label=f"{result.method}/{result.state_source}")
-        axes[0, 1].plot(validation.t, np.linalg.norm(result.x_pred[trial, :, 3:6], axis=1), linewidth=1.0, label=f"{result.method}/{result.state_source}")
+        axes[0, 0].plot(result.x_pred[trial, :, 0], -result.x_pred[trial, :, 2], linewidth=1.0, label=f"{result.method}")
+        axes[0, 1].plot(validation.t, np.linalg.norm(result.x_pred[trial, :, 3:6], axis=1), linewidth=1.0, label=f"{result.method}")
         pred_coeff = np.array([aerodynamic_coefficients(state, command, config, nonlinear=True) for state, command in zip(result.x_pred[trial], validation.u_cmd[trial])])
-        axes[1, 0].plot(validation.t, np.rad2deg(pred_coeff[:, 6]), linewidth=1.0, label=f"{result.method}/{result.state_source}")
-        axes[1, 1].plot(validation.t, pred_coeff[:, 8], linewidth=1.0, label=f"{result.method}/{result.state_source}")
-        axes[2, 0].plot(validation.t, result.x_pred[trial, :, 10], linewidth=1.0, label=f"{result.method}/{result.state_source}")
-        axes[2, 1].plot(validation.t, result.x_pred[trial, :, 11], linewidth=1.0, label=f"{result.method}/{result.state_source}")
+        axes[1, 0].plot(validation.t, np.rad2deg(pred_coeff[:, 6]), linewidth=1.0, label=f"{result.method}")
+        axes[1, 1].plot(validation.t, pred_coeff[:, 8], linewidth=1.0, label=f"{result.method}")
+        axes[2, 0].plot(validation.t, result.x_pred[trial, :, 10], linewidth=1.0, label=f"{result.method}")
+        axes[2, 1].plot(validation.t, result.x_pred[trial, :, 11], linewidth=1.0, label=f"{result.method}")
     axes[0, 1].plot(validation.t, truth_speed, "k-", linewidth=2.0, label="truth")
     axes[1, 0].plot(validation.t, np.rad2deg(truth_coeff[:, 6]), "k-", linewidth=2.0, label="truth")
     axes[1, 1].plot(validation.t, truth_coeff[:, 8], "k-", linewidth=2.0, label="truth")
@@ -2321,7 +2272,6 @@ def write_manifest(datasets: list[Path], rows: list[dict[str, object]], output: 
         "scenarios": sorted({str(row.get("scenario", "")) for row in rows}),
         "training_scenarios": sorted({str(row.get("training_scenario", "")) for row in rows}),
         "methods": sorted({str(row["method"]) for row in rows}),
-        "state_sources": sorted({str(row["state_source"]) for row in rows}),
         "metric": "Validation score is full-state mean NRMSE over open-loop rollouts.",
         "result_rows": len(rows),
     }
@@ -2335,7 +2285,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS)
     parser.add_argument("--fig-dir", type=Path, default=DEFAULT_FIG)
     parser.add_argument("--table-dir", type=Path, default=DEFAULT_TABLES)
-    parser.add_argument("--state-source", choices=["direct", "mocap", "both"], default="both")
     parser.add_argument("--ridge", type=float, default=1e-5)
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS, help="parallel rollout worker processes")
     parser.add_argument("--no-plot", action="store_true")
@@ -2361,7 +2310,6 @@ def main() -> int:
                 train_splits[training_scenario] = load_split(train_file)
         return train_splits
 
-    sources = ["direct", "mocap"] if args.state_source == "both" else [args.state_source]
     results: list[Result6DOF] = []
     rows: list[dict[str, object]] = []
     trajectory_results: list[Result6DOF] = []
@@ -2398,12 +2346,8 @@ def main() -> int:
             )
         else:
             validation = load_split(dataset_validation_file)
-        dataset_results: list[Result6DOF] = []
-        for source in sources:
-            print(f"running 6DOF {source} methods on {scenario} with {args.workers} rollout workers", flush=True)
-            dataset_results.extend(
-                run_methods(active_train_splits, validation, source, args.ridge, args.workers, training_scenario_override)
-            )
+        print(f"running 6DOF methods on {scenario} with {args.workers} rollout workers", flush=True)
+        dataset_results = run_methods(active_train_splits, validation, args.ridge, args.workers, training_scenario_override)
         rows.extend(result_to_row(result, scenario) for result in dataset_results)
         write_method_traces(dataset_results, validation, scenario, args.results_dir / f"{scenario}_method_traces.json")
         if trajectory_validation is None or scenario == "aircraft_6dof_aggressive":
@@ -2418,9 +2362,9 @@ def main() -> int:
         plot_score_heatmaps(rows, args.fig_dir)
         if trajectory_validation is not None:
             plot_trajectory(trajectory_results, trajectory_validation, args.fig_dir / "aircraft6dof_validation_trajectory_overlay.svg")
-    for row in sorted(rows, key=lambda item: (str(item["state_source"]), float(item["validation_score"]))):
+    for row in sorted(rows, key=lambda item: float(item["validation_score"])):
         print(
-            f"{row['method']} ({row['state_source']}): "
+            f"{row['method']}: "
             f"score={float(row['validation_score']):.4g}, train={float(row['train_elapsed_s']):.3g}s, "
             f"backend={row['backend']}"
         )

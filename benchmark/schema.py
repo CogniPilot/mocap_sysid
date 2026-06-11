@@ -14,7 +14,6 @@ METHOD_RESULT_FIELDS = (
     "description",
     "implementation_status",
     "backend",
-    "state_source",
     "input_channel",
     "evaluation_mode",
     "training_scenario",

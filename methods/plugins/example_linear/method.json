@@ -6,7 +6,7 @@
     "aircraft6dof"
   ],
   "observation_types": [
-    "direct"
+    "mocap"
   ],
   "training_scenarios": [
     "aircraft_6dof_trim_grid"

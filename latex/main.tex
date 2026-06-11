@@ -43,11 +43,10 @@ datasets, measurement assumptions, hidden-control cases, implemented
 identification methods, code-to-equation traceability, validation metrics, and
 current result summaries. The repository focuses on aircraft system
 identification for small fixed-wing vehicles when motion capture may be the
-only trusted measurement source. The current benchmark suite includes a
-nonlinear 3-DOF longitudinal model with nominal-plus-unmodeled aerodynamic
-terms, direct-state and motion-capture-derived observation modes, hidden
-SAFE-like command reshaping, multiple maneuver families, and a developing
-6-DOF model/data interface. The purpose of this reference is reproducibility:
+only trusted measurement source. The current benchmark suite is a
+nonlinear 6-DOF aircraft tier with nominal-plus-unmodeled aerodynamic
+terms, motion-capture-derived observations, multiple synthetic maneuver
+families, and two real Sport Cub indoor motion-capture flight datasets. The purpose of this reference is reproducibility:
 it should be possible to trace each equation, dataset field, result table, and
 figure back to repository code and regenerated artifacts.
 \end{abstract}
@@ -87,12 +86,11 @@ This reference documents the benchmark implemented in the \texttt{system\_identi
 
 The current repository has three main products:
 \begin{enumerate}
-    \item a reproducible 3-DOF longitudinal aircraft benchmark with direct-state and motion-capture-style observation channels;
-    \item a nonlinear 6-DOF aircraft dataset with stall/residual aerodynamics for future coupled-dynamics benchmarks;
+    \item a reproducible nonlinear 6-DOF aircraft benchmark with stall/residual aerodynamics, synthetic maneuver families, and real indoor motion-capture flight datasets;
     \item a static benchmark website data export and method-plugin interface for future contributed methods.
 \end{enumerate}
 
-The primary motivation is small fixed-wing system identification in indoor test environments such as the PURT pylon-racing and fixed-wing UAS testbed setting described by \citet{sribunma2026indoor}. In that setting, the trusted measurement source may be external motion capture rather than onboard air-data or inertial sensors. The 3-DOF benchmark therefore reports both idealized direct-state results and motion-capture-derived results, with additional mocap-output estimators for methods that fit position and attitude directly instead of differentiating them into aerodynamic states.
+The primary motivation is small fixed-wing system identification in indoor test environments such as the PURT pylon-racing and fixed-wing UAS testbed setting described by \citet{sribunma2026indoor}. In that setting, the trusted measurement source may be external motion capture rather than onboard air-data or inertial sensors. The benchmark therefore evaluates every method from motion-capture-derived observations: position and attitude are the trusted observables, and any further smoothing or state reconstruction is considered part of the method under test.
 
 \section{Repository Method Inventory}
 
@@ -160,9 +158,9 @@ The UDE rows \cite{rackauckas2020universal} retain the known longitudinal dynami
 
 \section{Dataset and Result Artifacts}
 
-The 3-DOF benchmark datasets are generated under \texttt{methods/data/longitudinal\_3dof\_nonlinear\_*}. The generated splits contain direct state measurements, mocap position/attitude measurements, mocap-derived aerodynamic states, pilot commands, actuator-realized commands, hidden SAFE corrections, coefficient residual labels, and residual-dynamics labels. The default validation metric in the result tables is the mean range-normalized state RMSE, denoted $J_{\mathrm{val}}$ in this document.
+The default validation metric in the result tables is the mean range-normalized state RMSE, denoted $J_{\mathrm{val}}$ in this document.
 
-The 6-DOF dataset interface now mirrors the 3-DOF split between local, frequency-excitation, aggressive, and trim-grid cases. The default command
+The 6-DOF dataset family splits between local, frequency-excitation, aggressive, and trim-grid cases. The default command
 \begin{verbatim}
 ./results.py simulate-6dof
 \end{verbatim}
@@ -302,7 +300,7 @@ with $T_{\max}=8.8\,\mathrm{N}$ and $\ell_T=0.035\,\mathrm{m}$. The coded body l
 \]
 The dataset stores both the truth coefficients and an attached-flow nominal coefficient set; their difference is the hidden nonlinear aerodynamic residual. Four maneuver families are available in the generator: a near-trim \texttt{open\_loop} small-maneuver case, a \texttt{sine\_sweep} frequency-excitation case, an \texttt{aggressive} nonlinear stall/recovery case, and a \texttt{trim\_grid} case that samples local small-deviation responses across speed, angle of attack, and sideslip. The 6-DOF comparison assigns every method an explicit training split and then validates the trained model across the maneuver family. The local-model methods train on \texttt{trim\_grid} because they require repeated small perturbations near operating points; global nonlinear residual and surrogate methods train on \texttt{aggressive}; the nominal baseline uses no fit. The 6-DOF heatmaps report all validation datasets as separate columns, with the leftmost column giving each method's mean score across the available 6-DOF benchmark conditions.
 
-Two observation assumptions are evaluated. In the direct-state case, the method receives noisy measurements of all 13 states during training and the initial measured state during validation. In the mocap-derived case, the method receives position and quaternion attitude. Body velocity is reconstructed by differentiating mocap position and rotating the result into the body frame, while angular rate is reconstructed by differentiating the quaternion and solving the local quaternion-rate equation. These reconstructed velocity and rate channels are intentionally noisier than the direct-state channel.
+A single observation policy is evaluated: the method receives motion-capture position and quaternion attitude. Body velocity is reconstructed by differentiating mocap position and rotating the result into the body frame, while angular rate is reconstructed by differentiating the quaternion and solving the local quaternion-rate equation. These reconstructed velocity and rate channels are intentionally noisier than an idealized full-state sensor; any additional smoothing or state estimation a method applies is part of that method. Earlier revisions also reported an idealized direct-state diagnostic, but on the real datasets both channels derive from the same motion-capture sensor, so the distinction was retired.
 
 \subsection{Real Flight Records: Lead-In Segmentation and Trim-Offset Calibration}
 \label{subsec:real_segmentation}
@@ -638,21 +636,12 @@ This tests the same grey-box idea used in UDE-style methods, but with a linear r
 \end{figure}
 }{}
 
-\IfFileExists{fig/generated_aircraft6dof_method_score_heatmap_direct.svg}{%
+\IfFileExists{fig/generated_aircraft6dof_method_score_heatmap.svg}{%
 \begin{figure}[hbt!]
     \centering
-    \includesvg[width=0.95\linewidth]{generated_aircraft6dof_method_score_heatmap_direct}
-    \caption{Direct-state 6-DOF benchmark heatmap sorted by mean validation score. The score is full-state mean NRMSE. Columns report the mean across 6-DOF validation datasets followed by the open-loop, sine-sweep, aggressive nonlinear stall, and trim-grid validation datasets. The training split is method-specific and reported in Table~\ref{tab:aircraft6dof_method_comparison}; local-model methods train on the trim grid, global nonlinear residual/surrogate methods train on the aggressive split, and the nominal baseline has no fitted training solve.}
-    \label{fig:aircraft6dof_method_score_heatmap_direct}
-\end{figure}
-}{}
-
-\IfFileExists{fig/generated_aircraft6dof_method_score_heatmap_mocap.svg}{%
-\begin{figure}[hbt!]
-    \centering
-    \includesvg[width=0.95\linewidth]{generated_aircraft6dof_method_score_heatmap_mocap}
-    \caption{Mocap-derived 6-DOF benchmark heatmap sorted by mean validation score. These rows expose the same pilot commands as the direct-state case but initialize and train from position/attitude-derived state estimates. Columns report the mean across 6-DOF validation datasets followed by the open-loop, sine-sweep, aggressive nonlinear stall, and trim-grid validation datasets; the method-specific training split is reported in Table~\ref{tab:aircraft6dof_method_comparison}.}
-    \label{fig:aircraft6dof_method_score_heatmap_mocap}
+    \includesvg[width=0.95\linewidth]{generated_aircraft6dof_method_score_heatmap}
+    \caption{6-DOF benchmark heatmap sorted by mean validation score. The score is full-state mean NRMSE; methods initialize and train from position/attitude-derived state estimates. Columns report the mean across 6-DOF validation datasets followed by the open-loop, sine-sweep, aggressive nonlinear stall, and trim-grid validation datasets. The training split is method-specific and reported in Table~\ref{tab:aircraft6dof_method_comparison}; local-model methods train on the trim grid, global nonlinear residual/surrogate methods train on the aggressive split, and the nominal baseline has no fitted training solve.}
+    \label{fig:aircraft6dof_method_score_heatmap}
 \end{figure}
 }{}
 
@@ -660,7 +649,7 @@ This tests the same grey-box idea used in UDE-style methods, but with a linear r
 \begin{figure}[hbt!]
     \centering
     \includesvg[width=0.95\linewidth]{generated_aircraft6dof_validation_trajectory_overlay}
-    \caption{Representative 6-DOF validation rollout for the best implemented direct and mocap-derived state-predictor baselines. Rollouts use only the validation initial condition and pilot-command sequence after training; the panels include position, speed, angle of attack, stall-gate activation, and body rates.}
+    \caption{Representative 6-DOF validation rollout for the best implemented state-predictor baselines. Rollouts use only the validation initial condition and pilot-command sequence after training; the panels include position, speed, angle of attack, stall-gate activation, and body rates.}
     \label{fig:aircraft6dof_validation_trajectory_overlay}
 \end{figure}
 }{}
@@ -885,8 +874,8 @@ terms in a single fit. The same library is also used by a forward stepwise
 symbolic-regression baseline, which remains a black-box derivative fit.
 
 For aircraft data, the practical details are as important as the sparse
-optimizer. Derivatives are obtained from smoothed direct-state or
-mocap-derived-state histories; the latter case is intentionally difficult
+optimizer. Derivatives are obtained from smoothed mocap-derived state
+histories; this is intentionally difficult
 because motion-capture position and attitude must be differentiated to recover
 airspeed, flight-path angle, angle of attack, and pitch rate. Hidden actuator
 or SAFE-loop dynamics are also challenging because the candidate library sees
@@ -997,9 +986,10 @@ that require accurate state derivatives suffer from finite-difference noise,
 smoothing lag, and loss of bandwidth. For this reason, mocap-output OEM and
 variational or smoothing formulations are better
 matched to the open-loop model-identification problem than methods that first reconstruct
-$V,\alpha,\gamma,Q$ and then differentiate them. The direct-state benchmark is
-still useful, but it should be read as an algorithm diagnostic, not as the
-expected performance for the PURT pylon-racing measurement setup.
+$V,\alpha,\gamma,Q$ and then differentiate them. Earlier revisions also
+reported an idealized direct-state diagnostic; the benchmark now evaluates only
+the motion-capture observation policy expected in the PURT pylon-racing
+measurement setup.
 
 When SAFE is enabled, the estimator observes the external pilot command while
 the plant responds to an internally reshaped elevator command. In this setting,
@@ -1041,7 +1031,7 @@ The updated aggressive results also clarify the role of simple linear models.
 Linear-SS is not invalid; it is an effective local predictor for small motions
 and can remain competitive when mocap-derived state reconstruction dominates
 the error budget. It should not, however, be interpreted as recovering the
-nonlinear aerodynamics. When direct states expose the stall and recovery
+nonlinear aerodynamics. When the maneuvers expose the stall and recovery
 regimes, the nonlinear closure and residual-learning methods give substantially
 lower validation error. This is the intended benchmark behavior: near-trim tests
 verify that simple models are not unfairly penalized, while aggressive

@@ -12,7 +12,7 @@ class ExampleLinearMethod:
         name="ExampleLinear",
         entry_point="method:ExampleLinearMethod",
         model_families=("aircraft3dof",),
-        observation_types=("direct",),
+        observation_types=("mocap",),
         training_scenarios=("trim_grid",),
         requires_gpu=False,
         description="Minimal contributor example for the benchmark plugin API.",
