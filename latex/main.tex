@@ -2722,11 +2722,15 @@ middle position; the pilot confirms the Panic Recovery trigger was never
 used, so no unlabeled fourth controller regime exists in the recordings), so the pilot-perceived low-airspeed
 unresponsiveness is not a control-law gate: the controller is
 speed-blind, and the dependence is plant-side --- every commanded
-deflection buys a moment scaling with dynamic pressure, so at low speed
-the loop needs deflections beyond the surface throws to track the clipped
-bank command within maneuver timescales, while speed-independent
-disturbance moments (propeller torque and slipstream at high power)
-consume a growing share of the moment budget. A
+deflection buys a moment scaling with dynamic pressure, and the
+attitude-command law only ever requests the gain-limited deflection
+$K_p\cdot(\mathrm{error})$ toward a clipped setpoint --- a small slice of
+the available throw. At low speed that slice buys too little moment to
+track even the clipped bank command within maneuver timescales, while
+speed-independent propeller disturbance moments grow in relative terms.
+The airframe itself retains ample authority: the pilot can bank steeply at
+the same speeds in Experienced mode by commanding full deflection
+directly, which is precisely what the gain-limited law never does. A
 speed-gated aileron-authority feature was tested accordingly and rejected
 (held-out error worsened, 2.98\,m $\rightarrow$ 3.03--3.11\,m), and the
 measured stick-to-roll coupling collapse below $\approx$4.5\,m/s is
