@@ -61,7 +61,6 @@ METHOD_TRAINING_SCENARIOS = {
     "6DOF-EquationError-LS": "aircraft_6dof_aggressive",
     "6DOF-EKF-ParamID": "aircraft_6dof_aggressive",
     "6DOF-Fisher-UQ": "aircraft_6dof_aggressive",
-    "6DOF-OEM-SS": "aircraft_6dof_aggressive",
     "6DOF-RidgeResidual": "aircraft_6dof_aggressive",
     "6DOF-Variational-Mocap": "aircraft_6dof_aggressive",
     "6DOF-SINDy": "aircraft_6dof_aggressive",
@@ -1333,62 +1332,6 @@ def run_methods(
             )
         )
 
-    start = time.perf_counter()
-    cpu_start = time.process_time()
-    _scenario, train, train_x, train_samples = training_context("6DOF-EKF-ParamID")
-    nominal_next = parallel_nominal_next(train_x, train.u_cmd, train.dt, config, workers)
-    residual = train_x[:, 1:, :] - nominal_next
-    weights_ekf = ridge_fit(design_matrix(train_x[:, :-1, :], train.u_cmd[:, :-1, :]), residual, 5.0 * ridge)
-    train_elapsed = time.perf_counter() - start
-    train_cpu = time.process_time() - cpu_start
-    rollout_start = time.perf_counter()
-    pred = parallel_rollout("residual_rollout", workers, validation_x0, validation.u_cmd, validation.t, weights_ekf, config)
-    rollout_elapsed = time.perf_counter() - rollout_start
-    if not (training_scenario_override and "sportcub" in training_scenario_override):
-        # Placeholder rows retained for synthetic scenarios only; on the real
-        # Sport Cub data the real filter-error EKF above replaces EKF-ParamID,
-        # Fisher-UQ is reported from the grey-box Cramer-Rao analysis, and
-        # GreyBoxOEM is the output-error row (no duplicate OEM-SS name).
-        for placeholder_name, placeholder_desc, placeholder_backend, placeholder_note in (
-            (
-                "6DOF-EKF-ParamID",
-                "Recursive-estimation analogue represented by a fitted affine residual parameter vector.",
-                "numpy-ridge-paramid",
-                "The validation phase is open loop and receives only pilot commands after initialization. "
-                "No recursive filter is run: this row is a ridge-fitted affine residual model.",
-            ),
-            (
-                "6DOF-Fisher-UQ",
-                "Fisher-information wrapper around the fitted residual parameter model.",
-                "numpy-ridge-uq",
-                "Duplicate of the 6DOF-EKF-ParamID fit (same weights and prediction); no Fisher-information analysis is computed for 6DOF.",
-            ),
-            (
-                "6DOF-OEM-SS",
-                "Output-error state-space residual model using the same open-loop rollout structure as the fitted parameter model.",
-                "numpy-rk4-ridge",
-                "Duplicate of the 6DOF-EKF-ParamID fit (same weights and prediction); no output-error optimization is run for 6DOF.",
-            ),
-        ):
-            add_result(
-                score_state_method(
-                    placeholder_name,
-                    placeholder_desc,
-                    placeholder_backend,
-                    state_source,
-                    train_elapsed,
-                    train_cpu,
-                    rollout_elapsed,
-                    train_samples,
-                    int(weights_ekf.size),
-                    pred,
-                    validation,
-                    placeholder_note,
-                    implementation_status="placeholder",
-                )
-            )
-
-
     _scenario, train, train_x, train_samples = training_context("6DOF-EquationError-LS")
     nominal_next = parallel_nominal_next(train_x, train.u_cmd, train.dt, config, workers)
     xk = train_x[:, :-1, :]
@@ -1774,7 +1717,7 @@ def run_methods(
             start = time.perf_counter()
             cpu_start = time.process_time()
             ude_model = train_greybox_ude(
-                _q2e(train_x), train.u_cmd[:, :, _OEM], np.asarray(greybox["theta_full"]), train.dt
+                _q2e(savgol_states(train_x, train.dt)), train.u_cmd[:, :, _OEM], np.asarray(greybox["theta_full"]), train.dt
             )
             ude_train_elapsed = time.perf_counter() - start
             ude_train_cpu = time.process_time() - cpu_start
@@ -1801,6 +1744,8 @@ def run_methods(
             )
         except ImportError:
             print(f"  {state_source}: torch unavailable, skipping 6DOF-UDE-NN", flush=True)
+        except ValueError as error:
+            print(f"  {state_source}: skipping 6DOF-UDE-NN ({error})", flush=True)
 
         weak = [n for n, sd, v in zip(greybox["parameter_names"], greybox["cr_std"], greybox["theta"]) if abs(v) > 1e-9 and sd / abs(v) > 0.25]
         couples = ", ".join(f"{c['a']}-{c['b']}" for c in greybox["couplings"])
