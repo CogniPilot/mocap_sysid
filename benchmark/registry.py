@@ -65,7 +65,6 @@ SIX_DOF_BUILTINS = {
     "6DOF-EquationError-LS": ("direct", "mocap"),
     "6DOF-EKF-ParamID": ("direct", "mocap"),
     "6DOF-Fisher-UQ": ("direct", "mocap"),
-    "6DOF-OEM-SS": ("direct", "mocap"),
     "6DOF-RidgeResidual": ("direct", "mocap"),
     "6DOF-Variational-Mocap": ("direct", "mocap"),
     "6DOF-SINDy": ("direct", "mocap"),

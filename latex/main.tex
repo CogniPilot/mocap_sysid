@@ -2734,17 +2734,50 @@ failure is the scheduling variables leaving the training hull on held-out
 maneuvers; trim-anchored stitching with derivative interpolation is the
 literature upgrade.
 
+\subsection{6DOF-UDE-NN}
+\paragraph{Approach.} The genuine universal differential equation
+\cite{rackauckas2020universal}: the fitted grey-box provides the known
+physics as a differentiable torch port of its continuous dynamics, and a
+two-layer tanh MLP on the invariant features adds a residual to the six
+dynamic-state derivatives, integrated together through RK4.
+\paragraph{Implementation.} Trained by simulation error over half-second
+shooting segments of the measured training chunks (derivative targets are
+never formed); the output layer initializes near zero so training starts
+from the bare grey-box; validation is a frozen-network open-loop rollout
+with the standard physical clamps; the horizon shrinks automatically for
+short-chunk datasets; the row skips gracefully when torch is unavailable.
+\paragraph{Results.} 0.104 on the 5/22 mocap data, improving its own base
+through identical rollout machinery (0.115 $\rightarrow$ 0.109 in
+isolation); the gap to the ridge-UDE row (0.095) is the torch rollout's
+coarser 60\,Hz integration rather than the network.
+
+\subsection{6DOF-EKF-ParamID (Filter Error)}
+\paragraph{Approach.} The filter-error method
+\cite{jategaonkar2006flight,kalman_new_1960}: an augmented-state extended
+Kalman filter estimates the 22 grey-box parameters jointly with the twelve
+Euler states over the manual training chunks.
+\paragraph{Implementation.} Joseph-form updates; CasADi step and parameter
+Jacobians; the parameter covariance carries across chunks while the state
+covariance resets at each measured chunk start; the $\psi$ innovation is
+wrapped; parameters clip to their physical bounds. No filtering touches
+validation data: validation is a frozen-parameter open-loop rollout.
+\paragraph{Results.} 0.098 on the 5/22 mocap data --- ahead of the
+trust-region output-error fit (0.102) at roughly 1/30th the training cost
+--- and the companion 6DOF-Fisher-UQ row carries the grey-box Cram\'er--Rao
+uncertainty report (weak parameters and couplings in its notes).
+
 \subsection{Placeholders}
 Frequency-Welch and Frequency-Stitching (regularized realizations with no
-spectral content), EKF-ParamID/Fisher-UQ/OEM-SS (one ridge fit reported
-under three names; their notes say so --- scores are identical by
-construction at 0.260/0.280 synthetic, 0.693/0.247 real),
-Variational-Mocap (smoothed weak-form ridge; 3.71/3.67 synthetic),
-PINN-Closure (a sparsified copy of the UDE weights), and NN-Surrogate (a
-random-feature closed form) are labeled \emph{placeholder} in every
-artifact, are excluded from headline claims, and exist to reserve the rows
-until genuine implementations land (filter-error method, CIFER-style
-frequency fitting, and a trained 6-DOF network are the roadmap items).
+spectral content), Variational-Mocap (smoothed weak-form ridge; 3.71/3.67
+synthetic), PINN-Closure (a sparsified copy of the UDE weights), and
+NN-Surrogate (a random-feature closed form) are labeled \emph{placeholder}
+in every artifact, are excluded from headline claims, and exist to reserve
+the rows. The former EKF-ParamID/Fisher-UQ/OEM-SS trio --- one ridge fit
+reported under three names --- is gone: the first two are the real
+implementations above on the real-flight scenarios, and OEM-SS is removed
+outright since 6DOF-GreyBoxOEM is the output-error row. With the
+filter-error method and the trained network now real, the remaining
+roadmap placeholder is CIFER-style frequency-domain fitting.
 
 \subsection{SAFE Closed-Loop Model}
 \paragraph{Approach.} Stabilized (SAFE-mode) flight cannot be predicted by

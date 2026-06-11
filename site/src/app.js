@@ -996,6 +996,61 @@ new GLTFLoader().load(
   "./public/assets/airplane.glb",
   (gltf) => {
     const scene = gltf.scene;
+    // The asset's Right* meshes contain an unremoved duplicate of the left
+    // side's geometry (RightAileron spans X = [-6.27, +6.27]); strip the
+    // wrong-side triangles so the duplicate never renders or articulates.
+    for (const name of ["RightAileron", "RightFlap", "RightWheel"]) {
+      const node = findNamedPart(scene, name);
+      let mesh = null;
+      if (node) node.traverse((child) => { if (!mesh && child.isMesh) mesh = child; });
+      if (!mesh) continue;
+      const source = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry;
+      const pos = source.getAttribute("position");
+      const materialIndexOf = (tri) => {
+        for (const group of source.groups) {
+          if (tri >= group.start && tri < group.start + group.count) return group.materialIndex || 0;
+        }
+        return 0;
+      };
+      const kept = [];
+      for (let tri = 0; tri < pos.count; tri += 3) {
+        const cx = (pos.getX(tri) + pos.getX(tri + 1) + pos.getX(tri + 2)) / 3;
+        if (cx < 0) kept.push(tri);
+      }
+      const attributes = {};
+      for (const [attrName, attr] of Object.entries(source.attributes)) {
+        const itemSize = attr.itemSize;
+        const out = new Float32Array(kept.length * 3 * itemSize);
+        let w = 0;
+        for (const tri of kept) {
+          for (let v = 0; v < 3; v++) {
+            // getComponent handles interleaved and normalized attributes;
+            // raw array indexing corrupted the UVs (white tires).
+            for (let c = 0; c < itemSize; c++) out[w++] = attr.getComponent(tri + v, c);
+          }
+        }
+        attributes[attrName] = new THREE.BufferAttribute(out, itemSize, attr.normalized);
+      }
+      const cleaned = new THREE.BufferGeometry();
+      for (const [attrName, attr] of Object.entries(attributes)) cleaned.setAttribute(attrName, attr);
+      // Multi-material meshes (the wheels: black tire + light hub) address
+      // their materials through geometry groups; rebuild them for the kept
+      // triangles or everything renders with material 0.
+      if (source.groups && source.groups.length) {
+        let runStart = 0;
+        let runMaterial = kept.length ? materialIndexOf(kept[0]) : 0;
+        kept.forEach((tri, idx) => {
+          const m = materialIndexOf(tri);
+          if (m !== runMaterial) {
+            cleaned.addGroup(runStart * 3, (idx - runStart) * 3, runMaterial);
+            runStart = idx;
+            runMaterial = m;
+          }
+        });
+        if (kept.length) cleaned.addGroup(runStart * 3, (kept.length - runStart) * 3, runMaterial);
+      }
+      mesh.geometry = cleaned;
+    }
     // The asset authors pivots as hinge-location empties that are siblings of
     // the surface meshes; re-parent each mesh under its pivot (preserving
     // world transforms) so rotating the pivot articulates the surface.
@@ -1021,6 +1076,9 @@ new GLTFLoader().load(
     scene.position.sub(center);
     const wrapper = new THREE.Group();
     wrapper.add(scene);
+    // Static cosmetic pitch: the mesh sits nose-low relative to the body
+    // frame; tip the nose up (asset X is the span axis).
+    scene.rotation.x = -10 * Math.PI / 180;
     // glTF assets face +Z with +Y up; the playback body frame is x-forward.
     wrapper.rotation.y = Math.PI / 2;
     // Normalize the span to the procedural model's 2.2 units so the existing
@@ -1072,6 +1130,68 @@ function refreshAircraftInstance(instance) {
   // so control deflections compose with the base instead of overwriting it.
   for (const part of Object.values(parts)) {
     if (part && part.isObject3D) part.userData.baseQuat = part.quaternion.clone();
+  }
+  // The authored aileron pivot axes are slightly misaligned with the actual
+  // hinge lines on the tapered wing, so large deflections swing the surface
+  // out of the wing plane. Derive each aileron's hinge axis from its own
+  // geometry: the surface's longest dimension is the hinge line.
+  let referenceWorldAxis = null;
+  for (const key of ["leftAileron", "rightAileron"]) {
+    const pivot = parts[key];
+    if (!pivot) continue;
+    let mesh = null;
+    pivot.traverse((node) => {
+      if (!mesh && node.isMesh) mesh = node;
+    });
+    if (!mesh) continue;
+    // The aileron is tapered, so its bounding-box long axis is skewed off
+    // the hinge line. The pivot empty sits ON the hinge, so the hinge-edge
+    // vertices are those closest to the pivot origin in the cross-hinge
+    // plane: bin the vertices spanwise, take each bin's nearest-the-origin
+    // vertex, and fit the hinge direction through those edge points.
+    mesh.updateMatrix();
+    const posAttr = mesh.geometry.getAttribute("position");
+    const pts = [];
+    for (let i = 0; i < posAttr.count; i++) {
+      pts.push(new THREE.Vector3(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i)).applyMatrix4(mesh.matrix));
+    }
+    const bb = new THREE.Box3().setFromPoints(pts);
+    const ext = bb.getSize(new THREE.Vector3());
+    const spanDim = ext.x >= ext.y && ext.x >= ext.z ? "x" : ext.y >= ext.z ? "y" : "z";
+    const others = ["x", "y", "z"].filter((d) => d !== spanDim);
+    const bins = 8;
+    const lo = bb.min[spanDim];
+    const step = Math.max(ext[spanDim] / bins, 1e-9);
+    const best = new Array(bins).fill(null);
+    for (const point of pts) {
+      const bin = Math.min(bins - 1, Math.max(0, Math.floor((point[spanDim] - lo) / step)));
+      const cross = point[others[0]] ** 2 + point[others[1]] ** 2;
+      if (!best[bin] || cross < best[bin].cross) best[bin] = { point, cross };
+    }
+    const edge = best.filter(Boolean).map((b) => b.point);
+    let axis;
+    if (edge.length >= 2) {
+      axis = edge[edge.length - 1].clone().sub(edge[0]).normalize();
+    } else {
+      const axisLocal = new THREE.Vector3(spanDim === "x" ? 1 : 0, spanDim === "y" ? 1 : 0, spanDim === "z" ? 1 : 0);
+      axis = axisLocal;
+    }
+    // Sign convention must mirror across the wings: align both hinge axes to
+    // the same WORLD spanwise direction (a local-Z test cannot see a mirrored
+    // pivot, which made the right aileron deflect backwards).
+    const worldQuat = new THREE.Quaternion();
+    pivot.getWorldQuaternion(worldQuat);
+    const worldAxis = axis.clone().applyQuaternion(worldQuat);
+    if (referenceWorldAxis === null) {
+      if (axis.dot(SPIN_Z) < 0) {
+        axis.negate();
+        worldAxis.negate();
+      }
+      referenceWorldAxis = worldAxis;
+    } else if (worldAxis.dot(referenceWorldAxis) < 0) {
+      axis.negate();
+    }
+    pivot.userData.hingeAxis = axis;
   }
   instance.group.userData = parts;
 }
@@ -1191,10 +1311,11 @@ function updateAircraftControls(aircraft, controls, deltaS) {
     // The GLB pivots map local Z to the spanwise hinge line, local Y to the
     // fin line, and local X to the fuselage axis (verified from the authored
     // pivot orientations in the asset).
-    setHinge(parts.leftAileron, SPIN_Z, -0.6 * aileron);
-    setHinge(parts.rightAileron, SPIN_Z, 0.6 * aileron);
-    setHinge(parts.elevator, SPIN_Z, -0.7 * elevator);
-    setHinge(parts.rudder, HINGE_Y, 0.7 * rudder);
+    // Deflections exaggerated 2x for visibility in the small viewport.
+    setHinge(parts.leftAileron, parts.leftAileron?.userData.hingeAxis || SPIN_Z, -1.2 * aileron);
+    setHinge(parts.rightAileron, parts.rightAileron?.userData.hingeAxis || SPIN_Z, 1.2 * aileron);
+    setHinge(parts.elevator, SPIN_Z, -1.4 * elevator);
+    setHinge(parts.rudder, HINGE_Y, -1.4 * rudder);
     if (parts.prop && parts.prop.userData.baseQuat) {
       parts.prop.userData.spin = (parts.prop.userData.spin || 0) + deltaS * (22 + 90 * thrust);
       setHinge(parts.prop, HINGE_X, parts.prop.userData.spin);

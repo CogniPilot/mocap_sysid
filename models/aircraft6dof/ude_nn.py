@@ -140,6 +140,10 @@ def train_greybox_ude(
     xs = x_euler[:, ::stride, :]
     us = u_oem[:, ::stride, :]
     n_chunks, n_steps = xs.shape[0], xs.shape[1]
+    # Short datasets (e.g. 4/17's 109-sample chunks) get a shrunken horizon.
+    horizon_steps = min(horizon_steps, n_steps - 2)
+    if horizon_steps < 5:
+        raise ValueError(f"chunks too short for shooting training ({n_steps} strided samples)")
     starts = []
     for c in range(n_chunks):
         for k in range(0, n_steps - horizon_steps - 1, horizon_steps // 2):
