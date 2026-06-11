@@ -14,7 +14,7 @@ import numpy as np
 
 from .schema import METHOD_RESULT_FIELDS, MODEL_FAMILY_3DOF, MODEL_FAMILY_6DOF, SCHEMA_VERSION
 from .registry import all_method_metadata, metadata_to_dict
-from .scenarios import SCENARIOS_3DOF, SCENARIOS_6DOF, SIX_DOF_SCENARIO_TITLES
+from .scenarios import SCENARIOS_6DOF, SIX_DOF_SCENARIO_TITLES
 from dataset_tools.registry import discover_manifests
 
 
@@ -258,7 +258,7 @@ def _playback_maneuver_rows(playback_rows: list[dict[str, Any]], existing_rows: 
 
 def _generated_dataset_registry(root: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for scenario in [*SCENARIOS_3DOF, *SCENARIOS_6DOF]:
+    for scenario in SCENARIOS_6DOF:
         local_files: dict[str, str] = {}
         train_path = scenario.default_path / "train.npz"
         validation_path = scenario.default_path / "validation.npz"
@@ -518,7 +518,7 @@ def _playback_registry(root: Path, dataset_manifests: list[dict[str, Any]]) -> l
         track = _npz_playback(root, manifest)
         if track is not None:
             actual_tracks[track["id"]] = track
-    for scenario in [*SCENARIOS_3DOF, *SCENARIOS_6DOF]:
+    for scenario in SCENARIOS_6DOF:
         playback.append(actual_tracks.pop(scenario.id, None) or _procedural_playback(scenario.id, scenario.model_family, scenario.title))
     playback.extend(actual_tracks.values())
     return playback
@@ -611,7 +611,7 @@ def export_web_data(
         "model_families": sorted(
             {str(row.get("model_family")) for row in method_rows if row.get("model_family")}
             | {str(row.get("model_family")) for row in dataset_manifests if row.get("model_family")}
-            | {MODEL_FAMILY_3DOF, MODEL_FAMILY_6DOF}
+            | {MODEL_FAMILY_6DOF}
         ),
         "method_registry": method_registry,
         "dataset_registry": dataset_manifests,

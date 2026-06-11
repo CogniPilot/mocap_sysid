@@ -15,7 +15,7 @@ and a static benchmark browser published through GitHub Pages.
 ## Repository Layout
 
 - `benchmark/`: orchestration, registries, schema, website export, and plugin API.
-- `models/`: canonical 3DOF/6DOF aircraft dynamics and synthetic dataset helpers.
+- `models/`: canonical 6DOF aircraft dynamics and synthetic dataset helpers.
 - `methods/`: method implementations and plugin examples.
 - `dataset_tools/`: contributed dataset manifests, validation, and preprocessing code.
 - `data/`: compact committed real datasets only, as flat NPZ split files.

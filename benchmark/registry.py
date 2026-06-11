@@ -23,28 +23,6 @@ class MethodSpec:
 
 
 BUILTIN_3DOF_METHOD_SPECS: tuple[MethodSpec, ...] = (
-    MethodSpec("Nominal-GreyBox", "aircraft3dof", "open_loop", ("direct", "mocap")),
-    MethodSpec("Linear-SS", "aircraft3dof", "trim_grid", ("direct", "mocap")),
-    MethodSpec("Model-Stitching", "aircraft3dof", "trim_grid", ("direct", "mocap")),
-    MethodSpec("Koopman-EDMD", "aircraft3dof", "aggressive", ("direct", "mocap")),
-    MethodSpec("Subspace-Hankel", "aircraft3dof", "trim_grid", ("direct", "mocap")),
-    MethodSpec("Frequency-Welch", "aircraft3dof", "trim_grid", ("direct", "mocap")),
-    MethodSpec("Frequency-Stitching", "aircraft3dof", "trim_grid", ("direct", "mocap")),
-    MethodSpec("EquationError-LS", "aircraft3dof", "aggressive", ("direct", "mocap")),
-    MethodSpec("EKF-ParamID", "aircraft3dof", "aggressive", ("direct", "mocap")),
-    MethodSpec("Fisher-UQ", "aircraft3dof", "aggressive", ("direct", "mocap")),
-    MethodSpec("OEM-SS", "aircraft3dof", "aggressive", ("direct", "mocap")),
-    MethodSpec("OEM-MocapOutput", "aircraft3dof", "aggressive", ("mocap",)),
-    MethodSpec("Variational-Mocap", "aircraft3dof", "aggressive", ("mocap",)),
-    MethodSpec("OEM-HiddenController", "aircraft3dof", "safe_loop", ("direct", "mocap")),
-    MethodSpec("SINDy", "aircraft3dof", "aggressive", ("direct", "mocap")),
-    MethodSpec("Symbolic-Stepwise", "aircraft3dof", "aggressive", ("direct", "mocap")),
-    MethodSpec("GP-CoeffClosure", "aircraft3dof", "aggressive", ("direct", "mocap"), heavy=True),
-    MethodSpec("UDE-Residual", "aircraft3dof", "aggressive", ("direct", "mocap"), requires_gpu=True, heavy=True),
-    MethodSpec("PINN-CoeffClosure", "aircraft3dof", "aggressive", ("direct", "mocap"), requires_gpu=True, heavy=True),
-    MethodSpec("UDE-HiddenControl", "aircraft3dof", "safe_loop", ("direct", "mocap"), requires_gpu=True, heavy=True),
-    MethodSpec("PINN-HiddenElevator", "aircraft3dof", "safe_loop", ("direct", "mocap"), requires_gpu=True, heavy=True),
-    MethodSpec("NN-CoeffSurrogate", "aircraft3dof", "aggressive", ("direct", "mocap"), requires_gpu=True, heavy=True),
 )
 
 BUILTIN_METHOD_TRAINING = {method.name: method.training_scenario for method in BUILTIN_3DOF_METHOD_SPECS}

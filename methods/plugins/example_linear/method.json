@@ -2,8 +2,14 @@
   "name": "ExampleLinear",
   "entry_point": "method:ExampleLinearMethod",
   "description": "Minimal contributor example for the benchmark plugin API.",
-  "model_families": ["aircraft3dof"],
-  "observation_types": ["direct"],
-  "training_scenarios": ["trim_grid"],
+  "model_families": [
+    "aircraft6dof"
+  ],
+  "observation_types": [
+    "direct"
+  ],
+  "training_scenarios": [
+    "aircraft_6dof_trim_grid"
+  ],
   "requires_gpu": false
 }
