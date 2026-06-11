@@ -2722,9 +2722,13 @@ only the two extremes; the recorded mode channel is strictly bimodal at
 1000/2000\,$\mu$s and the converter now refuses sessions that use the
 middle position; the pilot confirms the Panic Recovery trigger was never
 used, so no unlabeled fourth controller regime exists in the recordings), so the pilot-perceived low-airspeed
-unresponsiveness is not a control-law gate but an authority contest ---
-the self-leveling loop holds wings level with full servo authority while
-the clipped bank command acts through collapsing dynamic pressure. A
+unresponsiveness is not a control-law gate: the controller is
+speed-blind, and the dependence is plant-side --- every commanded
+deflection buys a moment scaling with dynamic pressure, so at low speed
+the loop needs deflections beyond the surface throws to track the clipped
+bank command within maneuver timescales, while speed-independent
+disturbance moments (propeller torque and slipstream at high power)
+consume a growing share of the moment budget. A
 speed-gated aileron-authority feature was tested accordingly and rejected
 (held-out error worsened, 2.98\,m $\rightarrow$ 3.03--3.11\,m), and the
 measured stick-to-roll coupling collapse below $\approx$4.5\,m/s is
