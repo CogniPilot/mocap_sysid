@@ -10,7 +10,7 @@
 
 const DATA_URL = "./public/data/flight_explorer.json";
 const LABEL_COLORS = { ground: "#8d6e63", ground_effect: "#26a69a", stabilized: "#5c7cfa", manual: "#f08c00" };
-const METHOD_COLORS = { "6DOF-Nominal": "#d62728", "6DOF-LinearSS": "#2ca02c", "6DOF-RidgeResidual": "#9467bd" };
+const METHOD_COLORS = { "6DOF-Nominal": "#d62728", "6DOF-LinearSS": "#2ca02c", "6DOF-RidgeResidual": "#9467bd", "6DOF-GreyBoxOEM": "#e8a838" };
 const MIN_SPEED = 2.5;
 const MAX_SPEED = 12.0;
 
@@ -126,6 +126,102 @@ function nominalRhs(x, u, cfg) {
   return [...posDot, ...velDot, ...quatDot, ...ratesDot];
 }
 
+function quatFromEuler(roll, pitch, yaw) {
+  const cr = Math.cos(0.5 * roll), sr = Math.sin(0.5 * roll);
+  const cp = Math.cos(0.5 * pitch), sp = Math.sin(0.5 * pitch);
+  const cy = Math.cos(0.5 * yaw), sy = Math.sin(0.5 * yaw);
+  return normQuat([
+    cr * cp * cy + sr * sp * sy,
+    sr * cp * cy - cr * sp * sy,
+    cr * sp * cy + sr * cp * sy,
+    cr * cp * sy - sr * sp * cy,
+  ]);
+}
+
+// Sport Cub grey-box OEM dynamics ported from models/aircraft6dof/greybox.py
+// (build_casadi_dynamics). Twelve Euler states (pos NED, body uvw, roll/pitch/
+// yaw, body rates); u is the stick vector in (throttle, elevator, aileron,
+// rudder) order; gb carries the fitted+fixed parameters by name.
+function greyboxRhs(s, u, gb) {
+  const p = gb.p;
+  const [uB, vB, wB] = [s[3], s[4], s[5]];
+  const [phi, theta, psi] = [s[6], s[7], s[8]];
+  const [pR, qR, rR] = [s[9], s[10], s[11]];
+  const thr = Math.max(u[0], 0);
+  const elevRad = gb.maxDefl.elevator * (Math.PI / 180) * u[1];
+  const ailRad = gb.maxDefl.aileron * (Math.PI / 180) * u[2];
+  const rudRad = gb.maxDefl.rudder * (Math.PI / 180) * u[3];
+
+  const speed = Math.max(Math.sqrt(uB * uB + vB * vB + wB * wB + 1e-9), 1e-3);
+  const alpha = Math.atan2(wB, uB);
+  const beta = Math.asin(clamp(vB / speed, -0.99, 0.99));
+  const qbar = 0.5 * p.rho * speed * speed;
+  const cA = Math.cos(alpha), sA = Math.sin(alpha);
+  const cB = Math.cos(beta), sB = Math.sin(beta);
+
+  const CL = p.CL0 + p.CLa * alpha;
+  const CD = p.CD0 + p.CDCLS * CL * CL;
+  const lift = qbar * p.S * CL;
+  const drag = qbar * p.S * CD;
+  const side = qbar * p.S * (p.CYb * beta);
+  const thrust = p.KT * p.m * thr;
+
+  const fx = -drag * cA * cB - side * cA * sB + lift * sA + thrust * cA * cB;
+  const fy = -drag * sB + side * cB + thrust * sB;
+  const fz = -drag * sA * cB - side * sA * sB - lift * cA - thrust * sA * cB;
+
+  const cPhi = Math.cos(phi), sPhi = Math.sin(phi);
+  const cTh = Math.cos(theta), sTh = Math.sin(theta);
+  const cPsi = Math.cos(psi), sPsi = Math.sin(psi);
+
+  const uDot = fx / p.m - p.g * sTh + rR * vB - qR * wB;
+  const vDot = fy / p.m + p.g * sPhi * cTh + pR * wB - rR * uB;
+  const wDot = fz / p.m + p.g * cPhi * cTh + qR * uB - pR * vB;
+
+  const bV = p.b / (2 * speed);
+  const cV = p.cbar / (2 * speed);
+  const rollAccel = qbar * (p.KL0 + p.KLb * beta + p.KLp * bV * pR + p.KLr * bV * rR + p.KLda * ailRad + p.KLdr * rudRad);
+  const pitchAccel = qbar * (p.KM0 + p.KMa * alpha + p.KMq * cV * qR + p.KMe * elevRad);
+  const yawAccel = qbar * (p.KN0 + p.KNb * beta + p.KNp * bV * pR + p.KNr * bV * rR + p.KNda * ailRad + p.KNdr * rudRad);
+
+  const pDot = rollAccel + ((p.Iyy - p.Izz) / p.Ixx) * qR * rR + (p.Ixz / p.Ixx) * pR * qR;
+  const qDot = pitchAccel + ((p.Izz - p.Ixx) / p.Iyy) * pR * rR + (p.Ixz / p.Iyy) * (rR * rR - pR * pR);
+  const rDot = yawAccel + ((p.Ixx - p.Iyy) / p.Izz) * pR * qR + (p.Ixz / p.Izz) * qR * rR;
+
+  const cThSafe = Math.sign(cTh || 1) * Math.max(Math.abs(cTh), 1e-3);
+  const common = qR * sPhi + rR * cPhi;
+  const phiDot = pR + (sTh / cThSafe) * common;
+  const thetaDot = qR * cPhi - rR * sPhi;
+  const psiDot = common / cThSafe;
+
+  return [
+    cTh * cPsi * uB + (sPhi * sTh * cPsi - cPhi * sPsi) * vB + (cPhi * sTh * cPsi + sPhi * sPsi) * wB,
+    cTh * sPsi * uB + (sPhi * sTh * sPsi + cPhi * cPsi) * vB + (cPhi * sTh * sPsi - sPhi * cPsi) * wB,
+    -sTh * uB + sPhi * cTh * vB + cPhi * cTh * wB,
+    uDot, vDot, wDot,
+    phiDot, thetaDot, psiDot,
+    pDot, qDot, rDot,
+  ];
+}
+
+export function makeGreyboxStepper(greybox, dt) {
+  const p = { ...greybox.fixed_parameters };
+  greybox.parameter_names.forEach((name, i) => { p[name] = greybox.parameters[i]; });
+  const gb = { p, maxDefl: greybox.max_deflection_deg };
+  return (x, u) => {
+    const e = eulerFromQuat([x[6], x[7], x[8], x[9]]);
+    let s = [x[0], x[1], x[2], x[3], x[4], x[5], e[0], e[1], e[2], x[10], x[11], x[12]];
+    const k1 = greyboxRhs(s, u, gb);
+    const k2 = greyboxRhs(s.map((v, i) => v + 0.5 * dt * k1[i]), u, gb);
+    const k3 = greyboxRhs(s.map((v, i) => v + 0.5 * dt * k2[i]), u, gb);
+    const k4 = greyboxRhs(s.map((v, i) => v + dt * k3[i]), u, gb);
+    s = s.map((v, i) => v + (dt / 6) * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]));
+    s[8] = Math.atan2(Math.sin(s[8]), Math.cos(s[8]));
+    const q = quatFromEuler(s[6], s[7], s[8]);
+    return [s[0], s[1], s[2], s[3], s[4], s[5], q[0], q[1], q[2], q[3], s[9], s[10], s[11]];
+  };
+}
+
 function postStep(x) {
   const out = x.slice();
   const q = normQuat([out[6], out[7], out[8], out[9]]);
@@ -207,6 +303,7 @@ function makeStepper(method, models, dt) {
     };
   }
   if (method === "6DOF-Nominal") return (x, u) => nominalStep(x, u, dt, cfg);
+  if (method === "6DOF-GreyBoxOEM" && models.greybox) return makeGreyboxStepper(models.greybox, dt);
   if (method === "6DOF-LinearSS") return (x, u) => postStep(affinePredict(x, u, models.linear_weights));
   return (x, u) => {
     const base = nominalStep(x, u, dt, cfg);
@@ -236,23 +333,22 @@ function safeController(gains) {
 }
 
 function estimateInitialState(flight, timeS) {
-  // Local linear fit of the 10 Hz truth in a +/-0.6 s window evaluated at timeS.
+  // Interpolate the measured state at timeS between its bracketing samples.
+  // (A wide local-fit window biases the position toward the inside of turns,
+  // so the free run would start visibly off the measured track; the converter
+  // already smooths velocities, leaving nothing for a fit to clean up.)
   const t = flight.time;
-  const lo = Math.max(0, t.findIndex((v) => v >= timeS - 0.6));
-  let hi = t.findIndex((v) => v > timeS + 0.6);
-  if (hi < 0) hi = t.length;
-  const n = hi - lo;
-  if (n < 3) return flight.state[Math.max(0, Math.min(t.length - 1, lo))].slice();
-  const x0 = new Array(13).fill(0);
-  let st = 0, stt = 0;
-  for (let k = lo; k < hi; k++) { st += t[k] - timeS; stt += (t[k] - timeS) * (t[k] - timeS); }
-  const mt = st / n;
-  const denom = stt - n * mt * mt || 1e-9;
-  for (let j = 0; j < 13; j++) {
-    let sy = 0, sty = 0;
-    for (let k = lo; k < hi; k++) { sy += flight.state[k][j]; sty += (t[k] - timeS) * flight.state[k][j]; }
-    const slope = (sty - mt * sy) / denom;
-    x0[j] = sy / n - slope * mt;
+  let hi = t.findIndex((v) => v >= timeS);
+  if (hi < 0) hi = t.length - 1;
+  const lo = Math.max(0, hi - 1);
+  const span = t[hi] - t[lo];
+  const w = span > 1e-9 ? clamp((timeS - t[lo]) / span, 0, 1) : 0;
+  const a = flight.state[lo];
+  const b = flight.state[hi];
+  const x0 = a.map((v, j) => v + (b[j] - v) * w);
+  if (a[6] * b[6] + a[7] * b[7] + a[8] * b[8] + a[9] * b[9] < 0) {
+    // Antipodal quaternions: lerp through the short way before normalizing.
+    for (let j = 6; j < 10; j++) x0[j] = a[j] + (-b[j] - a[j]) * w;
   }
   const q = normQuat([x0[6], x0[7], x0[8], x0[9]]);
   x0[6] = q[0]; x0[7] = q[1]; x0[8] = q[2]; x0[9] = q[3];
@@ -353,7 +449,7 @@ function renderAll() {
   }
 }
 
-const METHOD_COLORS_HEX = { "6DOF-Nominal": 0xd62728, "6DOF-LinearSS": 0x2ca02c, "6DOF-RidgeResidual": 0x9467bd };
+const METHOD_COLORS_HEX = { "6DOF-Nominal": 0xd62728, "6DOF-LinearSS": 0x2ca02c, "6DOF-RidgeResidual": 0x9467bd, "6DOF-GreyBoxOEM": 0xe8a838 };
 
 function publishOverlay(timeS) {
   // Publish the segmentation-colored full-flight track and the free-run

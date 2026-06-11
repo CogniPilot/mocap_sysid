@@ -1596,6 +1596,38 @@ def run_methods(
                 **metrics,
             )
         )
+
+    if training_scenario_override and "sportcub" in training_scenario_override:
+        # Physical grey-box OEM: the spec encodes the Sport Cub airframe, so
+        # the method only applies to its real-flight scenarios.
+        from .greybox_oem_fit import fit_greybox, greybox_rollout_quat
+
+        _scenario, train, train_x, train_samples = training_context("6DOF-GreyBoxOEM")
+        start = time.perf_counter()
+        cpu_start = time.process_time()
+        print(f"  {state_source}: grey-box OEM multiple-shooting fit on {train_x.shape[0]} chunks", flush=True)
+        greybox = fit_greybox(train_x, train.u_cmd, train.dt)
+        train_elapsed = time.perf_counter() - start
+        train_cpu = time.process_time() - cpu_start
+        rollout_start = time.perf_counter()
+        pred = greybox_rollout_quat(greybox["spec"], greybox["theta_full"], validation_x0, validation.u_cmd, validation.dt)
+        rollout_elapsed = time.perf_counter() - rollout_start
+        add_result(
+            score_state_method(
+                "6DOF-GreyBoxOEM",
+                "Physical lumped-parameter Sport Cub grey-box fitted by output-error multiple shooting over the training chunks.",
+                "casadi-rk4-trf",
+                state_source,
+                train_elapsed,
+                train_cpu,
+                rollout_elapsed,
+                train_samples,
+                int(greybox["theta"].size),
+                pred,
+                validation,
+                "22 aerodynamic coefficients fitted within physical bounds; the same parameters drive the browser free-runs.",
+            )
+        )
     return results
 
 

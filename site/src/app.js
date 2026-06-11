@@ -1423,6 +1423,14 @@ function setPlaybackTrack(track, force = false) {
         new THREE.BufferGeometry().setFromPoints(predPoints),
         new THREE.LineBasicMaterial({ color: prediction.color, linewidth: 2, transparent: true, opacity: 0.85 }),
       );
+      if (prediction.times?.length > 1) {
+        const predTimes = prediction.times;
+        predLine.userData.times = {
+          t0: predTimes[0],
+          dt: (predTimes[predTimes.length - 1] - predTimes[0]) / (predTimes.length - 1),
+          count: predPoints.length,
+        };
+      }
       playback.methodLines.push(predLine);
       playback.scene.add(predLine);
       if (prediction.times && prediction.quats) {
@@ -1453,6 +1461,14 @@ function setPlaybackTrack(track, force = false) {
       opacity: 0.78,
     });
     const traceLine = new THREE.Line(traceGeometry, traceMaterial);
+    if (trace.time_s?.length > 1) {
+      const traceTimes = trace.time_s;
+      traceLine.userData.times = {
+        t0: (trace.flightOffsetS || 0) + traceTimes[0],
+        dt: (traceTimes[traceTimes.length - 1] - traceTimes[0]) / (traceTimes.length - 1),
+        count: tracePoints.length,
+      };
+    }
     playback.methodLines.push(traceLine);
     playback.scene.add(traceLine);
     const traceAircraft = makeTransparentAircraftMesh(color);
@@ -1529,8 +1545,8 @@ function sampleTrack(trackOrSegment, elapsedS, options = {}) {
 }
 
 function applyTrailWindow(playback, segment) {
-  // Qualisys-style trail: only the measured track within [t - past, t + future]
-  // is drawn; predictions stay fully visible.
+  // Qualisys-style trail: every line (measured track, free-run predictions,
+  // chunk traces) is windowed to [t - past, t + future] of playback time.
   const tNow = state.playbackTimeS;
   const a = tNow - state.trailPastS;
   const b = tNow + state.trailFutureS;

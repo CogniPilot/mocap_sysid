@@ -1887,6 +1887,28 @@ evaluated by a generic forward pass, while torch-trained models deploy as
 ONNX graphs evaluated in-browser, with the same integration loop in either
 case.
 
+\paragraph{Physical grey-box output-error fit.}
+The one-step affine predictors that dominate the synthetic leaderboards
+extrapolate poorly through aggressive manual segments: their free runs are
+anchored to the regression's operating envelope rather than to flight
+physics. The benchmark therefore also fits the repository's lumped-parameter
+Sport Cub grey-box (twelve Euler states; lift, drag, and side-force
+coefficient expansions plus moment-acceleration coefficients with
+$b/2V$ and $\bar c/2V$ rate terms) by output-error multiple shooting: every
+bias-corrected manual training chunk is rolled out with a fixed-step RK4
+integrator from its measured initial state, and the 22 aerodynamic
+parameters jointly minimize position and attitude residuals (weighted by the
+spec's output sigmas) across all chunks, constrained to physical bounds by a
+trust-region reflective solver warm-started at handbook initials. On the
+2026-05-22 manual windows the fitted model roughly halves the held-out
+rollout NRMSE relative to the bound-clipped handbook initial guess
+(0.14 versus 0.25), with lift-curve and thrust parameters pushing against
+their upper bounds --- consistent with the ground-roll finding that the
+nominal thrust constant underestimates the installed power. Because the
+model is a compact closed-form ODE, the same fitted parameters export
+directly to the browser, where the explorer integrates it with the identical
+RK4 step for segment scores and free-run predictions.
+
 \subsection{6-DOF Baseline Methods}
 
 \paragraph{6DOF-Nominal.}

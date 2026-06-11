@@ -38,7 +38,15 @@ import numpy as np
 
 from benchmark.paths import ROOT
 from . import comparison_suite as suite
-from .greybox import Aircraft6DOFConfig, euler_from_quaternion, nominal_rk4_step, normalize_quaternion
+from .greybox import (
+    SPORTCUB_PARAMETER_NAMES,
+    Aircraft6DOFConfig,
+    build_casadi_dynamics,
+    euler_from_quaternion,
+    nominal_rk4_step,
+    normalize_quaternion,
+)
+from .greybox_oem_fit import OEM_CONTROL_ORDER, euler_states_to_quat, fit_greybox, quat_states_to_euler
 from .safe_controller import fit_safe_controller, safe_controller
 
 FLIGHTS_DEFAULT = Path("data/sportcub_mocap_5_22_26_flights.npz")
@@ -50,7 +58,7 @@ GROUND_ALTITUDE_M = 0.5
 GROUND_EFFECT_ALTITUDE_M = 0.65
 DISPLAY_RATE_HZ = 10.0  # browser display rate; stride derived from the data rate
 RIDGE = 1e-5
-METHODS = ("6DOF-Nominal", "6DOF-LinearSS", "6DOF-RidgeResidual")
+METHODS = ("6DOF-Nominal", "6DOF-LinearSS", "6DOF-RidgeResidual", "6DOF-GreyBoxOEM")
 LABELS = ("ground", "ground_effect", "stabilized", "manual")
 
 
@@ -126,42 +134,7 @@ def train_safe_closed_loop(data: np.lib.npyio.NpzFile) -> np.ndarray:
     return suite.ridge_fit(suite.design_matrix(x_all, u_all), next_all, RIDGE)
 
 
-def train_safe_closed_loop(data: np.lib.npyio.NpzFile) -> np.ndarray:
-    """Identify the stabilized closed-loop dynamics directly.
-
-    Free-running a bare-airframe model through SAFE segments requires the
-    hidden-controller decomposition, whose inverse-dynamics identification is
-    weakly conditioned. The closed loop itself (state + stick -> next state)
-    is abundantly excited by the lap data and is exactly what stabilized
-    segments replay, so it is fitted directly by ridge regression on every
-    tracked stabilized sample.
-    """
-    dt = float(data["sample_period_s"])
-    xs, us, nexts = [], [], []
-    for flight_index in range(len(data["segment_names"])):
-        mask = np.asarray(data["valid_mask"][flight_index], dtype=bool)
-        x = np.asarray(data["x_meas"][flight_index][mask], dtype=float)
-        sticks = np.asarray(data["u_cmd"][flight_index][mask], dtype=float)
-        mode = np.asarray(data["flight_mode"][flight_index][mask])
-        tracked = (
-            np.asarray(data["mocap_tracked"][flight_index][mask]) != 0
-            if "mocap_tracked" in data.files
-            else np.ones(len(x), dtype=bool)
-        )
-        labels = sample_labels(x, mode)
-        keep = (labels == 2) & tracked
-        keep_next = keep[:-1] & keep[1:]
-        xs.append(x[:-1][keep_next])
-        us.append(sticks[:-1][keep_next])
-        nexts.append(x[1:][keep_next])
-    x_all = np.concatenate(xs)
-    u_all = np.concatenate(us)
-    next_all = np.concatenate(nexts)
-    print(f"closed-loop SAFE fit: {len(x_all)} stabilized samples at dt={dt}")
-    return suite.ridge_fit(suite.design_matrix(x_all, u_all), next_all, RIDGE)
-
-
-def train_methods(train_path: Path) -> dict[str, np.ndarray | None]:
+def train_methods(train_path: Path) -> dict[str, object]:
     segments, dt = suite.load_segments(train_path)
     split = suite.trim_to_input_onset(segments, dt, estimate_bias=True, label="explorer train")
     x = split.x_true
@@ -174,10 +147,28 @@ def train_methods(train_path: Path) -> dict[str, np.ndarray | None]:
             nominal_next[trial, index] = nominal_rk4_step(x[trial, index], u[trial, index], split.dt, config)
     residual_target = x[:, 1:, :] - nominal_next
     residual = suite.ridge_fit(suite.design_matrix(x[:, :-1, :], u[:, :-1, :]), residual_target, RIDGE)
-    return {"6DOF-Nominal": None, "6DOF-LinearSS": linear, "6DOF-RidgeResidual": residual}
+    print(f"grey-box OEM fit on {x.shape[0]} chunks", flush=True)
+    greybox = fit_greybox(x, u, split.dt)
+    return {
+        "6DOF-Nominal": None,
+        "6DOF-LinearSS": linear,
+        "6DOF-RidgeResidual": residual,
+        "6DOF-GreyBoxOEM": greybox,
+    }
 
 
-def make_stepper(method: str, weights: np.ndarray | None, dt: float, config: Aircraft6DOFConfig):
+def make_stepper(method: str, weights, dt: float, config: Aircraft6DOFConfig):
+    if method == "6DOF-GreyBoxOEM":
+        _dynamics, rk4 = build_casadi_dynamics(weights["spec"], dt)
+        theta_full = weights["theta_full"]
+
+        def greybox_step(x: np.ndarray, u: np.ndarray) -> np.ndarray:
+            x_euler = quat_states_to_euler(x[None, None, :])[0, 0]
+            x_euler = np.asarray(rk4(x_euler, u[OEM_CONTROL_ORDER], theta_full)).ravel()
+            return euler_states_to_quat(x_euler[None, None, :])[0, 0]
+
+        return greybox_step
+
     def step(x: np.ndarray, u: np.ndarray) -> np.ndarray:
         if method == "6DOF-Nominal":
             return nominal_rk4_step(x, u, dt, config)
@@ -330,7 +321,12 @@ def main() -> int:
             "residual_weights": np.round(weights["6DOF-RidgeResidual"], 6).tolist(),
             "safe_gains": {axis: np.round(coef, 5).tolist() for axis, coef in gains.items()},
             "safe_linear_weights": np.round(safe_weights, 6).tolist(),
-            "safe_linear_weights": np.round(safe_weights, 6).tolist(),
+            "greybox": {
+                "parameter_names": list(SPORTCUB_PARAMETER_NAMES),
+                "parameters": np.round(weights["6DOF-GreyBoxOEM"]["theta"], 6).tolist(),
+                "fixed_parameters": weights["6DOF-GreyBoxOEM"]["spec"].fixed_parameters,
+                "max_deflection_deg": weights["6DOF-GreyBoxOEM"]["spec"].max_deflection_deg,
+            },
             "config": {
                 "mass": config.mass,
                 "gravity": config.gravity,
