@@ -77,7 +77,6 @@ canonical binary format described in `docs/DATASET_CONTRACT.md`.
 - Two real Sport Cub indoor mocap datasets (2026-04-17 maneuver windows, 2026-05-22 full flights) converted to the canonical format.
 - Grey-box output-error fit, filter-error EKF, and torch ODE-in-the-loop UDE on the 6DOF tier.
 - Closed-loop SAFE-mode model identified from the real flights.
-- Legacy 3DOF longitudinal tier retired after porting its methods to 6DOF (full implementation remains in git history).
 - Single mocap observation policy; the former direct/mocap dual-run was removed.
 
 ## Current Roadmap
