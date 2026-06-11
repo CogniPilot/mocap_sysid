@@ -10,7 +10,7 @@
 
 const DATA_URL = "./public/data/flight_explorer.json";
 const LABEL_COLORS = { ground: "#8d6e63", ground_effect: "#26a69a", stabilized: "#5c7cfa", manual: "#f08c00" };
-const METHOD_COLORS = { "6DOF-Nominal": "#d62728", "6DOF-LinearSS": "#2ca02c", "6DOF-RidgeResidual": "#9467bd", "6DOF-GreyBoxOEM": "#e8a838" };
+const METHOD_COLORS = { "6DOF-Nominal": "#d62728", "6DOF-LinearSS": "#2ca02c", "6DOF-RidgeResidual": "#9467bd", "6DOF-GreyBoxOEM": "#e8a838", "6DOF-EquationError-LS": "#17becf", "6DOF-SINDy": "#e377c2", "6DOF-Koopman-EDMD": "#bcbd22", "6DOF-Symbolic-Stepwise": "#8c564b", "6DOF-Subspace-Hankel": "#1f77b4", "6DOF-GP-RBF": "#f7b6d2" };
 const MIN_SPEED = 2.5;
 const MAX_SPEED = 12.0;
 
@@ -326,8 +326,90 @@ function evalNet(spec, input) {
   return h;
 }
 
-function makeStepper(method, models, dt) {
+// Position-free feature maps mirroring the benchmark suite's linear_features
+// and poly_features (rigid-body dynamics are translation-invariant).
+function linearFeaturesJS(x, u) {
+  return [...x.slice(3), ...u, 1];
+}
+
+function polyFeaturesJS(x, u) {
+  const z = [...x.slice(3), ...u];
+  const out = [1, ...z];
+  for (let i = 0; i < z.length; i++) {
+    for (let j = i; j < z.length; j++) out.push(z[i] * z[j]);
+  }
+  return out;
+}
+
+function applyStandardizedJS(phi, spec) {
+  const out = new Array(spec.weights[0].length).fill(0);
+  for (let i = 0; i < phi.length; i++) {
+    const v = (phi[i] - spec.mean[i]) / spec.scale[i];
+    if (v === 0) continue;
+    const row = spec.weights[i];
+    for (let j = 0; j < out.length; j++) out[j] += v * row[j];
+  }
+  return out;
+}
+
+function makeSurrogateStepper(spec, dt, cfg) {
+  if (spec.kind === "hankel") {
+    // Lagged ARX on position-free state history, increment-integrated. The
+    // window re-seeds whenever the incoming state is not our own last output
+    // (fresh anchor or SAFE-model handoff).
+    let hist = null;
+    let last = null;
+    return (x, u) => {
+      if (last !== x) hist = new Array(spec.lag).fill(x);
+      const phi = [];
+      for (const h of hist) phi.push(...h.slice(3));
+      phi.push(...u, 1);
+      const delta = new Array(x.length).fill(0);
+      for (let i = 0; i < phi.length; i++) {
+        if (phi[i] === 0) continue;
+        const row = spec.weights[i];
+        for (let j = 0; j < delta.length; j++) delta[j] += phi[i] * row[j];
+      }
+      const next = postStep(x.map((v, j) => v + delta[j]));
+      hist = [...hist.slice(1), next];
+      last = next;
+      return next;
+    };
+  }
+  if (spec.kind === "rbf_residual") {
+    return (x, u) => {
+      const base = nominalStep(x, u, dt, cfg);
+      const z = [...x.slice(3), ...u];
+      const phi = spec.centers.map((center) => {
+        let d2 = 0;
+        for (let i = 0; i < z.length; i++) {
+          const d = (z[i] - center[i]) / spec.length_scale[i];
+          d2 += d * d;
+        }
+        return Math.exp(-0.5 * d2);
+      });
+      phi.push(1);
+      const out = new Array(x.length).fill(0);
+      for (let i = 0; i < phi.length; i++) {
+        const row = spec.weights[i];
+        for (let j = 0; j < out.length; j++) out[j] += phi[i] * row[j];
+      }
+      return postStep(base.map((v, j) => v + out[j]));
+    };
+  }
+  return (x, u) => {
+    const phi = spec.degree === 1 ? linearFeaturesJS(x, u) : polyFeaturesJS(x, u);
+    const delta = applyStandardizedJS(phi, spec);
+    if (spec.kind === "derivative") return postStep(x.map((v, j) => v + dt * delta[j]));
+    return postStep(x.map((v, j) => v + delta[j]));
+  };
+}
+
+export function makeStepper(method, models, dt) {
   const cfg = models.config;
+  if (models.surrogates && models.surrogates[method]) {
+    return makeSurrogateStepper(models.surrogates[method], dt, cfg);
+  }
   if (models.nets && models.nets[method]) {
     const spec = models.nets[method];
     return (x, u) => {
@@ -579,7 +661,7 @@ function renderAll() {
   }
 }
 
-const METHOD_COLORS_HEX = { "6DOF-Nominal": 0xd62728, "6DOF-LinearSS": 0x2ca02c, "6DOF-RidgeResidual": 0x9467bd, "6DOF-GreyBoxOEM": 0xe8a838 };
+const METHOD_COLORS_HEX = { "6DOF-Nominal": 0xd62728, "6DOF-LinearSS": 0x2ca02c, "6DOF-RidgeResidual": 0x9467bd, "6DOF-GreyBoxOEM": 0xe8a838, "6DOF-EquationError-LS": 0x17becf, "6DOF-SINDy": 0xe377c2, "6DOF-Koopman-EDMD": 0xbcbd22, "6DOF-Symbolic-Stepwise": 0x8c564b, "6DOF-Subspace-Hankel": 0x1f77b4, "6DOF-GP-RBF": 0xf7b6d2 };
 
 function publishOverlay(timeS) {
   // Publish the segmentation-colored full-flight track and the free-run

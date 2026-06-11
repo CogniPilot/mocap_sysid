@@ -60,7 +60,19 @@ GROUND_ALTITUDE_M = 0.5
 GROUND_EFFECT_ALTITUDE_M = 0.65
 DISPLAY_RATE_HZ = 10.0  # browser display rate; stride derived from the data rate
 RIDGE = 1e-5
-METHODS = ("6DOF-Nominal", "6DOF-LinearSS", "6DOF-RidgeResidual", "6DOF-GreyBoxOEM")
+METHODS = (
+    "6DOF-Nominal",
+    "6DOF-LinearSS",
+    "6DOF-RidgeResidual",
+    "6DOF-GreyBoxOEM",
+    "6DOF-EquationError-LS",
+    "6DOF-SINDy",
+    "6DOF-Koopman-EDMD",
+    "6DOF-Symbolic-Stepwise",
+    "6DOF-Subspace-Hankel",
+    "6DOF-GP-RBF",
+)
+HANKEL_LAG = 3
 LABELS = ("ground", "ground_effect", "stabilized", "manual")
 
 
@@ -278,11 +290,50 @@ def train_methods(train_path: Path) -> dict[str, object]:
     residual = suite.ridge_fit(suite.design_matrix(x[:, :-1, :], u[:, :-1, :]), residual_target, RIDGE)
     print(f"grey-box OEM fit on {x.shape[0]} chunks", flush=True)
     greybox = fit_greybox(x, u, split.dt)
+
+    # Generic surrogates, fitted exactly as the benchmark suite fits them
+    # (position-free features, smoothed derivatives, increment targets), so
+    # the browser free-runs reproduce the leaderboard rows.
+    xk = x[:, :-1, :].reshape(-1, x.shape[-1])
+    uk = u[:, :-1, :].reshape(-1, u.shape[-1])
+    xkp1 = x[:, 1:, :].reshape(-1, x.shape[-1])
+    dxdt = suite.savgol_derivative(x, split.dt)[:, :-1, :].reshape(-1, x.shape[-1])
+    protected = 1 + (x.shape[-1] - 3) + u.shape[-1]
+    phi_lin = suite.linear_features(xk, uk)
+    phi_poly = suite.poly_features(xk, uk, degree=2)
+    eq_w, eq_m, eq_s = suite.fit_standardized_ridge(phi_lin, dxdt, RIDGE)
+    sindy_w, sindy_m, sindy_s = suite.stlsq_fit(phi_poly, dxdt, 10.0 * RIDGE, fraction=0.06, protected=protected)
+    edmd_w, edmd_m, edmd_s = suite.fit_standardized_ridge(phi_poly, xkp1 - xk, 100.0 * RIDGE)
+    sym_w, sym_m, sym_s = suite.fit_standardized_ridge(phi_poly, xkp1 - xk, RIDGE)
+    sym_w = suite.sparsify_weights(sym_w, fraction=0.12, protected=protected)
+    history, targets = [], []
+    for trial in range(x.shape[0]):
+        for index in range(HANKEL_LAG - 1, x.shape[1] - 1):
+            history.append(np.concatenate((x[trial, index - HANKEL_LAG + 1 : index + 1, 3:].reshape(-1), u[trial, index], [1.0])))
+            targets.append(x[trial, index + 1] - x[trial, index])
+    hankel_w = suite.ridge_fit(np.asarray(history)[:, None, :], np.asarray(targets)[:, None, :], RIDGE)
+    rng = np.random.default_rng(7)
+    z_all = np.concatenate((xk[:, 3:], uk), axis=1)
+    centers = z_all[rng.choice(len(z_all), size=min(96, len(z_all)), replace=False)]
+    length_scale = np.std(z_all, axis=0)
+    length_scale = np.where(length_scale > 1e-6, length_scale, 1.0)
+    phi_rbf = np.concatenate((suite.rbf_features(z_all, centers, length_scale), np.ones((len(z_all), 1))), axis=1)
+    residual_flat = residual_target.reshape(-1, x.shape[-1])
+    gp_w = np.linalg.solve(phi_rbf.T @ phi_rbf + 5.0 * RIDGE * np.eye(phi_rbf.shape[1]), phi_rbf.T @ residual_flat)
+    surrogates = {
+        "6DOF-GP-RBF": {"kind": "rbf_residual", "weights": gp_w, "centers": centers, "length_scale": length_scale},
+        "6DOF-EquationError-LS": {"kind": "derivative", "degree": 1, "weights": eq_w, "mean": eq_m, "scale": eq_s},
+        "6DOF-SINDy": {"kind": "derivative", "degree": 2, "weights": sindy_w, "mean": sindy_m, "scale": sindy_s},
+        "6DOF-Koopman-EDMD": {"kind": "increment", "degree": 2, "weights": edmd_w, "mean": edmd_m, "scale": edmd_s},
+        "6DOF-Symbolic-Stepwise": {"kind": "increment", "degree": 2, "weights": sym_w, "mean": sym_m, "scale": sym_s},
+        "6DOF-Subspace-Hankel": {"kind": "hankel", "lag": HANKEL_LAG, "weights": hankel_w},
+    }
     return {
         "6DOF-Nominal": None,
         "6DOF-LinearSS": linear,
         "6DOF-RidgeResidual": residual,
         "6DOF-GreyBoxOEM": greybox,
+        "surrogates": surrogates,
     }
 
 
@@ -297,6 +348,48 @@ def make_stepper(method: str, weights, dt: float, config: Aircraft6DOFConfig):
             return euler_states_to_quat(x_euler[None, None, :])[0, 0]
 
         return greybox_step
+
+    if isinstance(weights, dict) and "kind" in weights:
+        spec = weights
+        if spec["kind"] == "hankel":
+            lag = spec["lag"]
+            memory = {"hist": [], "last": None}
+
+            def hankel_step(x: np.ndarray, u: np.ndarray) -> np.ndarray:
+                # Re-seed the lag window whenever the caller jumps to a new
+                # state (a fresh segment or a SAFE-model handoff).
+                if memory["last"] is None or not np.array_equal(memory["last"], x):
+                    memory["hist"] = [np.asarray(x, dtype=float).copy()] * lag
+                phi = np.concatenate((np.concatenate([h[3:] for h in memory["hist"][-lag:]]), u, [1.0]))
+                nxt = suite.normalize_state(x + phi @ spec["weights"])
+                memory["hist"] = (memory["hist"] + [nxt.copy()])[-lag:]
+                memory["last"] = nxt
+                return nxt
+
+            return hankel_step
+
+        if spec["kind"] == "rbf_residual":
+
+            def rbf_step(x: np.ndarray, u: np.ndarray) -> np.ndarray:
+                base = nominal_rk4_step(x, u, dt, config)
+                z = np.concatenate((x[3:], u))[None, :]
+                phi = np.concatenate((suite.rbf_features(z, spec["centers"], spec["length_scale"]), np.ones((1, 1))), axis=1)[0]
+                return suite.normalize_state(base + phi @ spec["weights"])
+
+            return rbf_step
+
+        def surrogate_step(x: np.ndarray, u: np.ndarray) -> np.ndarray:
+            phi = (
+                suite.linear_features(x[None, :], u[None, :])
+                if spec["degree"] == 1
+                else suite.poly_features(x[None, :], u[None, :], degree=2)
+            )[0]
+            delta = suite.apply_standardized(phi, spec["weights"], spec["mean"], spec["scale"])
+            if spec["kind"] == "derivative":
+                return suite.normalize_state(x + dt * delta)
+            return suite.normalize_state(x + delta)
+
+        return surrogate_step
 
     def step(x: np.ndarray, u: np.ndarray) -> np.ndarray:
         if method == "6DOF-Nominal":
@@ -393,7 +486,10 @@ def main() -> int:
         else:
             bias = np.zeros(sticks.shape[1])
 
-        steppers = {method: make_stepper(method, weights[method], dt, config) for method in METHODS}
+        steppers = {
+            method: make_stepper(method, weights.get(method, weights["surrogates"].get(method)), dt, config)
+            for method in METHODS
+        }
         segment_rows = []
         freeruns: dict[str, dict[str, object]] = {}
         for seg_index, (start, stop, label) in enumerate(segments):
@@ -460,6 +556,13 @@ def main() -> int:
             "safe_gains": {axis: np.round(coef, 5).tolist() for axis, coef in gains.items()},
             "safe_invariant_weights": np.round(safe_weights, 8).tolist(),
             "safe_scores": safe_scores,
+            "surrogates": {
+                method: {
+                    key: (np.round(value, 7).tolist() if isinstance(value, np.ndarray) else value)
+                    for key, value in spec.items()
+                }
+                for method, spec in weights["surrogates"].items()
+            },
             "greybox": {
                 "parameter_names": list(SPORTCUB_PARAMETER_NAMES),
                 "parameters": np.round(weights["6DOF-GreyBoxOEM"]["theta"], 6).tolist(),
