@@ -60,8 +60,10 @@ GROUND_ALTITUDE_M = 0.5
 GROUND_EFFECT_ALTITUDE_M = 0.65
 DISPLAY_RATE_HZ = 10.0  # browser display rate; stride derived from the data rate
 RIDGE = 1e-5
+# 6DOF-Nominal is omitted: it is the synthetic benchmark's truth-minus-residual
+# baseline and has no meaning on real flights (it remains the internal base of
+# RidgeResidual and GP-RBF).
 METHODS = (
-    "6DOF-Nominal",
     "6DOF-LinearSS",
     "6DOF-RidgeResidual",
     "6DOF-GreyBoxOEM",
@@ -298,28 +300,29 @@ def train_methods(train_path: Path) -> dict[str, object]:
     uk = u[:, :-1, :].reshape(-1, u.shape[-1])
     xkp1 = x[:, 1:, :].reshape(-1, x.shape[-1])
     dxdt = suite.savgol_derivative(x, split.dt)[:, :-1, :].reshape(-1, x.shape[-1])
-    protected = 1 + (x.shape[-1] - 3) + u.shape[-1]
+    x_smooth = suite.savgol_states(x, split.dt)
+    inc = (x_smooth[:, 1:, :] - x_smooth[:, :-1, :]).reshape(-1, x.shape[-1])
+    protected = suite.PROTECTED_FEATURES
     phi_lin = suite.linear_features(xk, uk)
     phi_poly = suite.poly_features(xk, uk, degree=2)
-    eq_w, eq_m, eq_s = suite.fit_standardized_ridge(phi_lin, dxdt[:, 3:], RIDGE)
-    sindy_w, sindy_m, sindy_s = suite.stlsq_fit(phi_poly, dxdt[:, 3:], 10.0 * RIDGE, fraction=0.06, protected=protected)
-    edmd_w, edmd_m, edmd_s = suite.fit_standardized_ridge(phi_poly, (xkp1 - xk)[:, 3:], 100.0 * RIDGE)
-    sym_w, sym_m, sym_s = suite.fit_standardized_ridge(phi_poly, (xkp1 - xk)[:, 3:], RIDGE)
-    sym_w = suite.sparsify_weights(sym_w, fraction=0.12, protected=protected)
+    eq_w, eq_m, eq_s = suite.fit_standardized_ridge(phi_lin, dxdt[:, suite.DYNAMIC_ROWS], RIDGE)
+    sindy_w, sindy_m, sindy_s = suite.stlsq_fit(phi_poly, dxdt[:, suite.DYNAMIC_ROWS], 10.0 * RIDGE, fraction=0.06, protected=protected)
+    edmd_w, edmd_m, edmd_s = suite.fit_standardized_ridge(phi_poly, inc[:, suite.DYNAMIC_ROWS], 100.0 * RIDGE)
+    sym_w, sym_m, sym_s = suite.stlsq_fit(phi_poly, inc[:, suite.DYNAMIC_ROWS], RIDGE, fraction=0.12, protected=protected)
     history, targets = [], []
     for trial in range(x.shape[0]):
         for index in range(HANKEL_LAG - 1, x.shape[1] - 1):
-            history.append(np.concatenate((x[trial, index - HANKEL_LAG + 1 : index + 1, 3:].reshape(-1), u[trial, index], [1.0])))
-            targets.append(x[trial, index + 1, 3:] - x[trial, index, 3:])
+            history.append(np.concatenate((suite.invariant_state(x[trial, index - HANKEL_LAG + 1 : index + 1]).reshape(-1), u[trial, index], [1.0])))
+            targets.append(x_smooth[trial, index + 1, suite.DYNAMIC_ROWS] - x_smooth[trial, index, suite.DYNAMIC_ROWS])
     hankel_w = suite.ridge_fit(np.asarray(history)[:, None, :], np.asarray(targets)[:, None, :], RIDGE)
     rng = np.random.default_rng(7)
-    z_all = np.concatenate((xk[:, 3:], uk), axis=1)
+    z_all = np.concatenate((suite.invariant_state(xk), uk), axis=1)
     centers = z_all[rng.choice(len(z_all), size=min(96, len(z_all)), replace=False)]
     length_scale = np.std(z_all, axis=0)
     length_scale = np.where(length_scale > 1e-6, length_scale, 1.0)
     phi_rbf = np.concatenate((suite.rbf_features(z_all, centers, length_scale), np.ones((len(z_all), 1))), axis=1)
     residual_flat = residual_target.reshape(-1, x.shape[-1])
-    gp_w = np.linalg.solve(phi_rbf.T @ phi_rbf + 5.0 * RIDGE * np.eye(phi_rbf.shape[1]), phi_rbf.T @ residual_flat[:, 3:])
+    gp_w = np.linalg.solve(phi_rbf.T @ phi_rbf + 5.0 * RIDGE * np.eye(phi_rbf.shape[1]), phi_rbf.T @ residual_flat[:, suite.DYNAMIC_ROWS])
     surrogates = {
         "6DOF-GP-RBF": {"kind": "rbf_residual", "weights": gp_w, "centers": centers, "length_scale": length_scale},
         "6DOF-EquationError-LS": {"kind": "derivative", "degree": 1, "weights": eq_w, "mean": eq_m, "scale": eq_s},
@@ -329,7 +332,7 @@ def train_methods(train_path: Path) -> dict[str, object]:
         "6DOF-Subspace-Hankel": {"kind": "hankel", "lag": HANKEL_LAG, "weights": hankel_w},
     }
     return {
-        "6DOF-Nominal": None,
+        "6DOF-NominalGreyBox": None,
         "6DOF-LinearSS": linear,
         "6DOF-RidgeResidual": residual,
         "6DOF-GreyBoxOEM": greybox,
@@ -360,8 +363,8 @@ def make_stepper(method: str, weights, dt: float, config: Aircraft6DOFConfig):
                 # state (a fresh segment or a SAFE-model handoff).
                 if memory["last"] is None or not np.array_equal(memory["last"], x):
                     memory["hist"] = [np.asarray(x, dtype=float).copy()] * lag
-                phi = np.concatenate((np.concatenate([h[3:] for h in memory["hist"][-lag:]]), u, [1.0]))
-                nxt = suite.kinematic_step(x, x[3:] + phi @ spec["weights"], dt)
+                phi = np.concatenate((suite.invariant_state(np.asarray(memory["hist"][-lag:])).reshape(-1), u, [1.0]))
+                nxt = suite.kinematic_step(x, x[suite.DYNAMIC_ROWS] + phi @ spec["weights"], dt)
                 memory["hist"] = (memory["hist"] + [nxt.copy()])[-lag:]
                 memory["last"] = nxt
                 return nxt
@@ -372,9 +375,9 @@ def make_stepper(method: str, weights, dt: float, config: Aircraft6DOFConfig):
 
             def rbf_step(x: np.ndarray, u: np.ndarray) -> np.ndarray:
                 base = nominal_rk4_step(x, u, dt, config)
-                z = np.concatenate((x[3:], u))[None, :]
+                z = np.concatenate((suite.invariant_state(x[None, :])[0], u))[None, :]
                 phi = np.concatenate((suite.rbf_features(z, spec["centers"], spec["length_scale"]), np.ones((1, 1))), axis=1)[0]
-                return suite.normalize_state(np.concatenate((base[0:3], base[3:] + phi @ spec["weights"])))
+                return suite.kinematic_step(x, base[suite.DYNAMIC_ROWS] + phi @ spec["weights"], dt)
 
             return rbf_step
 
@@ -385,14 +388,13 @@ def make_stepper(method: str, weights, dt: float, config: Aircraft6DOFConfig):
                 else suite.poly_features(x[None, :], u[None, :], degree=2)
             )[0]
             delta = suite.apply_standardized(phi, spec["weights"], spec["mean"], spec["scale"])
-            if spec["kind"] == "derivative":
-                return suite.kinematic_step(x, x[3:] + dt * delta, dt)
-            return suite.kinematic_step(x, x[3:] + delta, dt)
+            gain = dt if spec["kind"] == "derivative" else 1.0
+            return suite.kinematic_step(x, x[suite.DYNAMIC_ROWS] + gain * delta, dt)
 
         return surrogate_step
 
     def step(x: np.ndarray, u: np.ndarray) -> np.ndarray:
-        if method == "6DOF-Nominal":
+        if method == "6DOF-NominalGreyBox":
             return nominal_rk4_step(x, u, dt, config)
         phi = np.concatenate((x, u, [1.0]))
         if method == "6DOF-LinearSS":

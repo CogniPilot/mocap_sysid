@@ -236,6 +236,7 @@ function bindControls() {
     const { flightIndex, timeS } = event.detail;
     state.explorerOverlay = event.detail.overlay || null;
     if (event.detail.methods) state.browserMethods = event.detail.methods;
+    if (event.detail.methodColors) state.browserMethodColors = event.detail.methodColors;
     renderPlaybackMethodPicker();
     document.querySelector("#playback-predict")?.classList.toggle("active", Boolean(event.detail.overlay?.anchored));
     if (event.detail.track) {
@@ -362,9 +363,16 @@ function bindControls() {
     if (!state.playbackTrackOverride) return;
     window.dispatchEvent(new CustomEvent("explorer-anchor-request", { detail: { timeS: state.playbackTimeS } }));
   });
-  document.querySelector("#playback-method").addEventListener("change", (event) => {
-    state.selectedMethods.clear();
-    state.selectedMethods.add(methodKey(event.target.value));
+  document.addEventListener("pointerdown", (event) => {
+    const dd = document.querySelector("#playback-method-dd");
+    if (dd?.open && !dd.contains(event.target)) dd.open = false;
+  });
+  document.querySelector("#playback-method-menu").addEventListener("change", (event) => {
+    const method = event.target?.dataset?.method;
+    if (!method) return;
+    const key = methodKey(method);
+    if (event.target.checked) state.selectedMethods.add(key);
+    else state.selectedMethods.delete(key);
     window.dispatchEvent(new CustomEvent("methods-changed", { detail: { methods: Array.from(state.selectedMethods) } }));
     render();
   });
@@ -782,7 +790,6 @@ function toggleMethodSelection(key) {
   if (state.selectedMethods.has(key)) {
     state.selectedMethods.delete(key);
   } else {
-    state.selectedMethods.clear();
     state.selectedMethods.add(key);
   }
   window.dispatchEvent(new CustomEvent("methods-changed", { detail: { methods: Array.from(state.selectedMethods) } }));
@@ -805,26 +812,39 @@ function renderPlaybackMethodPicker() {
   // controls, so a method can be chosen in fullscreen without the
   // leaderboard. It mirrors the leaderboard selection both ways.
   const wrap = document.querySelector("#playback-method-wrap");
-  const select = document.querySelector("#playback-method");
-  if (!wrap || !select) return;
+  const menu = document.querySelector("#playback-method-menu");
+  const summary = document.querySelector("#playback-method-summary");
+  if (!wrap || !menu || !summary) return;
   const methods = state.browserMethods || [];
   const showing = Boolean(state.playbackTrackOverride) && methods.length > 0;
   wrap.hidden = !showing;
   if (!showing) return;
-  // With no leaderboard selection the explorer falls back to LinearSS, so
-  // the picker shows that reality instead of a separate "default" entry.
-  const selected = methods.find((m) => state.selectedMethods.has(methodKey(m))) || "6DOF-LinearSS";
-  const signature = `${methods.join("|")}#${selected}`;
-  if (select.dataset.signature === signature) return;
-  select.dataset.signature = signature;
-  select.innerHTML = "";
+  const checked = methods.filter((m) => state.selectedMethods.has(methodKey(m)));
+  const signature = `${methods.join("|")}#${checked.join("|")}`;
+  if (menu.dataset.signature === signature) return;
+  menu.dataset.signature = signature;
+  menu.innerHTML = "";
   for (const method of methods) {
-    const option = document.createElement("option");
-    option.value = method;
-    option.textContent = method.replace("6DOF-", "");
-    select.append(option);
+    const row = document.createElement("label");
+    row.className = "method-menu-row";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.dataset.method = method;
+    box.checked = state.selectedMethods.has(methodKey(method));
+    const swatch = document.createElement("i");
+    swatch.className = "method-swatch";
+    const color = (state.browserMethodColors || {})[method];
+    if (color) swatch.style.background = color;
+    const name = document.createElement("span");
+    name.textContent = method.replace("6DOF-", "");
+    if (color) name.style.color = color;
+    row.append(box, swatch, name);
+    menu.append(row);
   }
-  select.value = selected;
+  // With nothing checked the explorer falls back to LinearSS.
+  summary.textContent = checked.length
+    ? `${checked.length} selected`
+    : "LinearSS (default)";
 }
 
 function renderDatasets() {

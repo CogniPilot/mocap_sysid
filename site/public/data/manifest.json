@@ -277,8 +277,8 @@
     "method_traces": "method_traces.json",
     "playback": "playback.json"
   },
-  "generated_at": "2026-06-11T06:39:59.017738+00:00",
-  "git_sha": "b750a6dc12663ab1ad8a76f34b8e863ed745a0c2",
+  "generated_at": "2026-06-11T15:55:16.900963+00:00",
+  "git_sha": "a7e7820daeb3b715a6229f11570f351b69efa15e",
   "method_registry": [
     {
       "description": "Built-in 6DOF baseline dispatched by models/aircraft6dof/comparison_suite.py.",
@@ -503,7 +503,7 @@
       "model_families": [
         "aircraft6dof"
       ],
-      "name": "6DOF-Nominal",
+      "name": "6DOF-NominalGreyBox",
       "observation_types": [
         "direct",
         "mocap"
@@ -869,7 +869,7 @@
       "model_families": [
         "aircraft3dof"
       ],
-      "name": "Nominal",
+      "name": "Nominal-GreyBox",
       "observation_types": [
         "direct",
         "mocap"
@@ -1158,7 +1158,7 @@
     {
       "dataset_status": "provisional",
       "id": "sportcub_mocap_5_22_26",
-      "method_result_count": 40,
+      "method_result_count": 38,
       "model_family": "aircraft6dof",
       "source_type": "real_mocap",
       "title": "Sport Cub S 2 motion-capture full-lap 6DOF dataset, 2026-05-22"

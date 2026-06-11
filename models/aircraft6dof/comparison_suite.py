@@ -51,7 +51,7 @@ SCENARIO_TITLES = {
 }
 SCENARIO_ORDER = tuple(SCENARIO_TITLES)
 METHOD_TRAINING_SCENARIOS = {
-    "6DOF-Nominal": "none",
+    "6DOF-NominalGreyBox": "none",
     "6DOF-LinearSS": "aircraft_6dof_trim_grid",
     "6DOF-Model-Stitching": "aircraft_6dof_trim_grid",
     "6DOF-Subspace-Hankel": "aircraft_6dof_trim_grid",
@@ -546,15 +546,59 @@ def standardize_fit(phi: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray
     return (phi - mean) / scale, mean, scale
 
 
+# Dynamic rows of the 13-state: body velocities and body rates. The kinematic
+# rows (position, quaternion) are exactly known and are never fitted; rollouts
+# integrate them from the predicted dynamic states (Klein/Morelli equation
+# error and SINDy practice fit only the force/moment equations).
+DYNAMIC_ROWS = [3, 4, 5, 10, 11, 12]
+# Constant + 9 invariant state features + inputs are protected from pruning.
+PROTECTED_FEATURES = 1 + 9 + len(INPUT_NAMES)
+
+
+def gravity_direction(x: np.ndarray) -> np.ndarray:
+    """Body-frame gravity direction (third row of R(q)^T), vectorized.
+
+    Attitude enters the rigid-body dynamics only through this vector: using
+    it instead of raw quaternion components makes the features heading-
+    invariant and lets even linear features represent the gravity term.
+    """
+    q = x[..., 6:10]
+    norm = np.maximum(np.linalg.norm(q, axis=-1, keepdims=True), 1e-12)
+    q0, q1, q2, q3 = (q / norm)[..., 0], (q / norm)[..., 1], (q / norm)[..., 2], (q / norm)[..., 3]
+    return np.stack([2 * (q1 * q3 - q0 * q2), 2 * (q2 * q3 + q0 * q1), 1 - 2 * (q1 * q1 + q2 * q2)], axis=-1)
+
+
+def invariant_state(x: np.ndarray) -> np.ndarray:
+    """[u, v, w, gx, gy, gz, p, q, r]: heading/position-invariant features."""
+    return np.concatenate((x[..., 3:6], gravity_direction(x), x[..., 10:13]), axis=-1)
+
+
+def savgol_states(x: np.ndarray, dt: float, window_s: float = 0.05) -> np.ndarray:
+    """Savitzky-Golay smoothed states for forming increment targets."""
+    from scipy.signal import savgol_filter
+
+    window = max(5, int(round(window_s / dt)) | 1)
+    if x.shape[1] <= window:
+        return x.copy()
+    return savgol_filter(x, window_length=window, polyorder=2, axis=1)
+
+
+def quat_multiply(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    return np.array([
+        a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
+        a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+        a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
+        a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
+    ])
+
+
 def linear_features(x: np.ndarray, u: np.ndarray) -> np.ndarray:
-    # Rigid-body dynamics are translation-invariant: inertial positions are
-    # excluded so open-loop rollouts cannot diverge through spurious
-    # position-dependent terms.
-    return np.concatenate((x[..., 3:], u, np.ones((*x.shape[:-1], 1))), axis=-1)
+    # Heading/position-invariant features: see invariant_state.
+    return np.concatenate((invariant_state(x), u, np.ones((*x.shape[:-1], 1))), axis=-1)
 
 
 def poly_features(x: np.ndarray, u: np.ndarray, *, degree: int = 2) -> np.ndarray:
-    z = np.concatenate((x[..., 3:], u), axis=-1)
+    z = np.concatenate((invariant_state(x), u), axis=-1)
     parts = [np.ones((*z.shape[:-1], 1)), z]
     if degree >= 2:
         quad = []
@@ -647,16 +691,22 @@ def savgol_derivative(x: np.ndarray, dt: float, window_s: float = 0.05) -> np.nd
 
 
 def kinematic_step(state: np.ndarray, dyn_next: np.ndarray, dt: float) -> np.ndarray:
-    """Advance position exactly from the current attitude and body velocity.
+    """Advance position and attitude exactly; surrogates predict dynamics only.
 
-    Generic surrogates predict only the ten dynamic states: a learned
-    position update is unconstrained by the velocity clamp and lets a bad
-    fit translate arbitrarily fast, while the kinematic relation
-    p[k+1] = p[k] + R(q) v dt bounds travel by the velocity state.
+    ``dyn_next`` is the six predicted dynamic states [u, v, w, p, q, r].
+    Position integrates the rotated body velocity and the quaternion takes an
+    exact axis-angle step from the current body rates, so a learned map can
+    neither teleport nor break the attitude kinematics it never needed to fit.
     """
     quat = normalize_quaternion(state[6:10])
     pos = state[0:3] + rotation_body_to_inertial(quat) @ state[3:6] * dt
-    return normalize_state(np.concatenate((pos, dyn_next)))
+    omega = state[10:13]
+    angle = float(np.linalg.norm(omega)) * dt
+    if angle > 1e-12:
+        axis = omega / np.linalg.norm(omega)
+        dq = np.concatenate(([np.cos(0.5 * angle)], np.sin(0.5 * angle) * axis))
+        quat = quat_multiply(quat, dq)
+    return normalize_state(np.concatenate((pos, dyn_next[0:3], quat, dyn_next[3:6])))
 
 
 def derivative_rollout(
@@ -677,7 +727,7 @@ def derivative_rollout(
         for index in range(len(t) - 1):
             phi = poly_features(pred[trial, index][None, :], u[trial, index][None, :], degree=degree)[0]
             delta = apply_standardized(phi, weights, mean, scale)
-            pred[trial, index + 1] = kinematic_step(pred[trial, index], pred[trial, index, 3:] + dt * delta, dt)
+            pred[trial, index + 1] = kinematic_step(pred[trial, index], pred[trial, index, DYNAMIC_ROWS] + dt * delta, dt)
     return pred
 
 
@@ -699,7 +749,7 @@ def one_step_rollout(
         for index in range(len(t) - 1):
             phi = poly_features(pred[trial, index][None, :], u[trial, index][None, :], degree=degree)[0]
             delta = apply_standardized(phi, weights, mean, scale)
-            pred[trial, index + 1] = kinematic_step(pred[trial, index], pred[trial, index, 3:] + delta, dt)
+            pred[trial, index + 1] = kinematic_step(pred[trial, index], pred[trial, index, DYNAMIC_ROWS] + delta, dt)
     return pred
 
 
@@ -723,7 +773,33 @@ def residual_feature_rollout(
         for index in range(len(t) - 1):
             base = nominal_rk4_step(pred[trial, index], u[trial, index], dt, cfg)
             phi = poly_features(pred[trial, index][None, :], u[trial, index][None, :], degree=degree)[0]
-            pred[trial, index + 1] = normalize_state(np.concatenate((base[0:3], base[3:] + apply_standardized(phi, weights, mean, scale))))
+            pred[trial, index + 1] = kinematic_step(pred[trial, index], base[DYNAMIC_ROWS] + apply_standardized(phi, weights, mean, scale), dt)
+    return pred
+
+
+def greybox_residual_rollout(
+    initial: np.ndarray,
+    u: np.ndarray,
+    t: np.ndarray,
+    weights: np.ndarray,
+    mean: np.ndarray,
+    scale: np.ndarray,
+    theta_full: np.ndarray,
+    *,
+    degree: int,
+) -> np.ndarray:
+    from .greybox_oem_fit import make_greybox_quat_step
+
+    pred = np.zeros((u.shape[0], len(t), len(STATE_NAMES)))
+    pred[:, 0, :] = initial
+    dt = float(np.median(np.diff(t)))
+    step = make_greybox_quat_step(theta_full, dt)
+    for trial in range(u.shape[0]):
+        pred[trial, 0] = normalize_state(pred[trial, 0])
+        for index in range(len(t) - 1):
+            base = step(pred[trial, index], u[trial, index])
+            phi = poly_features(pred[trial, index][None, :], u[trial, index][None, :], degree=degree)[0]
+            pred[trial, index + 1] = kinematic_step(pred[trial, index], base[DYNAMIC_ROWS] + apply_standardized(phi, weights, mean, scale), dt)
     return pred
 
 
@@ -832,9 +908,9 @@ def rbf_residual_rollout(
         pred[trial, 0] = normalize_state(pred[trial, 0])
         for index in range(len(t) - 1):
             base = nominal_rk4_step(pred[trial, index], u[trial, index], dt, cfg)
-            z = np.concatenate((pred[trial, index, 3:], u[trial, index]))[None, :]
+            z = np.concatenate((invariant_state(pred[trial, index][None, :])[0], u[trial, index]))[None, :]
             phi = np.concatenate((rbf_features(z, centers, length_scale), np.ones((1, 1))), axis=1)[0]
-            pred[trial, index + 1] = normalize_state(np.concatenate((base[0:3], base[3:] + phi @ weights)))
+            pred[trial, index + 1] = kinematic_step(pred[trial, index], base[DYNAMIC_ROWS] + phi @ weights, dt)
     return pred
 
 
@@ -855,7 +931,7 @@ def nn_residual_rollout(
         pred[trial, 0] = normalize_state(pred[trial, 0])
         for index in range(len(t) - 1):
             base = nominal_rk4_step(pred[trial, index], u[trial, index], dt, cfg)
-            z_now = np.concatenate((pred[trial, index, 3:], u[trial, index]))[None, :]
+            z_now = np.concatenate((invariant_state(pred[trial, index][None, :])[0], u[trial, index]))[None, :]
             phi_now = np.concatenate(
                 (
                     rbf_features(z_now, centers, length_scale),
@@ -863,7 +939,7 @@ def nn_residual_rollout(
                 ),
                 axis=1,
             )[0]
-            pred[trial, index + 1] = normalize_state(np.concatenate((base[0:3], base[3:] + phi_now @ weights)))
+            pred[trial, index + 1] = kinematic_step(pred[trial, index], base[DYNAMIC_ROWS] + phi_now @ weights, dt)
     return pred
 
 
@@ -872,10 +948,10 @@ def lagged_rollout(initial: np.ndarray, u: np.ndarray, t: np.ndarray, weights: n
     pred[:, :lag, :] = initial[:, None, :]
     for trial in range(u.shape[0]):
         for index in range(lag - 1, len(t) - 1):
-            history = pred[trial, index - lag + 1 : index + 1, 3:].reshape(-1)
+            history = invariant_state(pred[trial, index - lag + 1 : index + 1]).reshape(-1)
             phi = np.concatenate((history, u[trial, index], [1.0]))
             dt = float(np.median(np.diff(t)))
-            pred[trial, index + 1] = kinematic_step(pred[trial, index], pred[trial, index, 3:] + phi @ weights, dt)
+            pred[trial, index + 1] = kinematic_step(pred[trial, index], pred[trial, index, DYNAMIC_ROWS] + phi @ weights, dt)
     return pred
 
 
@@ -1053,7 +1129,7 @@ def run_methods(
         return scenario, split, split_x, train_samples
 
     def add_result(result: Result6DOF) -> None:
-        if training_scenario_override is not None and result.method != "6DOF-Nominal":
+        if training_scenario_override is not None and result.method != "6DOF-NominalGreyBox":
             result.training_scenario = training_scenario_override
         else:
             result.training_scenario = METHOD_TRAINING_SCENARIOS.get(result.method, "aircraft_6dof_aggressive")
@@ -1061,25 +1137,29 @@ def run_methods(
 
     results: list[Result6DOF] = []
 
-    start = time.perf_counter()
-    pred = parallel_rollout("nominal_rollout", workers, validation_x0, validation.u_cmd, validation.t, config)
-    rollout_elapsed = time.perf_counter() - start
-    add_result(
-        score_state_method(
-            "6DOF-Nominal",
-            "Attached-flow nominal 6DOF rollout using pilot commands and no fitted stall correction.",
-            "numpy-rk4",
-            state_source,
-            0.0,
-            0.0,
-            rollout_elapsed,
-            0,
-            0,
-            pred,
-            validation,
-            "No-fit baseline; mismatch includes actuator lag, hidden stall/nonlinear aerodynamics, and mocap-derived initialization error.",
+    if training_scenario_override is None:
+        # The attached-flow nominal row is the truth-minus-residual baseline of
+        # the synthetic benchmark; on real flights it is just a wrong model
+        # with no baseline meaning, so the row is omitted there.
+        start = time.perf_counter()
+        pred = parallel_rollout("nominal_rollout", workers, validation_x0, validation.u_cmd, validation.t, config)
+        rollout_elapsed = time.perf_counter() - start
+        add_result(
+            score_state_method(
+                "6DOF-NominalGreyBox",
+                "Attached-flow nominal 6DOF rollout using pilot commands and no fitted stall correction.",
+                "numpy-rk4",
+                state_source,
+                0.0,
+                0.0,
+                rollout_elapsed,
+                0,
+                0,
+                pred,
+                validation,
+                "No-fit baseline; mismatch includes actuator lag, hidden stall/nonlinear aerodynamics, and mocap-derived initialization error.",
+            )
         )
-    )
 
     start = time.perf_counter()
     cpu_start = time.process_time()
@@ -1306,7 +1386,7 @@ def run_methods(
     start = time.perf_counter()
     cpu_start = time.process_time()
     phi = linear_features(fit_x, fit_u)
-    weights_deriv, mean_deriv, scale_deriv = fit_standardized_ridge(phi, fit_dxdt[:, 3:], ridge)
+    weights_deriv, mean_deriv, scale_deriv = fit_standardized_ridge(phi, fit_dxdt[:, DYNAMIC_ROWS], ridge)
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
@@ -1335,7 +1415,7 @@ def run_methods(
     var_xk = smoothed_x[:, :-1, :].reshape(-1, len(STATE_NAMES))[fit_idx_poly]
     var_uk = train.u_cmd[:, :-1, :].reshape(-1, len(INPUT_NAMES))[fit_idx_poly]
     var_dxdt = ((smoothed_x[:, 1:, :] - smoothed_x[:, :-1, :]) / train.dt).reshape(-1, len(STATE_NAMES))[fit_idx_poly]
-    weights_var, mean_var, scale_var = fit_standardized_ridge(linear_features(var_xk, var_uk), var_dxdt[:, 3:], 10.0 * ridge)
+    weights_var, mean_var, scale_var = fit_standardized_ridge(linear_features(var_xk, var_uk), var_dxdt[:, DYNAMIC_ROWS], 10.0 * ridge)
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
@@ -1362,8 +1442,12 @@ def run_methods(
     start = time.perf_counter()
     cpu_start = time.process_time()
     phi_poly = poly_features(fit_x, fit_u, degree=2)
+    # Increment targets from smoothed states: raw one-step differences of the
+    # 240 Hz mocap states are noise-dominated (measured SNR 0.2-0.8).
+    x_smooth_inc = savgol_states(train_x, train.dt)
+    fit_inc = (x_smooth_inc[:, 1:, :] - x_smooth_inc[:, :-1, :]).reshape(-1, len(STATE_NAMES))[fit_idx_poly][:, DYNAMIC_ROWS]
     weights_sindy, mean_sindy, scale_sindy = stlsq_fit(
-        phi_poly, fit_dxdt[:, 3:], 10.0 * ridge, fraction=0.06, protected=1 + len(STATE_NAMES) - 3 + len(INPUT_NAMES)
+        phi_poly, fit_dxdt[:, DYNAMIC_ROWS], 10.0 * ridge, fraction=0.06, protected=PROTECTED_FEATURES
     )
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
@@ -1389,8 +1473,9 @@ def run_methods(
 
     start = time.perf_counter()
     cpu_start = time.process_time()
-    weights_symbolic, mean_symbolic, scale_symbolic = fit_standardized_ridge(phi_poly, (fit_xkp1 - fit_x)[:, 3:], ridge)
-    weights_symbolic = sparsify_weights(weights_symbolic, fraction=0.12, protected=1 + len(STATE_NAMES) - 3 + len(INPUT_NAMES))
+    weights_symbolic, mean_symbolic, scale_symbolic = stlsq_fit(
+        phi_poly, fit_inc, ridge, fraction=0.12, protected=PROTECTED_FEATURES
+    )
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
@@ -1416,7 +1501,7 @@ def run_methods(
 
     start = time.perf_counter()
     cpu_start = time.process_time()
-    weights_edmd, mean_edmd, scale_edmd = fit_standardized_ridge(phi_poly, (fit_xkp1 - fit_x)[:, 3:], 100.0 * ridge)
+    weights_edmd, mean_edmd, scale_edmd = fit_standardized_ridge(phi_poly, fit_inc, 100.0 * ridge)
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
@@ -1440,15 +1525,41 @@ def run_methods(
         )
     )
 
+    greybox = None
+    if training_scenario_override and "sportcub" in training_scenario_override:
+        from .greybox_oem_fit import fit_greybox, greybox_one_step
+
+        print(f"  {state_source}: grey-box OEM fit (shared by UDE base and GreyBoxOEM row)", flush=True)
+        greybox_fit_start = time.perf_counter()
+        greybox_fit_cpu = time.process_time()
+        greybox = fit_greybox(train_x, train.u_cmd, train.dt)
+        greybox_fit_elapsed = time.perf_counter() - greybox_fit_start
+        greybox_fit_cpu = time.process_time() - greybox_fit_cpu
+
     start = time.perf_counter()
     cpu_start = time.process_time()
-    residual = xkp1 - nominal_next
+    if greybox is not None:
+        base_next = greybox_one_step(greybox["spec"], greybox["theta_full"], train_x[:, :-1, :], train.u_cmd[:, :-1, :], train.dt)
+        ude_note = "Residual around the fitted grey-box airframe (UDE premise: best known physics + learned residual)."
+        # A good base leaves a one-step residual far below measurement noise
+        # at 240 Hz; without heavy shrinkage the residual fit is noise that
+        # poisons the base on rollout. The standardized gram scales with the
+        # sample count, so the penalty must too (lambda = alpha * n).
+        ude_ridge = 1.0 * len(fit_idx_poly)
+    else:
+        base_next = nominal_next
+        ude_note = "Residual around the attached-flow nominal model."
+        ude_ridge = 10.0 * ridge
+    residual = x_smooth_inc[:, 1:, :] - base_next
     fit_residual = residual.reshape(-1, len(STATE_NAMES))[fit_idx_poly]
-    weights_ude, mean_ude, scale_ude = fit_standardized_ridge(phi_poly, fit_residual[:, 3:], 10.0 * ridge)
+    weights_ude, mean_ude, scale_ude = fit_standardized_ridge(phi_poly, fit_residual[:, DYNAMIC_ROWS], ude_ridge)
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
-    pred = parallel_rollout("residual_feature_rollout", workers, validation_x0, validation.u_cmd, validation.t, weights_ude, mean_ude, scale_ude, config, degree=2)
+    if greybox is not None:
+        pred = parallel_rollout("greybox_residual_rollout", workers, validation_x0, validation.u_cmd, validation.t, weights_ude, mean_ude, scale_ude, np.asarray(greybox["theta_full"]), degree=2)
+    else:
+        pred = parallel_rollout("residual_feature_rollout", workers, validation_x0, validation.u_cmd, validation.t, weights_ude, mean_ude, scale_ude, config, degree=2)
     rollout_elapsed = time.perf_counter() - rollout_start
     add_result(
         score_state_method(
@@ -1463,18 +1574,21 @@ def run_methods(
             int(weights_ude.size + mean_ude.size + scale_ude.size),
             pred,
             validation,
-            "Deterministic UDE analogue: ridge residual map, no neural network or ODE-in-the-loop training.",
+            "Deterministic UDE analogue: ridge residual map, no neural network or ODE-in-the-loop training. " + ude_note,
             implementation_status="analogue",
         )
     )
 
     start = time.perf_counter()
     cpu_start = time.process_time()
-    weights_pinn = sparsify_weights(weights_ude, fraction=0.08, protected=1 + len(STATE_NAMES) - 3 + len(INPUT_NAMES))
+    weights_pinn = sparsify_weights(weights_ude, fraction=0.08, protected=PROTECTED_FEATURES)
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
-    pred = parallel_rollout("residual_feature_rollout", workers, validation_x0, validation.u_cmd, validation.t, weights_pinn, mean_ude, scale_ude, config, degree=2)
+    if greybox is not None:
+        pred = parallel_rollout("greybox_residual_rollout", workers, validation_x0, validation.u_cmd, validation.t, weights_pinn, mean_ude, scale_ude, np.asarray(greybox["theta_full"]), degree=2)
+    else:
+        pred = parallel_rollout("residual_feature_rollout", workers, validation_x0, validation.u_cmd, validation.t, weights_pinn, mean_ude, scale_ude, config, degree=2)
     rollout_elapsed = time.perf_counter() - rollout_start
     add_result(
         score_state_method(
@@ -1498,12 +1612,13 @@ def run_methods(
     start = time.perf_counter()
     cpu_start = time.process_time()
     lag = 3
+    x_smooth = savgol_states(train_x, train.dt)
     history = []
     targets = []
     for trial in range(train_x.shape[0]):
         for index in range(lag - 1, train_x.shape[1] - 1):
-            history.append(np.concatenate((train_x[trial, index - lag + 1 : index + 1, 3:].reshape(-1), train.u_cmd[trial, index], [1.0])))
-            targets.append(train_x[trial, index + 1, 3:] - train_x[trial, index, 3:])
+            history.append(np.concatenate((invariant_state(train_x[trial, index - lag + 1 : index + 1]).reshape(-1), train.u_cmd[trial, index], [1.0])))
+            targets.append(x_smooth[trial, index + 1, DYNAMIC_ROWS] - x_smooth[trial, index, DYNAMIC_ROWS])
     weights_hankel = ridge_fit(np.asarray(history)[:, None, :], np.asarray(targets)[:, None, :], ridge)
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
@@ -1536,7 +1651,7 @@ def run_methods(
     residual = xkp1 - nominal_next
     start = time.perf_counter()
     cpu_start = time.process_time()
-    z = np.concatenate((xk.reshape(-1, len(STATE_NAMES))[:, 3:], uk.reshape(-1, len(INPUT_NAMES))), axis=1)
+    z = np.concatenate((invariant_state(xk.reshape(-1, len(STATE_NAMES))), uk.reshape(-1, len(INPUT_NAMES))), axis=1)
     target_res = residual.reshape(-1, len(STATE_NAMES))
     rng = np.random.default_rng(12_345 + (0 if state_source == "direct" else 1))
     fit_count = min(60_000, z.shape[0])
@@ -1547,7 +1662,7 @@ def run_methods(
     length_scale = np.std(z[fit_idx], axis=0)
     length_scale = np.where(length_scale > 1e-6, length_scale, 1.0)
     phi_rbf = np.concatenate((rbf_features(z[fit_idx], centers, length_scale), np.ones((fit_count, 1))), axis=1)
-    weights_rbf = np.linalg.solve(phi_rbf.T @ phi_rbf + 1e-4 * np.eye(phi_rbf.shape[1]), phi_rbf.T @ target_res[fit_idx][:, 3:])
+    weights_rbf = np.linalg.solve(phi_rbf.T @ phi_rbf + 1e-4 * np.eye(phi_rbf.shape[1]), phi_rbf.T @ target_res[fit_idx][:, DYNAMIC_ROWS])
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
@@ -1575,7 +1690,7 @@ def run_methods(
     nn_count = min(128, fit_count)
     nn_centers = centers[:nn_count]
     nn_phi = np.concatenate((rbf_features(z[fit_idx], nn_centers, length_scale), linear_features(xk.reshape(-1, len(STATE_NAMES))[fit_idx], uk.reshape(-1, len(INPUT_NAMES))[fit_idx])), axis=1)
-    weights_nn = np.linalg.solve(nn_phi.T @ nn_phi + 1e-4 * np.eye(nn_phi.shape[1]), nn_phi.T @ target_res[fit_idx][:, 3:])
+    weights_nn = np.linalg.solve(nn_phi.T @ nn_phi + 1e-4 * np.eye(nn_phi.shape[1]), nn_phi.T @ target_res[fit_idx][:, DYNAMIC_ROWS])
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
 
@@ -1603,15 +1718,11 @@ def run_methods(
     if training_scenario_override and "sportcub" in training_scenario_override:
         # Physical grey-box OEM: the spec encodes the Sport Cub airframe, so
         # the method only applies to its real-flight scenarios.
-        from .greybox_oem_fit import fit_greybox, greybox_rollout_quat
+        from .greybox_oem_fit import greybox_rollout_quat
 
         _scenario, train, train_x, train_samples = training_context("6DOF-GreyBoxOEM")
-        start = time.perf_counter()
-        cpu_start = time.process_time()
-        print(f"  {state_source}: grey-box OEM multiple-shooting fit on {train_x.shape[0]} chunks", flush=True)
-        greybox = fit_greybox(train_x, train.u_cmd, train.dt)
-        train_elapsed = time.perf_counter() - start
-        train_cpu = time.process_time() - cpu_start
+        train_elapsed = greybox_fit_elapsed
+        train_cpu = greybox_fit_cpu
         rollout_start = time.perf_counter()
         pred = greybox_rollout_quat(greybox["spec"], greybox["theta_full"], validation_x0, validation.u_cmd, validation.dt)
         rollout_elapsed = time.perf_counter() - rollout_start
@@ -2037,17 +2148,17 @@ def plot_train_time_accuracy(rows: list[dict[str, object]], output: Path) -> Non
         train_times = np.array([max(float(row["train_elapsed_s"]), 1e-2) for row in source_rows])
         scores = np.array([max(float(row["validation_score"]), 1e-6) for row in source_rows])
         rollout = np.array([max(float(row["rollout_elapsed_s"]), 1e-3) for row in source_rows])
-        nominal = [row for row in source_rows if row["method"] == "6DOF-Nominal"]
+        nominal = [row for row in source_rows if row["method"] == "6DOF-NominalGreyBox"]
         if nominal:
             nominal_score = max(float(nominal[0]["validation_score"]), 1e-6)
             ax.axhline(nominal_score, color="#d62728", linestyle="--", linewidth=1.0)
-            ax.text(max(train_times) * 0.82, nominal_score * 1.06, "Nominal", color="#d62728", fontsize=7.0)
+            ax.text(max(train_times) * 0.82, nominal_score * 1.06, "NominalGreyBox", color="#d62728", fontsize=7.0)
         sizes = 34.0 + 130.0 * np.sqrt(rollout / max(float(np.max(rollout)), 1e-9))
         ax.scatter(train_times, scores, s=sizes, color=colors[source], edgecolor="black", linewidth=0.45, alpha=0.78, zorder=3)
         label_offsets = [(1.08, 1.10), (0.82, 1.18), (1.05, 0.75), (0.72, 0.82)]
         for index, row in enumerate(source_rows):
             label = tradeoff_label(row["method"])
-            if label == "Nominal":
+            if label == "NominalGreyBox":
                 continue
             dx, dy = label_offsets[index % len(label_offsets)]
             ax.annotate(

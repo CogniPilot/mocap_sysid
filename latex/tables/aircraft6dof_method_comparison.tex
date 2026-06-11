@@ -10,238 +10,234 @@ Method & Train & Val. & Source & Score & Train [s] & Rollout [s] & Pos. RMSE & B
 Method & Train & Val. & Source & Score & Train [s] & Rollout [s] & Pos. RMSE & Backend \\
 \midrule
 \endhead
-6DOF-SINDy & Aggressive & Aggressive & direct & 0.185 & 0.122 & 0.186 & 20.5 & numpy-stlsq \\
-6DOF-Nominal & No fit & Aggressive & direct & 0.193 & 0 & 0.44 & 20.8 & numpy-rk4 \\
-6DOF-GP-RBF & Aggressive & Aggressive & direct & 0.23 & 0.519 & 0.492 & 29.4 & numpy-rbf-ridge \\
-6DOF-Subspace-Hankel & Trim grid & Aggressive & direct & 0.295 & 0.0954 & 0.119 & 38.9 & numpy-hankel-ridge \\
-6DOF-RidgeResidual & Aggressive & Aggressive & direct & 0.309 & 1.14 & 0.439 & 35.9 & numpy-rk4-ridge \\
-6DOF-EKF-ParamID & Aggressive & Aggressive & direct & 0.31 & 1.11 & 0.467 & 36 & numpy-ridge-paramid \\
-6DOF-Fisher-UQ & Aggressive & Aggressive & direct & 0.31 & 1.11 & 0.467 & 36 & numpy-ridge-uq \\
-6DOF-OEM-SS & Aggressive & Aggressive & direct & 0.31 & 1.11 & 0.467 & 36 & numpy-rk4-ridge \\
-6DOF-NN-Surrogate & Aggressive & Aggressive & direct & 0.316 & 0.548 & 0.503 & 33.6 & numpy-random-feature \\
-6DOF-Frequency-Stitching & Trim grid & Aggressive & direct & 0.32 & 1.47 & 0.474 & 39.8 & numpy-local-realization \\
-6DOF-Koopman-EDMD & Aggressive & Aggressive & direct & 0.421 & 0.0932 & 0.188 & 20.4 & numpy-edmd \\
-6DOF-Symbolic-Stepwise & Aggressive & Aggressive & direct & 0.447 & 0.0939 & 0.19 & 29.9 & numpy-sparse-ridge \\
-6DOF-PINN-Closure & Aggressive & Aggressive & direct & 0.478 & 0.000832 & 0.546 & 33.1 & numpy-sparse-closure \\
-6DOF-Model-Stitching & Trim grid & Aggressive & direct & 0.696 & 0.391 & 0.0963 & 192 & numpy-local-ridge \\
-6DOF-Frequency-Welch & Trim grid & Aggressive & direct & 0.703 & 0.00628 & 0.0814 & 190 & numpy-regularized-realization \\
-6DOF-LinearSS & Trim grid & Aggressive & direct & 0.703 & 0.00653 & 0.079 & 190 & numpy-ridge \\
-6DOF-UDE-Residual & Aggressive & Aggressive & direct & 1.09 & 0.0943 & 0.571 & 52.4 & numpy-residual-ridge \\
-6DOF-EquationError-LS & Aggressive & Aggressive & direct & 1.36 & 0.00715 & 0.0965 & 54.3 & numpy-ridge-derivative \\
-6DOF-Variational-Mocap & Aggressive & Aggressive & direct & 1.39 & 0.0171 & 0.0909 & 53.7 & numpy-smoothed-weak \\
-6DOF-EKF-ParamID & Aggressive & Open-loop & direct & 0.236 & 1.01 & 0.41 & 45.5 & numpy-ridge-paramid \\
-6DOF-Fisher-UQ & Aggressive & Open-loop & direct & 0.236 & 1.01 & 0.41 & 45.5 & numpy-ridge-uq \\
-6DOF-OEM-SS & Aggressive & Open-loop & direct & 0.236 & 1.01 & 0.41 & 45.5 & numpy-rk4-ridge \\
-6DOF-RidgeResidual & Aggressive & Open-loop & direct & 0.236 & 1.01 & 0.409 & 45.5 & numpy-rk4-ridge \\
-6DOF-Nominal & No fit & Open-loop & direct & 0.237 & 0 & 0.392 & 57.1 & numpy-rk4 \\
-6DOF-Koopman-EDMD & Aggressive & Open-loop & direct & 0.258 & 0.106 & 0.162 & 58.2 & numpy-edmd \\
-6DOF-Frequency-Welch & Trim grid & Open-loop & direct & 0.266 & 0.00594 & 0.0446 & 84 & numpy-regularized-realization \\
-6DOF-LinearSS & Trim grid & Open-loop & direct & 0.266 & 0.00756 & 0.0425 & 84 & numpy-ridge \\
-6DOF-GP-RBF & Aggressive & Open-loop & direct & 0.266 & 0.553 & 0.554 & 66.2 & numpy-rbf-ridge \\
-6DOF-NN-Surrogate & Aggressive & Open-loop & direct & 0.268 & 0.854 & 0.9 & 63.6 & numpy-random-feature \\
-6DOF-SINDy & Aggressive & Open-loop & direct & 0.268 & 0.148 & 0.163 & 63.3 & numpy-stlsq \\
-6DOF-Symbolic-Stepwise & Aggressive & Open-loop & direct & 0.312 & 0.11 & 0.169 & 46.9 & numpy-sparse-ridge \\
-6DOF-Model-Stitching & Trim grid & Open-loop & direct & 0.313 & 0.372 & 0.068 & 79.1 & numpy-local-ridge \\
-6DOF-Subspace-Hankel & Trim grid & Open-loop & direct & 0.342 & 0.101 & 0.104 & 82.9 & numpy-hankel-ridge \\
-6DOF-Frequency-Stitching & Trim grid & Open-loop & direct & 0.418 & 1.37 & 0.451 & 61.1 & numpy-local-realization \\
-6DOF-PINN-Closure & Aggressive & Open-loop & direct & 1.2 & 0.000835 & 0.54 & 69.1 & numpy-sparse-closure \\
-6DOF-UDE-Residual & Aggressive & Open-loop & direct & 3.51 & 0.106 & 0.533 & 88.3 & numpy-residual-ridge \\
-6DOF-EquationError-LS & Aggressive & Open-loop & direct & 4.87 & 0.00873 & 0.0778 & 68.3 & numpy-ridge-derivative \\
-6DOF-Variational-Mocap & Aggressive & Open-loop & direct & 5.46 & 0.021 & 0.0827 & 67.1 & numpy-smoothed-weak \\
-6DOF-GP-RBF & Aggressive & Sine sweep & direct & 0.194 & 0.539 & 0.51 & 29.5 & numpy-rbf-ridge \\
-6DOF-Nominal & No fit & Sine sweep & direct & 0.196 & 0 & 0.467 & 34.3 & numpy-rk4 \\
-6DOF-Koopman-EDMD & Aggressive & Sine sweep & direct & 0.213 & 0.0962 & 0.198 & 33.8 & numpy-edmd \\
-6DOF-Subspace-Hankel & Trim grid & Sine sweep & direct & 0.25 & 0.0973 & 0.12 & 37 & numpy-hankel-ridge \\
-6DOF-SINDy & Aggressive & Sine sweep & direct & 0.28 & 0.126 & 0.186 & 33.6 & numpy-stlsq \\
-6DOF-NN-Surrogate & Aggressive & Sine sweep & direct & 0.294 & 0.699 & 0.609 & 35.2 & numpy-random-feature \\
-6DOF-EKF-ParamID & Aggressive & Sine sweep & direct & 0.295 & 1.12 & 0.468 & 30.4 & numpy-ridge-paramid \\
-6DOF-Fisher-UQ & Aggressive & Sine sweep & direct & 0.295 & 1.12 & 0.468 & 30.4 & numpy-ridge-uq \\
-6DOF-OEM-SS & Aggressive & Sine sweep & direct & 0.295 & 1.12 & 0.468 & 30.4 & numpy-rk4-ridge \\
-6DOF-RidgeResidual & Aggressive & Sine sweep & direct & 0.295 & 1.25 & 0.477 & 30.4 & numpy-rk4-ridge \\
-6DOF-Frequency-Welch & Trim grid & Sine sweep & direct & 0.309 & 0.00648 & 0.0792 & 76.5 & numpy-regularized-realization \\
-6DOF-LinearSS & Trim grid & Sine sweep & direct & 0.309 & 0.00684 & 0.0843 & 76.5 & numpy-ridge \\
-6DOF-Frequency-Stitching & Trim grid & Sine sweep & direct & 0.351 & 1.56 & 0.487 & 38.5 & numpy-local-realization \\
-6DOF-Model-Stitching & Trim grid & Sine sweep & direct & 0.394 & 0.368 & 0.0987 & 118 & numpy-local-ridge \\
-6DOF-Symbolic-Stepwise & Aggressive & Sine sweep & direct & 0.455 & 0.0943 & 0.189 & 38.2 & numpy-sparse-ridge \\
-6DOF-PINN-Closure & Aggressive & Sine sweep & direct & 0.532 & 0.000876 & 0.578 & 38.3 & numpy-sparse-closure \\
-6DOF-UDE-Residual & Aggressive & Sine sweep & direct & 1.37 & 0.109 & 0.689 & 42.4 & numpy-residual-ridge \\
-6DOF-EquationError-LS & Aggressive & Sine sweep & direct & 1.7 & 0.00891 & 0.163 & 39.7 & numpy-ridge-derivative \\
-6DOF-Variational-Mocap & Aggressive & Sine sweep & direct & 1.77 & 0.0288 & 0.0984 & 40.3 & numpy-smoothed-weak \\
-6DOF-EKF-ParamID & Aggressive & Trim grid & direct & 0.199 & 1.72 & 0.489 & 34.2 & numpy-ridge-paramid \\
-6DOF-Fisher-UQ & Aggressive & Trim grid & direct & 0.199 & 1.72 & 0.489 & 34.2 & numpy-ridge-uq \\
-6DOF-OEM-SS & Aggressive & Trim grid & direct & 0.199 & 1.72 & 0.489 & 34.2 & numpy-rk4-ridge \\
-6DOF-RidgeResidual & Aggressive & Trim grid & direct & 0.199 & 1.11 & 0.45 & 34.2 & numpy-rk4-ridge \\
-6DOF-Nominal & No fit & Trim grid & direct & 0.201 & 0 & 0.415 & 39.2 & numpy-rk4 \\
-6DOF-Frequency-Stitching & Trim grid & Trim grid & direct & 0.218 & 1.46 & 0.517 & 36.7 & numpy-local-realization \\
-6DOF-SINDy & Aggressive & Trim grid & direct & 0.22 & 0.151 & 0.22 & 42.5 & numpy-stlsq \\
-6DOF-Model-Stitching & Trim grid & Trim grid & direct & 0.222 & 0.371 & 0.0941 & 47.8 & numpy-local-ridge \\
-6DOF-LinearSS & Trim grid & Trim grid & direct & 0.225 & 0.00611 & 0.0799 & 50.8 & numpy-ridge \\
-6DOF-Frequency-Welch & Trim grid & Trim grid & direct & 0.225 & 0.00614 & 0.0745 & 50.8 & numpy-regularized-realization \\
-6DOF-GP-RBF & Aggressive & Trim grid & direct & 0.228 & 0.52 & 0.483 & 50.8 & numpy-rbf-ridge \\
-6DOF-Koopman-EDMD & Aggressive & Trim grid & direct & 0.233 & 0.103 & 0.212 & 40 & numpy-edmd \\
-6DOF-NN-Surrogate & Aggressive & Trim grid & direct & 0.237 & 0.537 & 0.493 & 56 & numpy-random-feature \\
-6DOF-Subspace-Hankel & Trim grid & Trim grid & direct & 0.244 & 0.0962 & 0.127 & 49.7 & numpy-hankel-ridge \\
-6DOF-Symbolic-Stepwise & Aggressive & Trim grid & direct & 0.34 & 0.141 & 0.221 & 42.6 & numpy-sparse-ridge \\
-6DOF-PINN-Closure & Aggressive & Trim grid & direct & 1.05 & 0.000866 & 0.574 & 47.4 & numpy-sparse-closure \\
-6DOF-UDE-Residual & Aggressive & Trim grid & direct & 3.87 & 0.11 & 0.566 & 66.7 & numpy-residual-ridge \\
-6DOF-EquationError-LS & Aggressive & Trim grid & direct & 4.91 & 0.00751 & 0.126 & 48.4 & numpy-ridge-derivative \\
-6DOF-Variational-Mocap & Aggressive & Trim grid & direct & 5.29 & 0.0181 & 0.143 & 45 & numpy-smoothed-weak \\
-6DOF-Subspace-Hankel & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.163 & 0.00812 & 0.0676 & 0.265 & numpy-hankel-ridge \\
-6DOF-GreyBoxOEM & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.166 & 15.5 & 0.0525 & 0.335 & casadi-rk4-trf \\
-6DOF-Frequency-Welch & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.228 & 0.000529 & 0.0565 & 1.33 & numpy-regularized-realization \\
-6DOF-LinearSS & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.228 & 0.000578 & 0.056 & 1.33 & numpy-ridge \\
-6DOF-SINDy & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.246 & 0.0108 & 0.0754 & 0.367 & numpy-stlsq \\
-6DOF-Nominal & No fit & Sport Cub MoCap 4/17/26 & direct & 0.629 & 0 & 0.116 & 0.633 & numpy-rk4 \\
-6DOF-GP-RBF & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.682 & 0.0248 & 0.128 & 0.677 & numpy-rbf-ridge \\
-6DOF-Model-Stitching & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.773 & 0.0281 & 0.0632 & 11.5 & numpy-local-ridge \\
-6DOF-NN-Surrogate & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.86 & 0.0222 & 0.132 & 0.956 & numpy-random-feature \\
-6DOF-EKF-ParamID & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.929 & 0.169 & 0.128 & 1.17 & numpy-ridge-paramid \\
-6DOF-Fisher-UQ & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.929 & 0.169 & 0.128 & 1.17 & numpy-ridge-uq \\
-6DOF-OEM-SS & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.929 & 0.169 & 0.128 & 1.17 & numpy-rk4-ridge \\
-6DOF-RidgeResidual & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.929 & 0.149 & 0.115 & 1.17 & numpy-rk4-ridge \\
-6DOF-Frequency-Stitching & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 1.04 & 0.186 & 0.134 & 1.24 & numpy-local-realization \\
-6DOF-EquationError-LS & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 3.28 & 0.000707 & 0.0608 & 1.94 & numpy-ridge-derivative \\
-6DOF-PINN-Closure & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 3.34 & 0.000928 & 0.137 & 1.85 & numpy-sparse-closure \\
-6DOF-Variational-Mocap & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 3.4 & 0.00238 & 0.0648 & 1.94 & numpy-smoothed-weak \\
-6DOF-Symbolic-Stepwise & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 7.79 & 0.00808 & 0.0774 & 1.32 & numpy-sparse-ridge \\
-6DOF-Koopman-EDMD & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 10.6 & 0.00746 & 0.0859 & 3.36 & numpy-edmd \\
-6DOF-UDE-Residual & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 11.6 & 0.00728 & 0.141 & 3.14 & numpy-residual-ridge \\
-6DOF-GreyBoxOEM & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.0977 & 42.3 & 0.156 & 0.125 & casadi-rk4-trf \\
-6DOF-Subspace-Hankel & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.115 & 0.0476 & 0.128 & 0.317 & numpy-hankel-ridge \\
-6DOF-Frequency-Welch & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.136 & 0.00321 & 0.0875 & 2.05 & numpy-regularized-realization \\
-6DOF-LinearSS & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.136 & 0.00323 & 0.0844 & 2.05 & numpy-ridge \\
-6DOF-SINDy & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.152 & 0.0566 & 0.175 & 0.139 & numpy-stlsq \\
-6DOF-Frequency-Stitching & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.216 & 0.765 & 0.235 & 0.215 & numpy-local-realization \\
-6DOF-Model-Stitching & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.232 & 0.182 & 0.0902 & 6.9 & numpy-local-ridge \\
-6DOF-NN-Surrogate & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.288 & 0.256 & 0.256 & 0.267 & numpy-random-feature \\
-6DOF-RidgeResidual & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.32 & 0.578 & 0.231 & 0.233 & numpy-rk4-ridge \\
-6DOF-EKF-ParamID & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.32 & 0.607 & 0.23 & 0.233 & numpy-ridge-paramid \\
-6DOF-Fisher-UQ & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.32 & 0.607 & 0.23 & 0.233 & numpy-ridge-uq \\
-6DOF-OEM-SS & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.32 & 0.607 & 0.23 & 0.233 & numpy-rk4-ridge \\
-6DOF-GP-RBF & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.468 & 0.251 & 0.268 & 0.523 & numpy-rbf-ridge \\
-6DOF-Nominal & No fit & Sport Cub Laps 5/22/26 & direct & 0.529 & 0 & 0.21 & 0.6 & numpy-rk4 \\
-6DOF-PINN-Closure & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 1.14 & 0.00145 & 0.456 & 1.17 & numpy-sparse-closure \\
-6DOF-EquationError-LS & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 2.02 & 0.00364 & 0.109 & 1.27 & numpy-ridge-derivative \\
-6DOF-Variational-Mocap & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 2.09 & 0.0107 & 0.127 & 1.29 & numpy-smoothed-weak \\
-6DOF-UDE-Residual & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 3.85 & 0.0452 & 0.434 & 1.48 & numpy-residual-ridge \\
-6DOF-Symbolic-Stepwise & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 5.26 & 0.0473 & 0.126 & 0.943 & numpy-sparse-ridge \\
-6DOF-Koopman-EDMD & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 6.8 & 0.0452 & 0.142 & 0.817 & numpy-edmd \\
-6DOF-Nominal & No fit & Aggressive & mocap & 0.194 & 0 & 0.417 & 20.8 & numpy-rk4 \\
-6DOF-GP-RBF & Aggressive & Aggressive & mocap & 0.234 & 0.527 & 0.488 & 30.6 & numpy-rbf-ridge \\
-6DOF-Frequency-Stitching & Trim grid & Aggressive & mocap & 0.292 & 1.49 & 0.479 & 40.9 & numpy-local-realization \\
-6DOF-Subspace-Hankel & Trim grid & Aggressive & mocap & 0.311 & 0.0967 & 0.122 & 35.2 & numpy-hankel-ridge \\
-6DOF-EKF-ParamID & Aggressive & Aggressive & mocap & 0.314 & 1.1 & 0.437 & 32.3 & numpy-ridge-paramid \\
-6DOF-Fisher-UQ & Aggressive & Aggressive & mocap & 0.314 & 1.1 & 0.437 & 32.3 & numpy-ridge-uq \\
-6DOF-OEM-SS & Aggressive & Aggressive & mocap & 0.314 & 1.1 & 0.437 & 32.3 & numpy-rk4-ridge \\
-6DOF-RidgeResidual & Aggressive & Aggressive & mocap & 0.314 & 1.8 & 0.488 & 32.4 & numpy-rk4-ridge \\
-6DOF-NN-Surrogate & Aggressive & Aggressive & mocap & 0.32 & 0.56 & 0.505 & 35.4 & numpy-random-feature \\
-6DOF-SINDy & Aggressive & Aggressive & mocap & 0.389 & 0.12 & 0.188 & 31.7 & numpy-stlsq \\
-6DOF-PINN-Closure & Aggressive & Aggressive & mocap & 0.43 & 0.000869 & 0.56 & 33.7 & numpy-sparse-closure \\
-6DOF-UDE-Residual & Aggressive & Aggressive & mocap & 0.673 & 0.0948 & 0.563 & 29.8 & numpy-residual-ridge \\
-6DOF-Model-Stitching & Trim grid & Aggressive & mocap & 0.712 & 0.367 & 0.0961 & 188 & numpy-local-ridge \\
-6DOF-Frequency-Welch & Trim grid & Aggressive & mocap & 0.737 & 0.00676 & 0.0786 & 199 & numpy-regularized-realization \\
-6DOF-LinearSS & Trim grid & Aggressive & mocap & 0.737 & 0.708 & 0.0752 & 199 & numpy-ridge \\
-6DOF-Koopman-EDMD & Aggressive & Aggressive & mocap & 1.14 & 0.0932 & 0.188 & 30.8 & numpy-edmd \\
-6DOF-Symbolic-Stepwise & Aggressive & Aggressive & mocap & 1.41 & 0.0936 & 0.186 & 47.5 & numpy-sparse-ridge \\
-6DOF-Variational-Mocap & Aggressive & Aggressive & mocap & 1.43 & 0.0171 & 0.0978 & 58.6 & numpy-smoothed-weak \\
-6DOF-EquationError-LS & Aggressive & Aggressive & mocap & 1.43 & 0.00726 & 0.0948 & 57.4 & numpy-ridge-derivative \\
-6DOF-GP-RBF & Aggressive & Open-loop & mocap & 0.232 & 0.609 & 0.538 & 52.3 & numpy-rbf-ridge \\
-6DOF-Nominal & No fit & Open-loop & mocap & 0.238 & 0 & 0.72 & 57.3 & numpy-rk4 \\
-6DOF-EKF-ParamID & Aggressive & Open-loop & mocap & 0.25 & 1.49 & 0.754 & 46.1 & numpy-ridge-paramid \\
-6DOF-Fisher-UQ & Aggressive & Open-loop & mocap & 0.25 & 1.49 & 0.754 & 46.1 & numpy-ridge-uq \\
-6DOF-OEM-SS & Aggressive & Open-loop & mocap & 0.25 & 1.49 & 0.754 & 46.1 & numpy-rk4-ridge \\
-6DOF-RidgeResidual & Aggressive & Open-loop & mocap & 0.25 & 3.04 & 0.903 & 46.1 & numpy-rk4-ridge \\
-6DOF-NN-Surrogate & Aggressive & Open-loop & mocap & 0.26 & 0.573 & 0.588 & 63.1 & numpy-random-feature \\
-6DOF-Koopman-EDMD & Aggressive & Open-loop & mocap & 0.26 & 0.125 & 0.223 & 50.3 & numpy-edmd \\
-6DOF-SINDy & Aggressive & Open-loop & mocap & 0.271 & 0.668 & 0.27 & 69.1 & numpy-stlsq \\
-6DOF-Frequency-Welch & Trim grid & Open-loop & mocap & 0.277 & 0.0296 & 0.263 & 85.9 & numpy-regularized-realization \\
-6DOF-LinearSS & Trim grid & Open-loop & mocap & 0.277 & 1.43 & 0.188 & 85.9 & numpy-ridge \\
-6DOF-Subspace-Hankel & Trim grid & Open-loop & mocap & 0.285 & 0.106 & 0.143 & 64.9 & numpy-hankel-ridge \\
-6DOF-Frequency-Stitching & Trim grid & Open-loop & mocap & 0.295 & 3.29 & 0.95 & 59.3 & numpy-local-realization \\
-6DOF-Model-Stitching & Trim grid & Open-loop & mocap & 0.399 & 0.708 & 0.39 & 90 & numpy-local-ridge \\
-6DOF-Symbolic-Stepwise & Aggressive & Open-loop & mocap & 1.02 & 0.316 & 0.29 & 62.3 & numpy-sparse-ridge \\
-6DOF-PINN-Closure & Aggressive & Open-loop & mocap & 1.29 & 0.00169 & 0.618 & 74.3 & numpy-sparse-closure \\
-6DOF-UDE-Residual & Aggressive & Open-loop & mocap & 1.76 & 0.128 & 0.635 & 72.4 & numpy-residual-ridge \\
-6DOF-Variational-Mocap & Aggressive & Open-loop & mocap & 5.82 & 0.0479 & 0.319 & 64 & numpy-smoothed-weak \\
-6DOF-EquationError-LS & Aggressive & Open-loop & mocap & 5.97 & 0.0249 & 0.31 & 63.7 & numpy-ridge-derivative \\
-6DOF-Nominal & No fit & Sine sweep & mocap & 0.196 & 0 & 0.428 & 33.7 & numpy-rk4 \\
-6DOF-GP-RBF & Aggressive & Sine sweep & mocap & 0.201 & 0.524 & 0.488 & 33.6 & numpy-rbf-ridge \\
-6DOF-SINDy & Aggressive & Sine sweep & mocap & 0.206 & 0.127 & 0.201 & 34.4 & numpy-stlsq \\
-6DOF-Koopman-EDMD & Aggressive & Sine sweep & mocap & 0.21 & 0.098 & 0.19 & 30.9 & numpy-edmd \\
-6DOF-Subspace-Hankel & Trim grid & Sine sweep & mocap & 0.278 & 0.0961 & 0.125 & 36.4 & numpy-hankel-ridge \\
-6DOF-Frequency-Stitching & Trim grid & Sine sweep & mocap & 0.302 & 1.48 & 0.475 & 34.1 & numpy-local-realization \\
-6DOF-Frequency-Welch & Trim grid & Sine sweep & mocap & 0.306 & 0.0118 & 0.146 & 68.7 & numpy-regularized-realization \\
-6DOF-LinearSS & Trim grid & Sine sweep & mocap & 0.306 & 0.777 & 0.074 & 68.7 & numpy-ridge \\
-6DOF-NN-Surrogate & Aggressive & Sine sweep & mocap & 0.331 & 0.548 & 0.507 & 31.2 & numpy-random-feature \\
-6DOF-EKF-ParamID & Aggressive & Sine sweep & mocap & 0.348 & 1.12 & 0.461 & 37.8 & numpy-ridge-paramid \\
-6DOF-Fisher-UQ & Aggressive & Sine sweep & mocap & 0.348 & 1.12 & 0.461 & 37.8 & numpy-ridge-uq \\
-6DOF-OEM-SS & Aggressive & Sine sweep & mocap & 0.348 & 1.12 & 0.461 & 37.8 & numpy-rk4-ridge \\
-6DOF-RidgeResidual & Aggressive & Sine sweep & mocap & 0.348 & 1.93 & 0.563 & 37.8 & numpy-rk4-ridge \\
-6DOF-Model-Stitching & Trim grid & Sine sweep & mocap & 0.381 & 0.38 & 0.201 & 106 & numpy-local-ridge \\
-6DOF-PINN-Closure & Aggressive & Sine sweep & mocap & 0.516 & 0.000866 & 0.581 & 38.5 & numpy-sparse-closure \\
-6DOF-UDE-Residual & Aggressive & Sine sweep & mocap & 0.756 & 0.0955 & 0.579 & 39 & numpy-residual-ridge \\
-6DOF-Symbolic-Stepwise & Aggressive & Sine sweep & mocap & 1.08 & 0.1 & 0.194 & 36.6 & numpy-sparse-ridge \\
-6DOF-Variational-Mocap & Aggressive & Sine sweep & mocap & 1.78 & 0.0172 & 0.0912 & 42.5 & numpy-smoothed-weak \\
-6DOF-EquationError-LS & Aggressive & Sine sweep & mocap & 1.86 & 0.00739 & 0.0991 & 39.5 & numpy-ridge-derivative \\
-6DOF-Frequency-Stitching & Trim grid & Trim grid & mocap & 0.181 & 1.44 & 0.468 & 36.1 & numpy-local-realization \\
-6DOF-Nominal & No fit & Trim grid & mocap & 0.201 & 0 & 0.423 & 39.2 & numpy-rk4 \\
-6DOF-EKF-ParamID & Aggressive & Trim grid & mocap & 0.207 & 1.03 & 0.445 & 35.1 & numpy-ridge-paramid \\
-6DOF-Fisher-UQ & Aggressive & Trim grid & mocap & 0.207 & 1.03 & 0.445 & 35.1 & numpy-ridge-uq \\
-6DOF-OEM-SS & Aggressive & Trim grid & mocap & 0.207 & 1.03 & 0.445 & 35.1 & numpy-rk4-ridge \\
-6DOF-RidgeResidual & Aggressive & Trim grid & mocap & 0.207 & 1.82 & 0.449 & 35.1 & numpy-rk4-ridge \\
-6DOF-GP-RBF & Aggressive & Trim grid & mocap & 0.213 & 0.526 & 0.493 & 47.6 & numpy-rbf-ridge \\
-6DOF-SINDy & Aggressive & Trim grid & mocap & 0.225 & 0.13 & 0.192 & 47.4 & numpy-stlsq \\
-6DOF-Subspace-Hankel & Trim grid & Trim grid & mocap & 0.227 & 0.0959 & 0.125 & 45.9 & numpy-hankel-ridge \\
-6DOF-LinearSS & Trim grid & Trim grid & mocap & 0.23 & 0.706 & 0.0754 & 51.4 & numpy-ridge \\
-6DOF-Frequency-Welch & Trim grid & Trim grid & mocap & 0.23 & 0.00627 & 0.0732 & 51.4 & numpy-regularized-realization \\
-6DOF-Koopman-EDMD & Aggressive & Trim grid & mocap & 0.23 & 0.0956 & 0.188 & 40.8 & numpy-edmd \\
-6DOF-NN-Surrogate & Aggressive & Trim grid & mocap & 0.236 & 0.551 & 0.512 & 51.4 & numpy-random-feature \\
-6DOF-Model-Stitching & Trim grid & Trim grid & mocap & 0.285 & 0.372 & 0.0987 & 57.3 & numpy-local-ridge \\
-6DOF-PINN-Closure & Aggressive & Trim grid & mocap & 1.1 & 0.00129 & 0.579 & 49.1 & numpy-sparse-closure \\
-6DOF-UDE-Residual & Aggressive & Trim grid & mocap & 1.5 & 0.0949 & 0.558 & 60.1 & numpy-residual-ridge \\
-6DOF-Symbolic-Stepwise & Aggressive & Trim grid & mocap & 1.53 & 0.0981 & 0.192 & 42.2 & numpy-sparse-ridge \\
-6DOF-Variational-Mocap & Aggressive & Trim grid & mocap & 5.51 & 0.0172 & 0.0914 & 42.8 & numpy-smoothed-weak \\
-6DOF-EquationError-LS & Aggressive & Trim grid & mocap & 5.66 & 0.00722 & 0.0948 & 43.8 & numpy-ridge-derivative \\
-6DOF-GreyBoxOEM & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.158 & 18.4 & 0.0529 & 0.319 & casadi-rk4-trf \\
-6DOF-Subspace-Hankel & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.164 & 0.00796 & 0.0679 & 0.269 & numpy-hankel-ridge \\
-6DOF-Frequency-Welch & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.207 & 0.000558 & 0.0606 & 1.31 & numpy-regularized-realization \\
-6DOF-LinearSS & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.207 & 0.0537 & 0.06 & 1.32 & numpy-ridge \\
-6DOF-Nominal & No fit & Sport Cub MoCap 4/17/26 & mocap & 0.631 & 0 & 0.129 & 0.633 & numpy-rk4 \\
-6DOF-EKF-ParamID & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.693 & 0.162 & 0.126 & 0.968 & numpy-ridge-paramid \\
-6DOF-Fisher-UQ & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.693 & 0.162 & 0.126 & 0.968 & numpy-ridge-uq \\
-6DOF-OEM-SS & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.693 & 0.162 & 0.126 & 0.968 & numpy-rk4-ridge \\
-6DOF-RidgeResidual & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.693 & 0.177 & 0.131 & 0.968 & numpy-rk4-ridge \\
-6DOF-GP-RBF & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.736 & 0.0219 & 0.131 & 0.787 & numpy-rbf-ridge \\
-6DOF-NN-Surrogate & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.75 & 0.0222 & 0.136 & 0.953 & numpy-random-feature \\
-6DOF-Model-Stitching & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.999 & 0.0281 & 0.0747 & 14 & numpy-local-ridge \\
-6DOF-Frequency-Stitching & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 1.27 & 0.208 & 0.128 & 1.42 & numpy-local-realization \\
-6DOF-PINN-Closure & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 2.07 & 0.000903 & 0.137 & 2.83 & numpy-sparse-closure \\
-6DOF-SINDy & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 2.19 & 0.0109 & 0.0798 & 1.27 & numpy-stlsq \\
-6DOF-EquationError-LS & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 2.4 & 0.000724 & 0.0721 & 1.63 & numpy-ridge-derivative \\
-6DOF-Variational-Mocap & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 3.27 & 0.00222 & 0.0663 & 2.17 & numpy-smoothed-weak \\
-6DOF-Symbolic-Stepwise & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 6.74 & 0.00806 & 0.078 & 2.94 & numpy-sparse-ridge \\
-6DOF-Koopman-EDMD & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 11.8 & 0.00741 & 0.0884 & 3.37 & numpy-edmd \\
-6DOF-UDE-Residual & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 12.1 & 0.0075 & 0.142 & 3.13 & numpy-residual-ridge \\
-6DOF-GreyBoxOEM & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.102 & 33.8 & 0.146 & 0.162 & casadi-rk4-trf \\
-6DOF-Subspace-Hankel & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.106 & 0.0575 & 0.146 & 0.267 & numpy-hankel-ridge \\
-6DOF-Frequency-Welch & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.142 & 0.00337 & 0.0876 & 2.05 & numpy-regularized-realization \\
-6DOF-LinearSS & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.142 & 0.359 & 0.0916 & 2.05 & numpy-ridge \\
-6DOF-Frequency-Stitching & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.175 & 0.767 & 0.247 & 0.26 & numpy-local-realization \\
-6DOF-NN-Surrogate & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.185 & 0.272 & 0.264 & 0.248 & numpy-random-feature \\
-6DOF-EKF-ParamID & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.247 & 0.645 & 0.273 & 0.252 & numpy-ridge-paramid \\
-6DOF-Fisher-UQ & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.247 & 0.645 & 0.273 & 0.252 & numpy-ridge-uq \\
-6DOF-OEM-SS & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.247 & 0.645 & 0.273 & 0.252 & numpy-rk4-ridge \\
-6DOF-RidgeResidual & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.247 & 0.62 & 0.239 & 0.252 & numpy-rk4-ridge \\
-6DOF-Model-Stitching & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.253 & 0.186 & 0.1 & 8.4 & numpy-local-ridge \\
-6DOF-SINDy & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.362 & 0.0598 & 0.16 & 0.408 & numpy-stlsq \\
-6DOF-GP-RBF & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.529 & 0.287 & 0.306 & 0.625 & numpy-rbf-ridge \\
-6DOF-Nominal & No fit & Sport Cub Laps 5/22/26 & mocap & 0.534 & 0 & 0.259 & 0.617 & numpy-rk4 \\
-6DOF-Symbolic-Stepwise & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 1.26 & 0.0489 & 0.151 & 1.59 & numpy-sparse-ridge \\
-6DOF-PINN-Closure & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 1.57 & 0.000888 & 0.33 & 1.96 & numpy-sparse-closure \\
-6DOF-Variational-Mocap & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 2.19 & 0.0111 & 0.0988 & 1.38 & numpy-smoothed-weak \\
-6DOF-EquationError-LS & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 2.22 & 0.00533 & 0.0959 & 1.39 & numpy-ridge-derivative \\
-6DOF-UDE-Residual & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 4.91 & 0.0488 & 0.343 & 2.14 & numpy-residual-ridge \\
-6DOF-Koopman-EDMD & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 9.09 & 0.0473 & 0.146 & 1.69 & numpy-edmd \\
+6DOF-NominalGreyBox & No fit & Aggressive & direct & 0.193 & 0 & 0.444 & 20.8 & numpy-rk4 \\
+6DOF-GP-RBF & Aggressive & Aggressive & direct & 0.22 & 0.594 & 0.57 & 25.5 & numpy-rbf-ridge \\
+6DOF-Subspace-Hankel & Trim grid & Aggressive & direct & 0.286 & 0.747 & 0.167 & 39.4 & numpy-hankel-ridge \\
+6DOF-Frequency-Stitching & Trim grid & Aggressive & direct & 0.293 & 1.54 & 0.497 & 35.8 & numpy-local-realization \\
+6DOF-Symbolic-Stepwise & Aggressive & Aggressive & direct & 0.307 & 0.0738 & 0.223 & 22.8 & numpy-sparse-ridge \\
+6DOF-RidgeResidual & Aggressive & Aggressive & direct & 0.309 & 1.49 & 0.461 & 35.9 & numpy-rk4-ridge \\
+6DOF-EKF-ParamID & Aggressive & Aggressive & direct & 0.31 & 1.12 & 0.448 & 36 & numpy-ridge-paramid \\
+6DOF-Fisher-UQ & Aggressive & Aggressive & direct & 0.31 & 1.12 & 0.448 & 36 & numpy-ridge-uq \\
+6DOF-OEM-SS & Aggressive & Aggressive & direct & 0.31 & 1.12 & 0.448 & 36 & numpy-rk4-ridge \\
+6DOF-NN-Surrogate & Aggressive & Aggressive & direct & 0.324 & 0.521 & 0.871 & 38.5 & numpy-random-feature \\
+6DOF-PINN-Closure & Aggressive & Aggressive & direct & 0.441 & 0.000579 & 0.61 & 38.5 & numpy-sparse-closure \\
+6DOF-SINDy & Aggressive & Aggressive & direct & 0.472 & 0.112 & 0.218 & 20.2 & numpy-stlsq \\
+6DOF-Model-Stitching & Trim grid & Aggressive & direct & 0.586 & 0.382 & 0.125 & 158 & numpy-local-ridge \\
+6DOF-Koopman-EDMD & Aggressive & Aggressive & direct & 0.674 & 0.0759 & 0.225 & 24.7 & numpy-edmd \\
+6DOF-Frequency-Welch & Trim grid & Aggressive & direct & 0.703 & 0.00645 & 0.087 & 190 & numpy-regularized-realization \\
+6DOF-LinearSS & Trim grid & Aggressive & direct & 0.703 & 0.00617 & 0.0771 & 190 & numpy-ridge \\
+6DOF-UDE-Residual & Aggressive & Aggressive & direct & 1.13 & 0.0759 & 0.634 & 38.2 & numpy-residual-ridge \\
+6DOF-EquationError-LS & Aggressive & Aggressive & direct & 1.42 & 0.0114 & 0.128 & 57.2 & numpy-ridge-derivative \\
+6DOF-Variational-Mocap & Aggressive & Aggressive & direct & 1.46 & 0.0214 & 0.131 & 56.2 & numpy-smoothed-weak \\
+6DOF-EKF-ParamID & Aggressive & Open-loop & direct & 0.236 & 1.09 & 0.432 & 45.5 & numpy-ridge-paramid \\
+6DOF-Fisher-UQ & Aggressive & Open-loop & direct & 0.236 & 1.09 & 0.432 & 45.5 & numpy-ridge-uq \\
+6DOF-OEM-SS & Aggressive & Open-loop & direct & 0.236 & 1.09 & 0.432 & 45.5 & numpy-rk4-ridge \\
+6DOF-RidgeResidual & Aggressive & Open-loop & direct & 0.236 & 1.37 & 0.429 & 45.5 & numpy-rk4-ridge \\
+6DOF-NominalGreyBox & No fit & Open-loop & direct & 0.237 & 0 & 0.387 & 57.1 & numpy-rk4 \\
+6DOF-Subspace-Hankel & Trim grid & Open-loop & direct & 0.253 & 0.745 & 0.155 & 57.3 & numpy-hankel-ridge \\
+6DOF-Symbolic-Stepwise & Aggressive & Open-loop & direct & 0.254 & 0.0886 & 0.209 & 54.6 & numpy-sparse-ridge \\
+6DOF-SINDy & Aggressive & Open-loop & direct & 0.261 & 0.126 & 0.221 & 58.3 & numpy-stlsq \\
+6DOF-Frequency-Welch & Trim grid & Open-loop & direct & 0.266 & 0.00653 & 0.0466 & 84 & numpy-regularized-realization \\
+6DOF-LinearSS & Trim grid & Open-loop & direct & 0.266 & 0.0102 & 0.0562 & 84 & numpy-ridge \\
+6DOF-NN-Surrogate & Aggressive & Open-loop & direct & 0.269 & 0.526 & 0.681 & 70.2 & numpy-random-feature \\
+6DOF-GP-RBF & Aggressive & Open-loop & direct & 0.271 & 0.637 & 0.599 & 63.9 & numpy-rbf-ridge \\
+6DOF-Model-Stitching & Trim grid & Open-loop & direct & 0.278 & 0.39 & 0.0894 & 76.1 & numpy-local-ridge \\
+6DOF-Koopman-EDMD & Aggressive & Open-loop & direct & 0.29 & 0.0884 & 0.205 & 62.7 & numpy-edmd \\
+6DOF-Frequency-Stitching & Trim grid & Open-loop & direct & 0.564 & 1.41 & 0.486 & 67 & numpy-local-realization \\
+6DOF-PINN-Closure & Aggressive & Open-loop & direct & 0.968 & 0.00104 & 0.609 & 79 & numpy-sparse-closure \\
+6DOF-UDE-Residual & Aggressive & Open-loop & direct & 2.78 & 0.0867 & 0.604 & 75.6 & numpy-residual-ridge \\
+6DOF-EquationError-LS & Aggressive & Open-loop & direct & 5.4 & 0.0126 & 0.12 & 90.6 & numpy-ridge-derivative \\
+6DOF-Variational-Mocap & Aggressive & Open-loop & direct & 5.9 & 0.0247 & 0.12 & 85.1 & numpy-smoothed-weak \\
+6DOF-NominalGreyBox & No fit & Sine sweep & direct & 0.196 & 0 & 0.893 & 34.3 & numpy-rk4 \\
+6DOF-GP-RBF & Aggressive & Sine sweep & direct & 0.198 & 0.517 & 0.543 & 31.4 & numpy-rbf-ridge \\
+6DOF-Symbolic-Stepwise & Aggressive & Sine sweep & direct & 0.212 & 0.0787 & 0.265 & 34.8 & numpy-sparse-ridge \\
+6DOF-Subspace-Hankel & Trim grid & Sine sweep & direct & 0.217 & 0.741 & 0.159 & 29 & numpy-hankel-ridge \\
+6DOF-SINDy & Aggressive & Sine sweep & direct & 0.227 & 0.111 & 0.221 & 40.5 & numpy-stlsq \\
+6DOF-NN-Surrogate & Aggressive & Sine sweep & direct & 0.267 & 0.515 & 0.915 & 32.7 & numpy-random-feature \\
+6DOF-EKF-ParamID & Aggressive & Sine sweep & direct & 0.295 & 1.19 & 0.463 & 30.4 & numpy-ridge-paramid \\
+6DOF-Fisher-UQ & Aggressive & Sine sweep & direct & 0.295 & 1.19 & 0.463 & 30.4 & numpy-ridge-uq \\
+6DOF-OEM-SS & Aggressive & Sine sweep & direct & 0.295 & 1.19 & 0.463 & 30.4 & numpy-rk4-ridge \\
+6DOF-RidgeResidual & Aggressive & Sine sweep & direct & 0.295 & 1.57 & 0.519 & 30.4 & numpy-rk4-ridge \\
+6DOF-Frequency-Welch & Trim grid & Sine sweep & direct & 0.309 & 0.00631 & 0.0756 & 76.5 & numpy-regularized-realization \\
+6DOF-LinearSS & Trim grid & Sine sweep & direct & 0.309 & 0.0062 & 0.0676 & 76.5 & numpy-ridge \\
+6DOF-Frequency-Stitching & Trim grid & Sine sweep & direct & 0.334 & 1.59 & 0.522 & 36.7 & numpy-local-realization \\
+6DOF-Model-Stitching & Trim grid & Sine sweep & direct & 0.342 & 0.382 & 0.135 & 118 & numpy-local-ridge \\
+6DOF-Koopman-EDMD & Aggressive & Sine sweep & direct & 0.453 & 0.0748 & 0.223 & 34.9 & numpy-edmd \\
+6DOF-PINN-Closure & Aggressive & Sine sweep & direct & 0.487 & 0.000596 & 0.656 & 40.2 & numpy-sparse-closure \\
+6DOF-UDE-Residual & Aggressive & Sine sweep & direct & 1.35 & 0.0825 & 0.648 & 41.9 & numpy-residual-ridge \\
+6DOF-EquationError-LS & Aggressive & Sine sweep & direct & 1.82 & 0.0108 & 0.125 & 61.3 & numpy-ridge-derivative \\
+6DOF-Variational-Mocap & Aggressive & Sine sweep & direct & 1.86 & 0.021 & 0.125 & 55.7 & numpy-smoothed-weak \\
+6DOF-EKF-ParamID & Aggressive & Trim grid & direct & 0.199 & 1.11 & 0.666 & 34.2 & numpy-ridge-paramid \\
+6DOF-Fisher-UQ & Aggressive & Trim grid & direct & 0.199 & 1.11 & 0.666 & 34.2 & numpy-ridge-uq \\
+6DOF-OEM-SS & Aggressive & Trim grid & direct & 0.199 & 1.11 & 0.666 & 34.2 & numpy-rk4-ridge \\
+6DOF-RidgeResidual & Aggressive & Trim grid & direct & 0.199 & 1.67 & 0.504 & 34.2 & numpy-rk4-ridge \\
+6DOF-Symbolic-Stepwise & Aggressive & Trim grid & direct & 0.2 & 0.0829 & 0.247 & 41.5 & numpy-sparse-ridge \\
+6DOF-NominalGreyBox & No fit & Trim grid & direct & 0.201 & 0 & 0.547 & 39.2 & numpy-rk4 \\
+6DOF-Subspace-Hankel & Trim grid & Trim grid & direct & 0.204 & 0.731 & 0.167 & 41.4 & numpy-hankel-ridge \\
+6DOF-Model-Stitching & Trim grid & Trim grid & direct & 0.224 & 0.382 & 0.142 & 47.2 & numpy-local-ridge \\
+6DOF-NN-Surrogate & Aggressive & Trim grid & direct & 0.224 & 0.542 & 1 & 49.3 & numpy-random-feature \\
+6DOF-SINDy & Aggressive & Trim grid & direct & 0.224 & 0.113 & 0.227 & 46.8 & numpy-stlsq \\
+6DOF-LinearSS & Trim grid & Trim grid & direct & 0.225 & 0.00639 & 0.118 & 50.8 & numpy-ridge \\
+6DOF-Frequency-Welch & Trim grid & Trim grid & direct & 0.225 & 0.0061 & 0.0859 & 50.8 & numpy-regularized-realization \\
+6DOF-GP-RBF & Aggressive & Trim grid & direct & 0.244 & 0.521 & 0.595 & 51.1 & numpy-rbf-ridge \\
+6DOF-Frequency-Stitching & Trim grid & Trim grid & direct & 0.284 & 1.73 & 0.69 & 39.3 & numpy-local-realization \\
+6DOF-Koopman-EDMD & Aggressive & Trim grid & direct & 0.736 & 0.0801 & 0.227 & 50.8 & numpy-edmd \\
+6DOF-PINN-Closure & Aggressive & Trim grid & direct & 0.982 & 0.00106 & 0.638 & 54.8 & numpy-sparse-closure \\
+6DOF-UDE-Residual & Aggressive & Trim grid & direct & 2.96 & 0.0797 & 0.615 & 53.8 & numpy-residual-ridge \\
+6DOF-EquationError-LS & Aggressive & Trim grid & direct & 5.32 & 0.0112 & 0.134 & 58.2 & numpy-ridge-derivative \\
+6DOF-Variational-Mocap & Aggressive & Trim grid & direct & 5.62 & 0.0202 & 0.148 & 53.9 & numpy-smoothed-weak \\
+6DOF-UDE-Residual & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.135 & 0.147 & 0.106 & 0.157 & numpy-residual-ridge \\
+6DOF-Subspace-Hankel & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.142 & 0.0549 & 0.0683 & 0.189 & numpy-hankel-ridge \\
+6DOF-SINDy & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.145 & 0.00883 & 0.0842 & 0.147 & numpy-stlsq \\
+6DOF-PINN-Closure & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.16 & 0.000585 & 0.0961 & 0.202 & numpy-sparse-closure \\
+6DOF-GreyBoxOEM & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.166 & 15.7 & 0.0558 & 0.335 & casadi-rk4-trf \\
+6DOF-Frequency-Stitching & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.222 & 0.187 & 0.134 & 0.208 & numpy-local-realization \\
+6DOF-Frequency-Welch & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.228 & 0.000551 & 0.0576 & 1.33 & numpy-regularized-realization \\
+6DOF-LinearSS & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.228 & 0.000527 & 0.0635 & 1.33 & numpy-ridge \\
+6DOF-Symbolic-Stepwise & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.241 & 0.00689 & 0.0785 & 0.218 & numpy-sparse-ridge \\
+6DOF-NN-Surrogate & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.364 & 0.0221 & 0.146 & 0.297 & numpy-random-feature \\
+6DOF-GP-RBF & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.676 & 0.0286 & 0.138 & 0.662 & numpy-rbf-ridge \\
+6DOF-EKF-ParamID & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.929 & 0.166 & 0.126 & 1.17 & numpy-ridge-paramid \\
+6DOF-Fisher-UQ & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.929 & 0.166 & 0.126 & 1.17 & numpy-ridge-uq \\
+6DOF-OEM-SS & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.929 & 0.166 & 0.126 & 1.17 & numpy-rk4-ridge \\
+6DOF-RidgeResidual & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 0.929 & 0.16 & 0.127 & 1.17 & numpy-rk4-ridge \\
+6DOF-Model-Stitching & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 1.13 & 0.03 & 0.0695 & 13.8 & numpy-local-ridge \\
+6DOF-Variational-Mocap & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 1.33 & 0.00249 & 0.0704 & 0.719 & numpy-smoothed-weak \\
+6DOF-EquationError-LS & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 1.54 & 0.001 & 0.0716 & 0.78 & numpy-ridge-derivative \\
+6DOF-Koopman-EDMD & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & direct & 10.5 & 0.00545 & 0.0799 & 1.26 & numpy-edmd \\
+6DOF-UDE-Residual & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.0892 & 1.07 & 0.344 & 0.112 & numpy-residual-ridge \\
+6DOF-Subspace-Hankel & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.0953 & 0.359 & 0.13 & 0.15 & numpy-hankel-ridge \\
+6DOF-GreyBoxOEM & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.0977 & 36.2 & 0.154 & 0.125 & casadi-rk4-trf \\
+6DOF-SINDy & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.108 & 0.0468 & 0.133 & 0.115 & numpy-stlsq \\
+6DOF-PINN-Closure & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.116 & 0.00063 & 0.201 & 0.115 & numpy-sparse-closure \\
+6DOF-Symbolic-Stepwise & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.126 & 0.0369 & 0.141 & 0.135 & numpy-sparse-ridge \\
+6DOF-Frequency-Welch & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.136 & 0.00309 & 0.0805 & 2.05 & numpy-regularized-realization \\
+6DOF-LinearSS & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.136 & 0.00248 & 0.0865 & 2.05 & numpy-ridge \\
+6DOF-NN-Surrogate & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.306 & 0.252 & 0.268 & 0.245 & numpy-random-feature \\
+6DOF-RidgeResidual & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.32 & 0.589 & 0.237 & 0.233 & numpy-rk4-ridge \\
+6DOF-EKF-ParamID & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.32 & 0.57 & 0.23 & 0.233 & numpy-ridge-paramid \\
+6DOF-Fisher-UQ & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.32 & 0.57 & 0.23 & 0.233 & numpy-ridge-uq \\
+6DOF-OEM-SS & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.32 & 0.57 & 0.23 & 0.233 & numpy-rk4-ridge \\
+6DOF-Koopman-EDMD & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.412 & 0.0348 & 0.136 & 0.416 & numpy-edmd \\
+6DOF-Frequency-Stitching & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.452 & 0.745 & 0.273 & 0.243 & numpy-local-realization \\
+6DOF-GP-RBF & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.468 & 0.253 & 0.264 & 0.51 & numpy-rbf-ridge \\
+6DOF-Model-Stitching & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 0.783 & 0.194 & 0.102 & 21.8 & numpy-local-ridge \\
+6DOF-Variational-Mocap & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 4.1 & 0.0132 & 0.11 & 0.727 & numpy-smoothed-weak \\
+6DOF-EquationError-LS & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & direct & 4.48 & 0.006 & 0.106 & 0.824 & numpy-ridge-derivative \\
+6DOF-NominalGreyBox & No fit & Aggressive & mocap & 0.194 & 0 & 0.457 & 20.8 & numpy-rk4 \\
+6DOF-GP-RBF & Aggressive & Aggressive & mocap & 0.237 & 0.584 & 0.918 & 31.5 & numpy-rbf-ridge \\
+6DOF-Symbolic-Stepwise & Aggressive & Aggressive & mocap & 0.274 & 0.0798 & 0.253 & 26.5 & numpy-sparse-ridge \\
+6DOF-Subspace-Hankel & Trim grid & Aggressive & mocap & 0.276 & 1.06 & 0.22 & 30.6 & numpy-hankel-ridge \\
+6DOF-Frequency-Stitching & Trim grid & Aggressive & mocap & 0.277 & 1.58 & 0.546 & 40.1 & numpy-local-realization \\
+6DOF-EKF-ParamID & Aggressive & Aggressive & mocap & 0.314 & 1.19 & 0.495 & 32.3 & numpy-ridge-paramid \\
+6DOF-Fisher-UQ & Aggressive & Aggressive & mocap & 0.314 & 1.19 & 0.495 & 32.3 & numpy-ridge-uq \\
+6DOF-OEM-SS & Aggressive & Aggressive & mocap & 0.314 & 1.19 & 0.495 & 32.3 & numpy-rk4-ridge \\
+6DOF-RidgeResidual & Aggressive & Aggressive & mocap & 0.314 & 2.39 & 0.552 & 32.4 & numpy-rk4-ridge \\
+6DOF-NN-Surrogate & Aggressive & Aggressive & mocap & 0.318 & 0.563 & 1.38 & 37 & numpy-random-feature \\
+6DOF-Koopman-EDMD & Aggressive & Aggressive & mocap & 0.468 & 0.0848 & 0.258 & 26.1 & numpy-edmd \\
+6DOF-SINDy & Aggressive & Aggressive & mocap & 0.5 & 0.113 & 0.214 & 30.2 & numpy-stlsq \\
+6DOF-PINN-Closure & Aggressive & Aggressive & mocap & 0.513 & 0.000584 & 0.604 & 36.9 & numpy-sparse-closure \\
+6DOF-Model-Stitching & Trim grid & Aggressive & mocap & 0.527 & 0.377 & 0.132 & 122 & numpy-local-ridge \\
+6DOF-UDE-Residual & Aggressive & Aggressive & mocap & 0.693 & 0.0804 & 0.631 & 40.3 & numpy-residual-ridge \\
+6DOF-Frequency-Welch & Trim grid & Aggressive & mocap & 0.737 & 0.00605 & 0.0823 & 199 & numpy-regularized-realization \\
+6DOF-LinearSS & Trim grid & Aggressive & mocap & 0.737 & 0.697 & 0.0741 & 199 & numpy-ridge \\
+6DOF-Variational-Mocap & Aggressive & Aggressive & mocap & 1.47 & 0.0209 & 0.154 & 52.6 & numpy-smoothed-weak \\
+6DOF-EquationError-LS & Aggressive & Aggressive & mocap & 1.49 & 0.0124 & 0.134 & 51.4 & numpy-ridge-derivative \\
+6DOF-NominalGreyBox & No fit & Open-loop & mocap & 0.238 & 0 & 0.731 & 57.3 & numpy-rk4 \\
+6DOF-GP-RBF & Aggressive & Open-loop & mocap & 0.249 & 0.516 & 0.708 & 53.8 & numpy-rbf-ridge \\
+6DOF-EKF-ParamID & Aggressive & Open-loop & mocap & 0.25 & 1.3 & 0.442 & 46.1 & numpy-ridge-paramid \\
+6DOF-Fisher-UQ & Aggressive & Open-loop & mocap & 0.25 & 1.3 & 0.442 & 46.1 & numpy-ridge-uq \\
+6DOF-OEM-SS & Aggressive & Open-loop & mocap & 0.25 & 1.3 & 0.442 & 46.1 & numpy-rk4-ridge \\
+6DOF-RidgeResidual & Aggressive & Open-loop & mocap & 0.25 & 2.17 & 0.886 & 46.1 & numpy-rk4-ridge \\
+6DOF-NN-Surrogate & Aggressive & Open-loop & mocap & 0.255 & 0.651 & 0.572 & 68.9 & numpy-random-feature \\
+6DOF-Subspace-Hankel & Trim grid & Open-loop & mocap & 0.258 & 0.811 & 0.425 & 60.9 & numpy-hankel-ridge \\
+6DOF-SINDy & Aggressive & Open-loop & mocap & 0.264 & 0.108 & 0.227 & 61.2 & numpy-stlsq \\
+6DOF-Koopman-EDMD & Aggressive & Open-loop & mocap & 0.268 & 0.0755 & 0.206 & 59.8 & numpy-edmd \\
+6DOF-Symbolic-Stepwise & Aggressive & Open-loop & mocap & 0.27 & 0.0801 & 0.232 & 62.8 & numpy-sparse-ridge \\
+6DOF-Frequency-Welch & Trim grid & Open-loop & mocap & 0.277 & 0.00612 & 0.0812 & 85.9 & numpy-regularized-realization \\
+6DOF-LinearSS & Trim grid & Open-loop & mocap & 0.277 & 0.764 & 0.081 & 85.9 & numpy-ridge \\
+6DOF-Model-Stitching & Trim grid & Open-loop & mocap & 0.341 & 0.39 & 0.116 & 59.3 & numpy-local-ridge \\
+6DOF-Frequency-Stitching & Trim grid & Open-loop & mocap & 0.494 & 1.49 & 0.573 & 65.3 & numpy-local-realization \\
+6DOF-PINN-Closure & Aggressive & Open-loop & mocap & 1.36 & 0.000577 & 0.587 & 73 & numpy-sparse-closure \\
+6DOF-UDE-Residual & Aggressive & Open-loop & mocap & 1.37 & 0.0778 & 0.634 & 83.9 & numpy-residual-ridge \\
+6DOF-Variational-Mocap & Aggressive & Open-loop & mocap & 5.85 & 0.0228 & 0.131 & 81.2 & numpy-smoothed-weak \\
+6DOF-EquationError-LS & Aggressive & Open-loop & mocap & 6.05 & 0.0106 & 0.13 & 82.2 & numpy-ridge-derivative \\
+6DOF-GP-RBF & Aggressive & Sine sweep & mocap & 0.183 & 0.617 & 0.77 & 27 & numpy-rbf-ridge \\
+6DOF-NominalGreyBox & No fit & Sine sweep & mocap & 0.196 & 0 & 0.442 & 33.7 & numpy-rk4 \\
+6DOF-Symbolic-Stepwise & Aggressive & Sine sweep & mocap & 0.205 & 0.084 & 0.224 & 32.6 & numpy-sparse-ridge \\
+6DOF-SINDy & Aggressive & Sine sweep & mocap & 0.216 & 0.107 & 0.247 & 35 & numpy-stlsq \\
+6DOF-Subspace-Hankel & Trim grid & Sine sweep & mocap & 0.218 & 1.06 & 0.184 & 28.1 & numpy-hankel-ridge \\
+6DOF-Koopman-EDMD & Aggressive & Sine sweep & mocap & 0.233 & 0.0774 & 0.236 & 34.2 & numpy-edmd \\
+6DOF-Frequency-Stitching & Trim grid & Sine sweep & mocap & 0.296 & 1.54 & 0.544 & 32.1 & numpy-local-realization \\
+6DOF-Frequency-Welch & Trim grid & Sine sweep & mocap & 0.306 & 0.00676 & 0.0732 & 68.7 & numpy-regularized-realization \\
+6DOF-LinearSS & Trim grid & Sine sweep & mocap & 0.306 & 0.704 & 0.0728 & 68.7 & numpy-ridge \\
+6DOF-NN-Surrogate & Aggressive & Sine sweep & mocap & 0.344 & 0.541 & 0.975 & 34.6 & numpy-random-feature \\
+6DOF-EKF-ParamID & Aggressive & Sine sweep & mocap & 0.348 & 1.28 & 0.474 & 37.8 & numpy-ridge-paramid \\
+6DOF-Fisher-UQ & Aggressive & Sine sweep & mocap & 0.348 & 1.28 & 0.474 & 37.8 & numpy-ridge-uq \\
+6DOF-OEM-SS & Aggressive & Sine sweep & mocap & 0.348 & 1.28 & 0.474 & 37.8 & numpy-rk4-ridge \\
+6DOF-RidgeResidual & Aggressive & Sine sweep & mocap & 0.348 & 2.61 & 0.501 & 37.8 & numpy-rk4-ridge \\
+6DOF-Model-Stitching & Trim grid & Sine sweep & mocap & 0.35 & 0.395 & 0.145 & 86 & numpy-local-ridge \\
+6DOF-PINN-Closure & Aggressive & Sine sweep & mocap & 0.6 & 0.000607 & 0.673 & 37.8 & numpy-sparse-closure \\
+6DOF-UDE-Residual & Aggressive & Sine sweep & mocap & 0.662 & 0.083 & 0.683 & 47.3 & numpy-residual-ridge \\
+6DOF-Variational-Mocap & Aggressive & Sine sweep & mocap & 1.82 & 0.0227 & 0.152 & 55 & numpy-smoothed-weak \\
+6DOF-EquationError-LS & Aggressive & Sine sweep & mocap & 1.86 & 0.011 & 0.126 & 57.2 & numpy-ridge-derivative \\
+6DOF-NominalGreyBox & No fit & Trim grid & mocap & 0.201 & 0 & 0.419 & 39.2 & numpy-rk4 \\
+6DOF-Subspace-Hankel & Trim grid & Trim grid & mocap & 0.205 & 0.773 & 0.169 & 38.7 & numpy-hankel-ridge \\
+6DOF-EKF-ParamID & Aggressive & Trim grid & mocap & 0.207 & 1.2 & 0.839 & 35.1 & numpy-ridge-paramid \\
+6DOF-Fisher-UQ & Aggressive & Trim grid & mocap & 0.207 & 1.2 & 0.839 & 35.1 & numpy-ridge-uq \\
+6DOF-OEM-SS & Aggressive & Trim grid & mocap & 0.207 & 1.2 & 0.839 & 35.1 & numpy-rk4-ridge \\
+6DOF-RidgeResidual & Aggressive & Trim grid & mocap & 0.207 & 2.56 & 0.494 & 35.1 & numpy-rk4-ridge \\
+6DOF-NN-Surrogate & Aggressive & Trim grid & mocap & 0.211 & 0.506 & 0.604 & 37.3 & numpy-random-feature \\
+6DOF-Symbolic-Stepwise & Aggressive & Trim grid & mocap & 0.212 & 0.0791 & 0.325 & 41.6 & numpy-sparse-ridge \\
+6DOF-SINDy & Aggressive & Trim grid & mocap & 0.212 & 0.118 & 0.24 & 39.1 & numpy-stlsq \\
+6DOF-GP-RBF & Aggressive & Trim grid & mocap & 0.226 & 0.496 & 0.558 & 48.2 & numpy-rbf-ridge \\
+6DOF-LinearSS & Trim grid & Trim grid & mocap & 0.23 & 0.769 & 0.225 & 51.4 & numpy-ridge \\
+6DOF-Frequency-Welch & Trim grid & Trim grid & mocap & 0.23 & 0.00665 & 0.0837 & 51.4 & numpy-regularized-realization \\
+6DOF-Frequency-Stitching & Trim grid & Trim grid & mocap & 0.238 & 1.81 & 0.507 & 37.2 & numpy-local-realization \\
+6DOF-Koopman-EDMD & Aggressive & Trim grid & mocap & 0.249 & 0.122 & 0.363 & 44.7 & numpy-edmd \\
+6DOF-Model-Stitching & Trim grid & Trim grid & mocap & 0.294 & 0.382 & 0.125 & 43.2 & numpy-local-ridge \\
+6DOF-PINN-Closure & Aggressive & Trim grid & mocap & 1.15 & 0.000705 & 0.679 & 41 & numpy-sparse-closure \\
+6DOF-UDE-Residual & Aggressive & Trim grid & mocap & 1.2 & 0.102 & 0.656 & 55.9 & numpy-residual-ridge \\
+6DOF-Variational-Mocap & Aggressive & Trim grid & mocap & 5.52 & 0.021 & 0.138 & 50.5 & numpy-smoothed-weak \\
+6DOF-EquationError-LS & Aggressive & Trim grid & mocap & 5.65 & 0.0118 & 0.156 & 50.9 & numpy-ridge-derivative \\
+6DOF-UDE-Residual & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.109 & 0.21 & 0.145 & 0.122 & numpy-residual-ridge \\
+6DOF-Subspace-Hankel & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.11 & 0.0556 & 0.0845 & 0.124 & numpy-hankel-ridge \\
+6DOF-SINDy & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.126 & 0.00917 & 0.0829 & 0.122 & numpy-stlsq \\
+6DOF-PINN-Closure & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.136 & 0.000574 & 0.113 & 0.168 & numpy-sparse-closure \\
+6DOF-GreyBoxOEM & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.158 & 18.9 & 0.0566 & 0.319 & casadi-rk4-trf \\
+6DOF-Frequency-Welch & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.207 & 0.000565 & 0.059 & 1.31 & numpy-regularized-realization \\
+6DOF-LinearSS & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.207 & 0.0539 & 0.0607 & 1.32 & numpy-ridge \\
+6DOF-Symbolic-Stepwise & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.602 & 0.00682 & 0.0914 & 0.403 & numpy-sparse-ridge \\
+6DOF-EKF-ParamID & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.693 & 0.161 & 0.12 & 0.968 & numpy-ridge-paramid \\
+6DOF-Fisher-UQ & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.693 & 0.161 & 0.12 & 0.968 & numpy-ridge-uq \\
+6DOF-OEM-SS & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.693 & 0.161 & 0.12 & 0.968 & numpy-rk4-ridge \\
+6DOF-RidgeResidual & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.693 & 0.167 & 0.133 & 0.968 & numpy-rk4-ridge \\
+6DOF-GP-RBF & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.745 & 0.0219 & 0.141 & 0.789 & numpy-rbf-ridge \\
+6DOF-Frequency-Stitching & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 0.77 & 0.205 & 0.136 & 0.909 & numpy-local-realization \\
+6DOF-NN-Surrogate & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 1.02 & 0.023 & 0.149 & 0.769 & numpy-random-feature \\
+6DOF-Variational-Mocap & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 1.13 & 0.00253 & 0.0723 & 0.775 & numpy-smoothed-weak \\
+6DOF-EquationError-LS & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 1.16 & 0.00105 & 0.0709 & 0.63 & numpy-ridge-derivative \\
+6DOF-Model-Stitching & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 3.57 & 0.0296 & 0.0674 & 94.3 & numpy-local-ridge \\
+6DOF-Koopman-EDMD & Sport Cub MoCap 4/17/26 & Sport Cub MoCap 4/17/26 & mocap & 10.9 & 0.00552 & 0.0876 & 1.48 & numpy-edmd \\
+6DOF-UDE-Residual & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.0951 & 1.03 & 0.186 & 0.127 & numpy-residual-ridge \\
+6DOF-GreyBoxOEM & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.102 & 34.8 & 0.151 & 0.162 & casadi-rk4-trf \\
+6DOF-PINN-Closure & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.104 & 0.000589 & 0.169 & 0.179 & numpy-sparse-closure \\
+6DOF-Subspace-Hankel & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.111 & 0.357 & 0.109 & 0.181 & numpy-hankel-ridge \\
+6DOF-Frequency-Welch & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.142 & 0.00297 & 0.0939 & 2.05 & numpy-regularized-realization \\
+6DOF-LinearSS & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.142 & 0.348 & 0.0823 & 2.05 & numpy-ridge \\
+6DOF-NN-Surrogate & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.169 & 0.249 & 0.34 & 0.201 & numpy-random-feature \\
+6DOF-SINDy & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.216 & 0.0479 & 0.139 & 0.214 & numpy-stlsq \\
+6DOF-Frequency-Stitching & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.232 & 0.757 & 0.259 & 0.194 & numpy-local-realization \\
+6DOF-EKF-ParamID & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.247 & 0.59 & 0.231 & 0.252 & numpy-ridge-paramid \\
+6DOF-Fisher-UQ & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.247 & 0.59 & 0.231 & 0.252 & numpy-ridge-uq \\
+6DOF-OEM-SS & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.247 & 0.59 & 0.231 & 0.252 & numpy-rk4-ridge \\
+6DOF-RidgeResidual & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.247 & 0.595 & 0.232 & 0.252 & numpy-rk4-ridge \\
+6DOF-Model-Stitching & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.392 & 0.189 & 0.119 & 11.9 & numpy-local-ridge \\
+6DOF-GP-RBF & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.522 & 0.241 & 0.263 & 0.615 & numpy-rbf-ridge \\
+6DOF-Symbolic-Stepwise & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.648 & 0.0363 & 0.133 & 0.214 & numpy-sparse-ridge \\
+6DOF-Koopman-EDMD & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 0.997 & 0.0352 & 0.138 & 0.523 & numpy-edmd \\
+6DOF-EquationError-LS & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 2.23 & 0.00562 & 0.105 & 0.742 & numpy-ridge-derivative \\
+6DOF-Variational-Mocap & Sport Cub Laps 5/22/26 & Sport Cub Laps 5/22/26 & mocap & 3.11 & 0.0144 & 0.107 & 0.8 & numpy-smoothed-weak \\
 \bottomrule
 \end{longtable}
 \endgroup

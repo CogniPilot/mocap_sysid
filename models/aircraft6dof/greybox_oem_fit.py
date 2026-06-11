@@ -165,6 +165,29 @@ def greybox_rollout_quat(spec, theta_full: np.ndarray, x0_quat: np.ndarray, u_cm
     return euler_states_to_quat(pred)
 
 
+def make_greybox_quat_step(theta_full: np.ndarray, dt: float):
+    """One-step grey-box map on benchmark 13-states (quaternion in/out)."""
+    spec = sportcub_greybox_spec()
+    _dynamics, rk4 = build_casadi_dynamics(spec, dt)
+
+    def step(x: np.ndarray, u: np.ndarray) -> np.ndarray:
+        xe = quat_states_to_euler(np.asarray(x)[None, None, :])[0, 0]
+        xe = np.asarray(rk4(xe, np.asarray(u)[OEM_CONTROL_ORDER], theta_full)).ravel()
+        return euler_states_to_quat(xe[None, None, :])[0, 0]
+
+    return step
+
+
+def greybox_one_step(spec, theta_full: np.ndarray, xk: np.ndarray, uk: np.ndarray, dt: float) -> np.ndarray:
+    """Batch one-step grey-box predictions for residual targets (n, T, 13)."""
+    step = make_greybox_quat_step(np.asarray(theta_full), dt)
+    out = np.empty((xk.shape[0], xk.shape[1], 13))
+    for trial in range(xk.shape[0]):
+        for k in range(xk.shape[1]):
+            out[trial, k] = step(xk[trial, k], uk[trial, k])
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--train", type=Path, default=TRAIN_DEFAULT)

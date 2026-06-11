@@ -324,6 +324,18 @@ def finite_difference_jacobian(fn: Callable[[np.ndarray], np.ndarray], x: np.nda
     return jac
 
 
+# Generous physical envelope for the 3DOF state [V, gamma, alpha, Q]; a model
+# that leaves it has failed physically and is frozen + flagged, instead of an
+# exponential riding to the old norm-1e4 threshold and posting alpha-RMSE
+# values of hundreds of radians as a finite "score".
+STATE_ENVELOPE_LOW = np.array([0.5, -2.0, -1.5, -50.0])
+STATE_ENVELOPE_HIGH = np.array([100.0, 2.0, 1.5, 50.0])
+
+
+def outside_envelope(x: np.ndarray) -> bool:
+    return bool(np.any(x < STATE_ENVELOPE_LOW) or np.any(x > STATE_ENVELOPE_HIGH))
+
+
 def simulate_trials(
     split: SplitData,
     rhs_factory: Callable[[int], Callable[[np.ndarray, np.ndarray], np.ndarray]],
@@ -335,8 +347,12 @@ def simulate_trials(
         rhs = rhs_factory(trial)
         for k in range(split.n_time - 1):
             x[k + 1] = rk4_step(rhs, x[k], split.u_act[trial, k], split.u_act[trial, k + 1], split.dt)
-            if not np.all(np.isfinite(x[k + 1])) or np.linalg.norm(x[k + 1]) > 1e4:
-                x[k + 1 :] = x[k]
+            if not np.all(np.isfinite(x[k + 1])) or outside_envelope(x[k + 1]):
+                # Keep one clipped out-of-envelope sample as evidence for the
+                # diverged flag, then freeze the remainder at the last state.
+                x[k + 1] = np.clip(np.nan_to_num(x[k + 1], nan=1.1 * STATE_ENVELOPE_HIGH[0]),
+                                   1.1 * STATE_ENVELOPE_LOW, 1.1 * STATE_ENVELOPE_HIGH)
+                x[k + 2 :] = x[k]
                 break
         trajectories[trial] = x
     return trajectories
@@ -875,11 +891,13 @@ def evaluate_method(
     start = time.perf_counter()
     trajectories = simulate_trials(validation, rhs_factory)
     rollout_elapsed = time.perf_counter() - start
-    # The rollout freezes a trial once its state norm exceeds 1e4; flag such
-    # trials so divergence is reported instead of masquerading as a huge score.
+    # The rollout freezes a trial once it leaves the physical state envelope;
+    # flag such trials so divergence is reported instead of masquerading as a
+    # huge-but-finite score.
     diverged = bool(
         not np.all(np.isfinite(trajectories))
-        or np.max(np.linalg.norm(trajectories, axis=-1)) >= 1.0e4
+        or np.any(trajectories < STATE_ENVELOPE_LOW)
+        or np.any(trajectories > STATE_ENVELOPE_HIGH)
     )
     coeff_pred = None
     if coeff_residual_factory is not None:
@@ -907,7 +925,7 @@ def run_nominal(validation: SplitData) -> MethodResult:
     theta = nominal_theta()
     aircraft = Aircraft()
     return evaluate_method(
-        "Nominal",
+        "Nominal-GreyBox",
         "Known nominal rigid-body and aerodynamic model, no fitted correction.",
         0.0,
         0,
@@ -1779,6 +1797,24 @@ def run_subspace_hankel(train_x: np.ndarray, train_u: np.ndarray, validation: Sp
     )
 
 
+def project_stable_continuous(a_mat: np.ndarray, margin: float = 0.05) -> np.ndarray:
+    """Reflect unstable eigenvalues of a continuous-time A into the left half-plane.
+
+    An identified LTI model that will be simulated open-loop for many seconds
+    cannot carry spuriously unstable poles from noise/leakage bias; reflecting
+    the real part (standard practice when simulating identified models) keeps
+    the frequency content while bounding the rollout.
+    """
+    eigvals, eigvecs = np.linalg.eig(a_mat)
+    projected = np.where(eigvals.real > -margin, -np.maximum(np.abs(eigvals.real), margin) + 1j * eigvals.imag, eigvals)
+    if np.allclose(projected, eigvals):
+        return a_mat
+    try:
+        return np.real(eigvecs @ np.diag(projected) @ np.linalg.inv(eigvecs))
+    except np.linalg.LinAlgError:
+        return a_mat
+
+
 def fit_frequency_linear_model(
     train_x: np.ndarray,
     train_u: np.ndarray,
@@ -1845,6 +1881,7 @@ def fit_frequency_linear_model(
     y_weighted = y_freq * w
     gram = z_weighted.conj().T @ z_weighted + ridge * np.eye(z_weighted.shape[1])
     coeff = np.linalg.solve(gram, z_weighted.conj().T @ y_weighted).real
+    coeff[:4, :] = project_stable_continuous(coeff[:4, :].T).T
     intercept = dx_mean - z_mean @ coeff
     return intercept, coeff, segment_count
 
@@ -2762,8 +2799,8 @@ def main() -> int:
 
         results: list[MethodResult] = []
         pinn_result: MethodResult | None = None
-        if wants("Nominal"):
-            results.append(run_logged("Nominal", lambda: run_nominal(validation)))
+        if wants("Nominal-GreyBox"):
+            results.append(run_logged("Nominal-GreyBox", lambda: run_nominal(validation)))
         if wants("Linear-SS"):
             results.append(run_logged("Linear-SS", lambda: run_linear_state_space(x_smooth, train.u_act, validation)))
         if wants("Model-Stitching"):

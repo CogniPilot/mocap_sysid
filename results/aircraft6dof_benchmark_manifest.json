@@ -19,7 +19,7 @@
     "6DOF-LinearSS",
     "6DOF-Model-Stitching",
     "6DOF-NN-Surrogate",
-    "6DOF-Nominal",
+    "6DOF-NominalGreyBox",
     "6DOF-OEM-SS",
     "6DOF-PINN-Closure",
     "6DOF-RidgeResidual",
@@ -31,7 +31,7 @@
   ],
   "metric": "Validation score is full-state mean NRMSE over open-loop rollouts.",
   "model_family": "aircraft6dof",
-  "result_rows": 232,
+  "result_rows": 228,
   "scenarios": [
     "aircraft_6dof_aggressive",
     "aircraft_6dof_open_loop",

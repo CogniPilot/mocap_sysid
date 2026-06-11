@@ -10,7 +10,7 @@
 
 const DATA_URL = "./public/data/flight_explorer.json";
 const LABEL_COLORS = { ground: "#8d6e63", ground_effect: "#26a69a", stabilized: "#5c7cfa", manual: "#f08c00" };
-const METHOD_COLORS = { "6DOF-Nominal": "#d62728", "6DOF-LinearSS": "#2ca02c", "6DOF-RidgeResidual": "#9467bd", "6DOF-GreyBoxOEM": "#e8a838", "6DOF-EquationError-LS": "#17becf", "6DOF-SINDy": "#e377c2", "6DOF-Koopman-EDMD": "#bcbd22", "6DOF-Symbolic-Stepwise": "#8c564b", "6DOF-Subspace-Hankel": "#1f77b4", "6DOF-GP-RBF": "#f7b6d2" };
+const METHOD_COLORS = { "6DOF-NominalGreyBox": "#d62728", "6DOF-LinearSS": "#2ca02c", "6DOF-RidgeResidual": "#9467bd", "6DOF-GreyBoxOEM": "#e8a838", "6DOF-EquationError-LS": "#17becf", "6DOF-SINDy": "#e377c2", "6DOF-Koopman-EDMD": "#bcbd22", "6DOF-Symbolic-Stepwise": "#8c564b", "6DOF-Subspace-Hankel": "#1f77b4", "6DOF-GP-RBF": "#f7b6d2" };
 const MIN_SPEED = 2.5;
 const MAX_SPEED = 12.0;
 
@@ -326,14 +326,23 @@ function evalNet(spec, input) {
   return h;
 }
 
-// Position-free feature maps mirroring the benchmark suite's linear_features
-// and poly_features (rigid-body dynamics are translation-invariant).
+// Heading/position-invariant feature maps mirroring the suite: body
+// velocities, body-frame gravity direction (attitude enters the dynamics
+// only through it), body rates, sticks.
+function invariantStateJS(x) {
+  const q = normQuat([x[6], x[7], x[8], x[9]]);
+  const [q0, q1, q2, q3] = q;
+  return [x[3], x[4], x[5],
+    2 * (q1 * q3 - q0 * q2), 2 * (q2 * q3 + q0 * q1), 1 - 2 * (q1 * q1 + q2 * q2),
+    x[10], x[11], x[12]];
+}
+
 function linearFeaturesJS(x, u) {
-  return [...x.slice(3), ...u, 1];
+  return [...invariantStateJS(x), ...u, 1];
 }
 
 function polyFeaturesJS(x, u) {
-  const z = [...x.slice(3), ...u];
+  const z = [...invariantStateJS(x), ...u];
   const out = [1, ...z];
   for (let i = 0; i < z.length; i++) {
     for (let j = i; j < z.length; j++) out.push(z[i] * z[j]);
@@ -355,9 +364,22 @@ function applyStandardizedJS(phi, spec) {
 // Generic surrogates predict only the ten dynamic states; position advances
 // kinematically so travel is bounded by the (clamped) velocity state.
 function kinematicStepJS(x, dyn, dt) {
-  const quat = normQuat([x[6], x[7], x[8], x[9]]);
+  // dyn = predicted [u, v, w, p, q, r]; position and quaternion advance by
+  // exact kinematics from the current state (axis-angle attitude step).
+  let quat = normQuat([x[6], x[7], x[8], x[9]]);
   const step = matVec(rotationBodyToInertial(quat), [x[3], x[4], x[5]]);
-  return postStep([x[0] + step[0] * dt, x[1] + step[1] * dt, x[2] + step[2] * dt, ...dyn]);
+  const wMag = Math.hypot(x[10], x[11], x[12]);
+  if (wMag * dt > 1e-12) {
+    const a = 0.5 * wMag * dt;
+    const sc = Math.sin(a) / wMag;
+    quat = quatMul(quat, [Math.cos(a), x[10] * sc, x[11] * sc, x[12] * sc]);
+  }
+  return postStep([
+    x[0] + step[0] * dt, x[1] + step[1] * dt, x[2] + step[2] * dt,
+    dyn[0], dyn[1], dyn[2],
+    quat[0], quat[1], quat[2], quat[3],
+    dyn[3], dyn[4], dyn[5],
+  ]);
 }
 
 function makeSurrogateStepper(spec, dt, cfg) {
@@ -370,15 +392,16 @@ function makeSurrogateStepper(spec, dt, cfg) {
     return (x, u) => {
       if (last !== x) hist = new Array(spec.lag).fill(x);
       const phi = [];
-      for (const h of hist) phi.push(...h.slice(3));
+      for (const h of hist) phi.push(...invariantStateJS(h));
       phi.push(...u, 1);
-      const delta = new Array(10).fill(0);
+      const delta = new Array(6).fill(0);
       for (let i = 0; i < phi.length; i++) {
         if (phi[i] === 0) continue;
         const row = spec.weights[i];
         for (let j = 0; j < delta.length; j++) delta[j] += phi[i] * row[j];
       }
-      const next = kinematicStepJS(x, delta.map((d, j) => x[3 + j] + d), dt);
+      const dynRows = [3, 4, 5, 10, 11, 12];
+      const next = kinematicStepJS(x, delta.map((d, j) => x[dynRows[j]] + d), dt);
       hist = [...hist.slice(1), next];
       last = next;
       return next;
@@ -387,7 +410,7 @@ function makeSurrogateStepper(spec, dt, cfg) {
   if (spec.kind === "rbf_residual") {
     return (x, u) => {
       const base = nominalStep(x, u, dt, cfg);
-      const z = [...x.slice(3), ...u];
+      const z = [...invariantStateJS(x), ...u];
       const phi = spec.centers.map((center) => {
         let d2 = 0;
         for (let i = 0; i < z.length; i++) {
@@ -397,19 +420,21 @@ function makeSurrogateStepper(spec, dt, cfg) {
         return Math.exp(-0.5 * d2);
       });
       phi.push(1);
-      const out = new Array(10).fill(0);
+      const out = new Array(6).fill(0);
       for (let i = 0; i < phi.length; i++) {
         const row = spec.weights[i];
         for (let j = 0; j < out.length; j++) out[j] += phi[i] * row[j];
       }
-      return postStep(base.map((v, j) => (j < 3 ? v : v + out[j - 3])));
+      const dynRows = [3, 4, 5, 10, 11, 12];
+      return kinematicStepJS(x, out.map((d, j) => base[dynRows[j]] + d), dt);
     };
   }
   return (x, u) => {
     const phi = spec.degree === 1 ? linearFeaturesJS(x, u) : polyFeaturesJS(x, u);
     const delta = applyStandardizedJS(phi, spec);
     const gain = spec.kind === "derivative" ? dt : 1;
-    return kinematicStepJS(x, delta.map((d, j) => x[3 + j] + gain * d), dt);
+    const dynRows = [3, 4, 5, 10, 11, 12];
+    return kinematicStepJS(x, delta.map((d, j) => x[dynRows[j]] + gain * d), dt);
   };
 }
 
@@ -426,7 +451,7 @@ export function makeStepper(method, models, dt) {
       return postStep(base.map((v, i) => v + out[i]));
     };
   }
-  if (method === "6DOF-Nominal") return (x, u) => nominalStep(x, u, dt, cfg);
+  if (method === "6DOF-NominalGreyBox") return (x, u) => nominalStep(x, u, dt, cfg);
   if (method === "6DOF-GreyBoxOEM" && models.greybox) return makeGreyboxStepper(models.greybox, dt);
   if (method === "6DOF-LinearSS") return (x, u) => postStep(affinePredict(x, u, models.linear_weights));
   return (x, u) => {
@@ -562,9 +587,10 @@ function safeScoreNote() {
   return ` (currently ${scores.validation_pos_err_5s_m.toFixed(1)} m mean over ${scores.validation_windows} held-out windows)`;
 }
 
-const FEATURE_STATE_NAMES = ["u", "v", "w", "qw", "qx", "qy", "qz", "p", "q", "r"];
+const FEATURE_STATE_NAMES = ["u", "v", "w", "g\u2093", "g\u1d67", "g\u1d22", "p", "q", "r"];
 const STICK_NAMES = ["thr", "elev", "ail", "rud"];
-const DYN_TARGET_NAMES = ["u\u0307", "v\u0307", "w\u0307", "q\u0307w", "q\u0307x", "q\u0307y", "q\u0307z", "p\u0307", "q\u0307", "r\u0307"];
+const DYN_TARGET_NAMES = ["u\u0307", "v\u0307", "w\u0307", "p\u0307", "q\u0307", "r\u0307"];
+const STATE13_NAMES = ["x", "y", "z", "u", "v", "w", "qw", "qx", "qy", "qz", "p", "q", "r"];
 
 function polyFeatureNames() {
   const z = [...FEATURE_STATE_NAMES, ...STICK_NAMES];
@@ -573,92 +599,130 @@ function polyFeatureNames() {
   return names;
 }
 
+// Full sorted equations from a weight matrix: one line per output listing
+// every coefficient above the cutoff.
+function weightEquations(W, featureNames, outputNames, { cutoff = 1e-4, maxTerms = 12, transform = null } = {}) {
+  const lines = [];
+  for (let j = 0; j < outputNames.length; j++) {
+    const terms = [];
+    for (let i = 0; i < W.length; i++) {
+      let v = W[i][j];
+      if (transform) v = transform(v, i, j);
+      if (Math.abs(v) > cutoff) terms.push({ name: featureNames[i], v });
+    }
+    terms.sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
+    const shown = terms.slice(0, maxTerms);
+    const rhs = shown.map((t, idx) => `${t.v < 0 ? "\u2212" : idx ? "+" : ""} ${Math.abs(t.v).toPrecision(3)}\u00b7${t.name}`).join(" ");
+    const more = terms.length > maxTerms ? ` \u2026 (+${terms.length - maxTerms} terms)` : "";
+    lines.push(`<b>${outputNames[j]}</b> = ${rhs || "0"}${more}`);
+  }
+  return `<p class="model-terms">${lines.join("<br>")}</p>`;
+}
+
+function surrogateDetail(name, spec) {
+  if (spec.kind === "hankel") {
+    const featNames = [];
+    for (let lagIdx = spec.lag - 1; lagIdx >= 0; lagIdx--) {
+      for (const n of FEATURE_STATE_NAMES) featNames.push(lagIdx ? `${n}[k\u2212${lagIdx}]` : `${n}[k]`);
+    }
+    featNames.push(...STICK_NAMES, "1");
+    return `<p class="model-note">lag-${spec.lag} ARX on the heading/position-invariant state history; predicts dynamic-state increments, position and attitude integrate kinematically. Weights ${spec.weights.length}\u00d7${spec.weights[0].length}.</p>`
+      + weightEquations(spec.weights, featNames, DYN_TARGET_NAMES.map((n) => `\u0394${n.replace("\u0307", "")}`), { cutoff: 1e-3 });
+  }
+  if (spec.kind === "rbf_residual") {
+    const ls = spec.length_scale.map((v, i) => `${[...FEATURE_STATE_NAMES, ...STICK_NAMES][i]}=${v.toPrecision(3)}`).join(", ");
+    return `<p class="model-note">${spec.centers.length} radial basis centers over the invariant state + sticks; the kernel residual corrects the attached-flow nominal model's dynamic states. Weights ${spec.weights.length}\u00d7${spec.weights[0].length}.</p>
+      <p class="model-note">per-dimension length scales: ${ls}</p>`;
+  }
+  const names = spec.degree === 1 ? [...FEATURE_STATE_NAMES, ...STICK_NAMES, "1"] : polyFeatureNames();
+  const nnz = spec.weights.flat().filter((v) => v !== 0).length;
+  const outs = spec.kind === "derivative" ? DYN_TARGET_NAMES : DYN_TARGET_NAMES.map((n) => `\u0394${n.replace("\u0307", "")}`);
+  return `<p class="model-note">${spec.kind === "derivative" ? "continuous-time derivative" : "one-step increment"} model on ${spec.degree === 1 ? "linear" : "quadratic"} invariant features \u00b7 ${nnz} nonzero of ${spec.weights.length * spec.weights[0].length} standardized coefficients. Position and attitude integrate kinematically.</p>`
+    + weightEquations(spec.weights, names, outs, { cutoff: 1e-3 });
+}
+
+function affineDetail(weights, dt, residual) {
+  const featNames = [...STATE13_NAMES, ...["thr", "elev", "ail", "rud"], "1"];
+  const note = residual
+    ? "one-step residual added to the attached-flow nominal RK4 step"
+    : "one-step affine map x[k+1] = W\u1d40[x, u, 1]; shown as continuous-time rates ((W \u2212 I)/dt)";
+  const transform = residual
+    ? (v) => v / dt
+    : (v, i, j) => (i === j ? v - 1 : v) / dt;
+  return `<p class="model-note">${note}; weights ${weights.length}\u00d7${weights[0].length}, raw state/stick features (positions included by the affine contract).</p>`
+    + weightEquations(weights, featNames, STATE13_NAMES.map((n) => `${n}\u0307`), { cutoff: 0.05, transform });
+}
+
 function renderModelInspector() {
   const grid = document.querySelector("#models-grid");
   if (!grid || !ex.data) return;
-  grid.innerHTML = "";
-  const card = (title, sub, bodyHtml) => {
-    const el = document.createElement("div");
-    el.className = "model-card";
-    el.innerHTML = `<h3>${title}</h3><p>${sub}</p>${bodyHtml}`;
-    grid.append(el);
-  };
   const m = ex.data.models;
-  // Grey-box: full physical parameter table.
-  const gb = m.greybox;
-  if (gb) {
-    const rows = gb.parameter_names.map((n, i) => `<tr><td>${n}</td><td>${gb.parameters[i].toPrecision(4)}</td></tr>`).join("");
-    const fixed = Object.entries(gb.fixed_parameters).map(([k, v]) => `${k}=${v}`).join(", ");
-    card("GreyBoxOEM", "22 physical aerodynamic coefficients, segment-wise output error",
-      `<table class="model-table"><tbody>${rows}</tbody></table><p class="model-note">fixed: ${fixed}; max deflection ${Object.entries(gb.max_deflection_deg).map(([k,v])=>`${k} ${v}\u00b0`).join(", ")}</p>`);
+  const dt = ex.data.flights[0]?.dt_full || 1 / 240;
+  const catalog = [];
+  if (m.greybox) {
+    catalog.push(["GreyBoxOEM", () => {
+      const gb = m.greybox;
+      const groups = [["lift/drag/side", 0, 6], ["roll", 6, 12], ["pitch", 12, 16], ["yaw", 16, 22]];
+      const tables = groups.map(([label, a, b]) => {
+        const rows = gb.parameter_names.slice(a, b).map((n, i) => `<tr><td>${n}</td><td>${gb.parameters[a + i].toPrecision(4)}</td></tr>`).join("");
+        return `<div><p class="model-note">${label}</p><table class="model-table"><tbody>${rows}</tbody></table></div>`;
+      }).join("");
+      const fixed = Object.entries(gb.fixed_parameters).map(([k, v]) => `${k}=${v}`).join(", ");
+      return `<p class="model-note">22 physical aerodynamic coefficients identified by segment-wise output error on the manual training chunks; the same parameters integrate in the browser.</p>
+        <div class="model-columns">${tables}</div>
+        <p class="model-note">fixed: ${fixed}</p>
+        <p class="model-note">surface throws: ${Object.entries(gb.max_deflection_deg).map(([k, v]) => `${k} ${v}\u00b0`).join(", ")}</p>`;
+    }]);
   }
-  // SAFE closed loop: one shared linear model for stabilized segments.
   if (m.safe_invariant_weights) {
-    const sc = m.safe_scores || {};
-    const dt = ex.data.flights[0]?.dt_full || 1 / 240;
-    const safeFeatures = ["u", "v", "w", "\u03c6", "\u03b8", "p", "q", "r", "thr", "elev", "ail", "rud", "1"];
-    const safeOutputs = ["u\u0307", "v\u0307", "w\u0307", "\u03c6\u0307", "\u03b8\u0307", "p\u0307", "q\u0307", "r\u0307", "\u03c8\u0307"];
-    const W = m.safe_invariant_weights;
-    // The one-step map is near-identity at 240 Hz; (W - I)/dt reads as
-    // continuous-time equations, which is what a human wants to inspect.
-    const lines = safeOutputs.map((out, j) => {
-      const terms = safeFeatures.map((name, i) => {
-        let v = W[i][j];
-        if (j < 8 && i === j) v -= 1;
-        return { name, v: v / dt };
-      }).filter((t) => Math.abs(t.v) > 0.05);
-      terms.sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
-      const rhs = terms.slice(0, 4).map((t, idx) => `${t.v < 0 ? "\u2212" : idx ? "+" : ""} ${Math.abs(t.v).toPrecision(3)}\u00b7${t.name}`).join(" ");
-      return `${out} \u2248 ${rhs || "0"}`;
-    });
-    card("SAFE closed loop \u2014 shared by every method",
-      "stabilized segments always use this single heading/position-invariant linear ridge fit; the method picker only changes the manual-segment airframe. A direct closed-loop fit beats wrapping the identified controller around each airframe (2.9 m vs 13.6 m at 5 s).",
-      `<p class="model-terms">${lines.join("<br>")}</p>` +
-      `<p class="model-note">linear, not a neural network \u00b7 13\u00d79 weights shown as continuous-time equations (terms &gt; 0.05/s) \u00b7 ${sc.train_samples ?? "?"} train samples \u00b7 held-out 5 s position error ${sc.validation_pos_err_5s_m ?? "?"} m over ${sc.validation_windows ?? "?"} windows</p>`);
+    catalog.push(["SAFE closed loop (shared)", () => {
+      const sc = m.safe_scores || {};
+      const featNames = ["u", "v", "w", "\u03c6", "\u03b8", "p", "q", "r", ...STICK_NAMES, "1"];
+      const outNames = ["u\u0307", "v\u0307", "w\u0307", "\u03c6\u0307", "\u03b8\u0307", "p\u0307", "q\u0307", "r\u0307", "\u03c8\u0307"];
+      const transform = (v, i, j) => ((j < 8 && i === j) ? v - 1 : v) / dt;
+      return `<p class="model-note">stabilized segments always use this single heading/position-invariant linear ridge fit (not a neural network, not per-method); the method picker only changes the manual-segment airframe. Direct closed-loop identification beats composing the identified controller with each airframe (2.9 m vs 13.6 m at 5 s).</p>`
+        + weightEquations(m.safe_invariant_weights, featNames, outNames, { cutoff: 0.05, transform })
+        + `<p class="model-note">${sc.train_samples ?? "?"} train samples \u00b7 held-out 5 s position error ${sc.validation_pos_err_5s_m ?? "?"} m over ${sc.validation_windows ?? "?"} windows</p>`;
+    }]);
   }
-  // SAFE controller grey-box decomposition: guessed structure, fitted gains.
   if (m.safe_gains) {
-    const g = m.safe_gains;
-    const axisRow = (axis, names) => `<tr><td>${axis}</td>${(g[axis] || []).map((v, i) => `<td title="${names[i]}">${v.toPrecision(3)}</td>`).join("")}</tr>`;
-    card("SAFE controller (grey-box structure)",
-      "guessed attitude-command structure with fitted gains and saturations: \u03b4 = K\u209a\u00b7(sat(scale\u00b7stick, \u00b1envelope) \u2212 attitude) \u2212 K\u1d48\u00b7rate + bias",
-      `<table class="model-table"><tbody>
-        <tr><td></td><td>K\u209a</td><td>scale</td><td>envelope</td><td>K\u1d48</td><td>bias</td></tr>
-        ${axisRow("elevator", ["Kp", "cmd scale", "envelope limit rad", "Kd", "bias"])}
-        ${axisRow("aileron", ["Kp", "cmd scale", "envelope limit rad", "Kd", "bias"])}
-        <tr><td>rudder</td>${(g.rudder || []).map((v) => `<td>${v.toPrecision(3)}</td>`).join("")}<td colspan="2">(stick gain, yaw-rate gain, bias)</td></tr>
-      </tbody></table>
-      <p class="model-note">retained for interpretability and used when no closed-loop fit exists; identified against the nominal airframe, which is why composing it with each method's airframe currently loses to the direct closed-loop fit. Re-identifying it against the fitted grey-box is the planned upgrade.</p>`);
+    catalog.push(["SAFE controller (grey-box)", () => {
+      const g = m.safe_gains;
+      const row = (axis) => `<tr><td>${axis}</td>${(g[axis] || []).map((v) => `<td>${v.toPrecision(3)}</td>`).join("")}</tr>`;
+      return `<p class="model-note">guessed attitude-command structure with fitted gains and saturations: \u03b4 = K\u209a\u00b7(sat(scale\u00b7stick, \u00b1envelope) \u2212 attitude) \u2212 K\u1d48\u00b7rate + bias. Rudder row is (stick gain, yaw-rate gain, bias).</p>
+        <table class="model-table"><tbody>
+        <tr><td></td><td>K\u209a</td><td>scale</td><td>envelope (rad)</td><td>K\u1d48</td><td>bias</td></tr>
+        ${row("elevator")}${row("aileron")}${row("rudder")}
+        </tbody></table>
+        <p class="model-note">retained for interpretability and as the fallback when no closed-loop fit exists; identified against the nominal airframe \u2014 re-identifying against the fitted grey-box is the planned upgrade.</p>`;
+    }]);
   }
-  // Affine baselines.
-  if (m.linear_weights) card("LinearSS", "one-step affine map x[k+1] = W\u1d40[x,u,1]", `<p class="model-note">weights ${m.linear_weights.length}\u00d7${m.linear_weights[0].length}</p>`);
-  if (m.residual_weights) card("RidgeResidual", "attached-flow nominal RK4 + affine one-step residual", `<p class="model-note">weights ${m.residual_weights.length}\u00d7${m.residual_weights[0].length}</p>`);
-  // Surrogates with top terms where sparse structure exists.
-  const featureNames = polyFeatureNames();
+  if (m.linear_weights) catalog.push(["LinearSS", () => affineDetail(m.linear_weights, dt, false)]);
+  if (m.residual_weights) catalog.push(["RidgeResidual", () => affineDetail(m.residual_weights, dt, true)]);
   for (const [name, spec] of Object.entries(m.surrogates || {})) {
-    const short = name.replace("6DOF-", "");
-    if (spec.kind === "hankel") {
-      card(short, `lag-${spec.lag} position-free ARX, increment-integrated`, `<p class="model-note">weights ${spec.weights.length}\u00d7${spec.weights[0].length}</p>`);
-      continue;
-    }
-    if (spec.kind === "rbf_residual") {
-      card(short, "kernel residual around the nominal model", `<p class="model-note">${spec.centers.length} RBF centers \u00b7 weights ${spec.weights.length}\u00d7${spec.weights[0].length}</p>`);
-      continue;
-    }
-    const names = spec.degree === 1 ? [...FEATURE_STATE_NAMES, ...STICK_NAMES, "1"] : featureNames;
-    const terms = [];
-    for (let j = 0; j < spec.weights[0].length; j++) {
-      let best = 0, bi = -1;
-      for (let i = 0; i < spec.weights.length; i++) {
-        const v = Math.abs(spec.weights[i][j]);
-        if (v > best) { best = v; bi = i; }
-      }
-      if (bi >= 0) terms.push(`${DYN_TARGET_NAMES[j]} \u2190 ${names[bi]}`);
-    }
-    const nnz = spec.weights.flat().filter((v) => v !== 0).length;
-    card(short, `${spec.kind === "derivative" ? "derivative" : "one-step increment"} model, ${spec.degree === 1 ? "linear" : "quadratic"} features`,
-      `<p class="model-note">${nnz} nonzero of ${spec.weights.length * spec.weights[0].length} coefficients \u00b7 dominant standardized term per output:</p><p class="model-terms">${terms.join(" \u00b7 ")}</p>`);
+    catalog.push([name.replace("6DOF-", ""), () => surrogateDetail(name, spec)]);
   }
+
+  grid.innerHTML = "";
+  const picker = document.createElement("select");
+  picker.id = "model-inspect-select";
+  for (const [title] of catalog) {
+    const option = document.createElement("option");
+    option.value = title;
+    option.textContent = title;
+    picker.append(option);
+  }
+  const detail = document.createElement("div");
+  detail.className = "model-detail";
+  const show = (title) => {
+    const entry = catalog.find(([t]) => t === title) || catalog[0];
+    ex.modelInspectorChoice = entry[0];
+    detail.innerHTML = `<h3>${entry[0]}</h3>${entry[1]()}`;
+  };
+  picker.addEventListener("change", () => show(picker.value));
+  if (ex.modelInspectorChoice && catalog.some(([t]) => t === ex.modelInspectorChoice)) picker.value = ex.modelInspectorChoice;
+  grid.append(picker, detail);
+  show(picker.value);
 }
 
 function renderSplitsView() {
@@ -768,7 +832,7 @@ function renderAll() {
   }
 }
 
-const METHOD_COLORS_HEX = { "6DOF-Nominal": 0xd62728, "6DOF-LinearSS": 0x2ca02c, "6DOF-RidgeResidual": 0x9467bd, "6DOF-GreyBoxOEM": 0xe8a838, "6DOF-EquationError-LS": 0x17becf, "6DOF-SINDy": 0xe377c2, "6DOF-Koopman-EDMD": 0xbcbd22, "6DOF-Symbolic-Stepwise": 0x8c564b, "6DOF-Subspace-Hankel": 0x1f77b4, "6DOF-GP-RBF": 0xf7b6d2 };
+const METHOD_COLORS_HEX = { "6DOF-NominalGreyBox": 0xd62728, "6DOF-LinearSS": 0x2ca02c, "6DOF-RidgeResidual": 0x9467bd, "6DOF-GreyBoxOEM": 0xe8a838, "6DOF-EquationError-LS": 0x17becf, "6DOF-SINDy": 0xe377c2, "6DOF-Koopman-EDMD": 0xbcbd22, "6DOF-Symbolic-Stepwise": 0x8c564b, "6DOF-Subspace-Hankel": 0x1f77b4, "6DOF-GP-RBF": 0xf7b6d2 };
 
 function publishOverlay(timeS) {
   // Publish the segmentation-colored full-flight track and the free-run
@@ -798,8 +862,10 @@ function publishOverlay(timeS) {
         flightIndex: ex.flightIndex,
         timeS: timeS == null ? 0 : timeS,
         overlay,
-        // Browser-runnable methods, so the playback can offer a quick picker.
+        // Browser-runnable methods + colors, so the playback can offer a
+        // color-coded picker matching the prediction lines.
         methods: ex.data.methods,
+        methodColors: METHOD_COLORS,
         // Carry the full-flight track with the event so registration can
         // never be lost to module load order.
         track: ex.playbackTrack,

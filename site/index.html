@@ -81,10 +81,13 @@
               </div>
             </label>
             <button type="button" id="playback-predict" title="Set the prediction initial condition at the current time">Predict here</button>
-            <label class="method-label" id="playback-method-wrap" hidden>
-              Method
-              <select id="playback-method" title="Browser-runnable prediction method"></select>
-            </label>
+            <div class="method-label" id="playback-method-wrap" hidden>
+              <span class="method-title">Methods</span>
+              <details id="playback-method-dd">
+                <summary id="playback-method-summary">LinearSS (default)</summary>
+                <div id="playback-method-menu" class="method-menu" title="Check methods to free-run together with Predict here"></div>
+              </details>
+            </div>
             <label class="segment-label">
               Flight
               <select id="playback-segment"></select>
