@@ -2750,9 +2750,21 @@ it with no structure change. Stabilized spans are cut into ten-second
 windows, round-robin per flight, every third held out; the autonomous
 flight is excluded (its lateral commands bypass the recorded sticks --- the
 rudder channel is constant while the aircraft banks).
-\paragraph{Results.} Held-out five-second free-run position error 2.98\,m
-over 11 windows (52k training samples; 3.41\,m before the simulation-error
-refinement, against a 21.9\,m naive constant-turn baseline); free runs fly
+\paragraph{Results.} The headline metric is defined as follows. The
+tracked stabilized spans are cut into ten-second windows and every third
+window per flight is held out of all fitting (11 held-out windows across
+the piloted flights; 52k samples remain for training). For each held-out
+window, the model is initialized from the measured state at the window
+start and integrated forward \emph{open loop} for five seconds (1{,}200
+steps at 240\,Hz), driven only by the recorded stick history --- no
+measurement updates of any kind. The error for that window is the
+Euclidean distance in meters between the predicted and mocap-measured 3-D
+position at exactly $t=+5$\,s, and the reported number is the mean over
+the 11 windows. By this metric the refined model scores 2.98\,m ---
+roughly 13\% of the $\sim$23\,m the aircraft travels in five seconds at
+lap speed --- versus 3.41\,m for the same structure fitted one-step only,
+and 21.9\,m for a naive baseline that freezes the body velocity and turn
+rate at the anchor and coasts along the resulting arc. Free runs fly
 complete laps. Envelope-protection saturation was hypothesized to dominate
 the residual error and tested: one-step residuals are 74\% higher near
 command saturation, but only $\sim$4\% of stabilized samples are affected
