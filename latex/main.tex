@@ -1956,14 +1956,11 @@ The 6-DOF residual row first propagates the nominal RK4 model and then adds a ri
 \]
 This tests the same grey-box idea used in UDE-style methods, but with a linear residual so that the 6-DOF benchmark remains fast and deterministic. The residual absorbs actuator lag and the hidden difference between the attached-flow nominal model and the stalled nonlinear truth model.
 
-\paragraph{6DOF-OEM-MocapOutput.}
-The mocap-output 6-DOF row fits an affine one-step predictor on measured position and quaternion attitude. It does not predict body velocity or angular rate, so its validation score is a mocap-output NRMSE rather than a full-state NRMSE.
-
 \IfFileExists{fig/generated_aircraft6dof_validation_score_comparison.svg}{%
 \begin{figure}[hbt!]
     \centering
     \includesvg[width=0.95\linewidth]{generated_aircraft6dof_validation_score_comparison}
-    \caption{6-DOF baseline method validation scores. Direct-state rows score full-state mean NRMSE. The mocap-output row scores position/quaternion output NRMSE because it does not predict body velocities or angular rates. Lower is better.}
+    \caption{6-DOF baseline method validation scores (full-state mean NRMSE over open-loop rollouts). Lower is better.}
     \label{fig:aircraft6dof_validation_score_comparison}
 \end{figure}
 }{}

@@ -63,7 +63,6 @@ METHOD_TRAINING_SCENARIOS = {
     "6DOF-Fisher-UQ": "aircraft_6dof_aggressive",
     "6DOF-OEM-SS": "aircraft_6dof_aggressive",
     "6DOF-RidgeResidual": "aircraft_6dof_aggressive",
-    "6DOF-OEM-MocapOutput": "aircraft_6dof_aggressive",
     "6DOF-Variational-Mocap": "aircraft_6dof_aggressive",
     "6DOF-SINDy": "aircraft_6dof_aggressive",
     "6DOF-Symbolic-Stepwise": "aircraft_6dof_aggressive",
@@ -118,7 +117,6 @@ class Result6DOF:
     implementation_status: str = "implemented"
     diverged: bool = False
     x_pred: np.ndarray | None = None
-    y_pred: np.ndarray | None = None
 
 
 def load_split(path: Path) -> Split6DOF:
@@ -222,22 +220,6 @@ def rmse_group(x_pred: np.ndarray, x_true: np.ndarray) -> dict[str, float]:
         "rmse_mocap_position_m": float(np.sqrt(np.mean((mocap_pred[..., 0:3] - mocap_true[..., 0:3]) ** 2))),
         "rmse_mocap_quaternion": float(np.sqrt(np.mean((mocap_pred[..., 3:7] - mocap_true[..., 3:7]) ** 2))),
     }
-
-
-def mocap_score(y_pred: np.ndarray, mocap_true: np.ndarray) -> tuple[float, dict[str, float]]:
-    pred = np.asarray(y_pred, dtype=float).copy()
-    dots = np.sum(pred[..., 3:7] * mocap_true[..., 3:7], axis=-1)
-    pred[..., 3:7] *= np.where(dots[..., None] < 0.0, -1.0, 1.0)
-    score = nrmse_score(pred, mocap_true)
-    metrics = {
-        "rmse_position_m": float("nan"),
-        "rmse_velocity_mps": float("nan"),
-        "rmse_quaternion": float("nan"),
-        "rmse_rates_rad_s": float("nan"),
-        "rmse_mocap_position_m": float(np.sqrt(np.mean((pred[..., 0:3] - mocap_true[..., 0:3]) ** 2))),
-        "rmse_mocap_quaternion": float(np.sqrt(np.mean((pred[..., 3:7] - mocap_true[..., 3:7]) ** 2))),
-    }
-    return score, metrics
 
 
 def smooth_array(y: np.ndarray, window: int = 9) -> np.ndarray:
@@ -996,23 +978,6 @@ def mocap_output_rollout(initial: np.ndarray, u: np.ndarray, t: np.ndarray, weig
     return pred
 
 
-def mocap_output_lagged_rollout(initial_history: np.ndarray, u: np.ndarray, t: np.ndarray, weights: np.ndarray, lag: int = 3) -> np.ndarray:
-    pred = np.zeros((u.shape[0], len(t), 7))
-    seed_count = min(lag, initial_history.shape[1], len(t))
-    pred[:, :seed_count, :] = initial_history[:, :seed_count, :]
-    if seed_count < lag:
-        pred[:, seed_count:lag, :] = pred[:, seed_count - 1 : seed_count, :]
-    for trial in range(u.shape[0]):
-        for index in range(lag):
-            pred[trial, index, 3:7] = normalize_quaternion(pred[trial, index, 3:7])
-        for index in range(lag - 1, len(t) - 1):
-            history = pred[trial, index - lag + 1 : index + 1].reshape(-1)
-            phi = np.concatenate((history, u[trial, index], [1.0]))
-            pred[trial, index + 1] = phi @ weights
-            pred[trial, index + 1, 3:7] = normalize_quaternion(pred[trial, index + 1, 3:7])
-    return pred
-
-
 def score_state_method(
     method: str,
     description: str,
@@ -1048,7 +1013,6 @@ def score_state_method(
         implementation_status=implementation_status,
         diverged=diverged,
         x_pred=pred_aligned,
-        y_pred=None,
         **metrics,
     )
 
@@ -1636,49 +1600,6 @@ def run_methods(
         )
     )
 
-    if state_source == "mocap":
-        _scenario, train, _train_x, _train_samples = training_context("6DOF-OEM-MocapOutput")
-        start = time.perf_counter()
-        cpu_start = time.process_time()
-        lag = 3
-        history = []
-        targets = []
-        for trial in range(train.mocap_meas.shape[0]):
-            for index in range(lag - 1, train.mocap_meas.shape[1] - 1):
-                history.append(np.concatenate((train.mocap_meas[trial, index - lag + 1 : index + 1].reshape(-1), train.u_cmd[trial, index], [1.0])))
-                targets.append(train.mocap_meas[trial, index + 1])
-        weights_y = ridge_fit(np.asarray(history)[:, None, :], np.asarray(targets)[:, None, :], ridge)
-        train_elapsed = time.perf_counter() - start
-        train_cpu = time.process_time() - cpu_start
-        rollout_start = time.perf_counter()
-        y_pred = parallel_rollout("mocap_output_lagged_rollout", workers, validation.mocap_meas[:, :lag, :], validation.u_cmd, validation.t, weights_y, lag=lag)
-        rollout_elapsed = time.perf_counter() - rollout_start
-        score, metrics = mocap_score(y_pred, validation.mocap_true)
-        add_result(
-            Result6DOF(
-                method="6DOF-OEM-MocapOutput",
-                description="Lagged affine open-loop predictor on mocap position/quaternion outputs.",
-                backend="numpy-lagged-ridge",
-                state_source=state_source,
-                implementation_status="placeholder",
-                diverged=bool(not np.all(np.isfinite(y_pred)) or np.nanmax(np.abs(y_pred[..., 0:3])) > 1.0e3),
-                validation_score=score,
-                train_elapsed_s=train_elapsed,
-                train_cpu_s=train_cpu,
-                rollout_elapsed_s=rollout_elapsed,
-                total_elapsed_s=train_elapsed + rollout_elapsed,
-                train_samples=len(targets),
-                decision_variables=int(weights_y.size),
-                notes=(
-                    "Scores mocap-output NRMSE because full velocity/rate states are not predicted. "
-                    "The validation rollout is seeded with a three-sample pose history so initial translation rate is observable."
-                ),
-                y_pred=y_pred,
-                x_pred=None,
-                **metrics,
-            )
-        )
-
     if training_scenario_override and "sportcub" in training_scenario_override:
         # Physical grey-box OEM: the spec encodes the Sport Cub airframe, so
         # the method only applies to its real-flight scenarios.
@@ -1879,28 +1800,6 @@ def state_segment_to_web(t: np.ndarray, x: np.ndarray, u_cmd: np.ndarray, name: 
     }
 
 
-def pose_segment_to_web(t: np.ndarray, pose: np.ndarray, u_cmd: np.ndarray, name: str, frame: str) -> dict[str, object]:
-    stride = max(1, int(np.ceil(len(t) / WEB_TRACE_MAX_POINTS)))
-    t = t[::stride]
-    pose = pose[::stride]
-    u_cmd = u_cmd[::stride]
-    if frame == "enu":
-        position = pose[:, 0:3]
-        quat = pose[:, 3:7]
-    else:
-        position = np.column_stack([pose[:, 1], pose[:, 0], -pose[:, 2]])
-        quat = np.asarray([quat_wxyz_from_rotation(NED_TO_ENU @ rotation_body_to_inertial(q)) for q in pose[:, 3:7]])
-    position = position - position[0]
-    return {
-        "name": name,
-        "time_s": np.round(t - t[0], 4).tolist(),
-        "position_enu_m": np.round(position, 5).tolist(),
-        "quaternion_wxyz": np.round(quat, 7).tolist(),
-        "control_meas": np.round(u_cmd[:, [0, 2, 1, 3]], 5).tolist(),
-        "pose_frame": "enu",
-    }
-
-
 def segment_label(validation: Split6DOF, index: int) -> str:
     """Real-flight windows keep their chunk names so the viewer can place
     traces within a flight; synthetic trials keep the generic label."""
@@ -1926,20 +1825,13 @@ def write_method_traces(results: list[Result6DOF], validation: Split6DOF, scenar
     # overlay traces anywhere in a flight; synthetic scenarios keep one.
     segment_limit = validation.u_cmd.shape[0] if not scenario.startswith("aircraft_6dof_") else 1
     for result in selected_results:
-        if result.x_pred is None and result.y_pred is None:
+        if result.x_pred is None:
             continue
-        if result.x_pred is not None:
-            segment_count = min(result.x_pred.shape[0], validation.u_cmd.shape[0], segment_limit)
-            segments = [
-                state_segment_to_web(validation.t, result.x_pred[index], validation.u_cmd[index], segment_label(validation, index))
-                for index in range(segment_count)
-            ]
-        else:
-            segment_count = min(result.y_pred.shape[0], validation.u_cmd.shape[0], segment_limit)
-            segments = [
-                pose_segment_to_web(validation.t, result.y_pred[index], validation.u_cmd[index], segment_label(validation, index), validation.mocap_frame)
-                for index in range(segment_count)
-            ]
+        segment_count = min(result.x_pred.shape[0], validation.u_cmd.shape[0], segment_limit)
+        segments = [
+            state_segment_to_web(validation.t, result.x_pred[index], validation.u_cmd[index], segment_label(validation, index))
+            for index in range(segment_count)
+        ]
         traces.append(
             {
                 "method": result.method,
@@ -2294,7 +2186,7 @@ def write_manifest(datasets: list[Path], rows: list[dict[str, object]], output: 
         "training_scenarios": sorted({str(row.get("training_scenario", "")) for row in rows}),
         "methods": sorted({str(row["method"]) for row in rows}),
         "state_sources": sorted({str(row["state_source"]) for row in rows}),
-        "metric": "Validation score is full-state mean NRMSE for state predictors and mocap-output NRMSE for 6DOF-OEM-MocapOutput.",
+        "metric": "Validation score is full-state mean NRMSE over open-loop rollouts.",
         "result_rows": len(rows),
     }
     output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
