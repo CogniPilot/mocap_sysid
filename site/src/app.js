@@ -1144,15 +1144,38 @@ function refreshAircraftInstance(instance) {
       if (!mesh && node.isMesh) mesh = node;
     });
     if (!mesh) continue;
-    mesh.geometry.computeBoundingBox();
-    const size = mesh.geometry.boundingBox.getSize(new THREE.Vector3());
-    const axisLocal = new THREE.Vector3(
-      size.x >= size.y && size.x >= size.z ? 1 : 0,
-      size.y > size.x && size.y >= size.z ? 1 : 0,
-      size.z > size.x && size.z >= size.y ? 1 : 0,
-    );
-    // Geometry axis -> pivot frame through the mesh's local transform.
-    const axis = axisLocal.applyQuaternion(mesh.quaternion).normalize();
+    // The aileron is tapered, so its bounding-box long axis is skewed off
+    // the hinge line. The pivot empty sits ON the hinge, so the hinge-edge
+    // vertices are those closest to the pivot origin in the cross-hinge
+    // plane: bin the vertices spanwise, take each bin's nearest-the-origin
+    // vertex, and fit the hinge direction through those edge points.
+    mesh.updateMatrix();
+    const posAttr = mesh.geometry.getAttribute("position");
+    const pts = [];
+    for (let i = 0; i < posAttr.count; i++) {
+      pts.push(new THREE.Vector3(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i)).applyMatrix4(mesh.matrix));
+    }
+    const bb = new THREE.Box3().setFromPoints(pts);
+    const ext = bb.getSize(new THREE.Vector3());
+    const spanDim = ext.x >= ext.y && ext.x >= ext.z ? "x" : ext.y >= ext.z ? "y" : "z";
+    const others = ["x", "y", "z"].filter((d) => d !== spanDim);
+    const bins = 8;
+    const lo = bb.min[spanDim];
+    const step = Math.max(ext[spanDim] / bins, 1e-9);
+    const best = new Array(bins).fill(null);
+    for (const point of pts) {
+      const bin = Math.min(bins - 1, Math.max(0, Math.floor((point[spanDim] - lo) / step)));
+      const cross = point[others[0]] ** 2 + point[others[1]] ** 2;
+      if (!best[bin] || cross < best[bin].cross) best[bin] = { point, cross };
+    }
+    const edge = best.filter(Boolean).map((b) => b.point);
+    let axis;
+    if (edge.length >= 2) {
+      axis = edge[edge.length - 1].clone().sub(edge[0]).normalize();
+    } else {
+      const axisLocal = new THREE.Vector3(spanDim === "x" ? 1 : 0, spanDim === "y" ? 1 : 0, spanDim === "z" ? 1 : 0);
+      axis = axisLocal;
+    }
     // Sign convention must mirror across the wings: align both hinge axes to
     // the same WORLD spanwise direction (a local-Z test cannot see a mirrored
     // pivot, which made the right aileron deflect backwards).
