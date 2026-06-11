@@ -664,6 +664,19 @@ def savgol_derivative(x: np.ndarray, dt: float, window_s: float = 0.05) -> np.nd
     return savgol_filter(x, window_length=window, polyorder=2, deriv=1, delta=dt, axis=1)
 
 
+def kinematic_step(state: np.ndarray, dyn_next: np.ndarray, dt: float) -> np.ndarray:
+    """Advance position exactly from the current attitude and body velocity.
+
+    Generic surrogates predict only the ten dynamic states: a learned
+    position update is unconstrained by the velocity clamp and lets a bad
+    fit translate arbitrarily fast, while the kinematic relation
+    p[k+1] = p[k] + R(q) v dt bounds travel by the velocity state.
+    """
+    quat = normalize_quaternion(state[6:10])
+    pos = state[0:3] + rotation_body_to_inertial(quat) @ state[3:6] * dt
+    return normalize_state(np.concatenate((pos, dyn_next)))
+
+
 def derivative_rollout(
     initial: np.ndarray,
     u: np.ndarray,
@@ -681,7 +694,8 @@ def derivative_rollout(
         pred[trial, 0] = normalize_state(pred[trial, 0])
         for index in range(len(t) - 1):
             phi = poly_features(pred[trial, index][None, :], u[trial, index][None, :], degree=degree)[0]
-            pred[trial, index + 1] = normalize_state(pred[trial, index] + dt * apply_standardized(phi, weights, mean, scale))
+            delta = apply_standardized(phi, weights, mean, scale)
+            pred[trial, index + 1] = kinematic_step(pred[trial, index], pred[trial, index, 3:] + dt * delta, dt)
     return pred
 
 
@@ -697,11 +711,13 @@ def one_step_rollout(
 ) -> np.ndarray:
     pred = np.zeros((u.shape[0], len(t), len(STATE_NAMES)))
     pred[:, 0, :] = initial
+    dt = float(np.median(np.diff(t)))
     for trial in range(u.shape[0]):
         pred[trial, 0] = normalize_state(pred[trial, 0])
         for index in range(len(t) - 1):
             phi = poly_features(pred[trial, index][None, :], u[trial, index][None, :], degree=degree)[0]
-            pred[trial, index + 1] = normalize_state(pred[trial, index] + apply_standardized(phi, weights, mean, scale))
+            delta = apply_standardized(phi, weights, mean, scale)
+            pred[trial, index + 1] = kinematic_step(pred[trial, index], pred[trial, index, 3:] + delta, dt)
     return pred
 
 
@@ -725,7 +741,7 @@ def residual_feature_rollout(
         for index in range(len(t) - 1):
             base = nominal_rk4_step(pred[trial, index], u[trial, index], dt, cfg)
             phi = poly_features(pred[trial, index][None, :], u[trial, index][None, :], degree=degree)[0]
-            pred[trial, index + 1] = normalize_state(base + apply_standardized(phi, weights, mean, scale))
+            pred[trial, index + 1] = normalize_state(np.concatenate((base[0:3], base[3:] + apply_standardized(phi, weights, mean, scale))))
     return pred
 
 
@@ -836,7 +852,7 @@ def rbf_residual_rollout(
             base = nominal_rk4_step(pred[trial, index], u[trial, index], dt, cfg)
             z = np.concatenate((pred[trial, index, 3:], u[trial, index]))[None, :]
             phi = np.concatenate((rbf_features(z, centers, length_scale), np.ones((1, 1))), axis=1)[0]
-            pred[trial, index + 1] = normalize_state(base + phi @ weights)
+            pred[trial, index + 1] = normalize_state(np.concatenate((base[0:3], base[3:] + phi @ weights)))
     return pred
 
 
@@ -865,7 +881,7 @@ def nn_residual_rollout(
                 ),
                 axis=1,
             )[0]
-            pred[trial, index + 1] = normalize_state(base + phi_now @ weights)
+            pred[trial, index + 1] = normalize_state(np.concatenate((base[0:3], base[3:] + phi_now @ weights)))
     return pred
 
 
@@ -876,7 +892,8 @@ def lagged_rollout(initial: np.ndarray, u: np.ndarray, t: np.ndarray, weights: n
         for index in range(lag - 1, len(t) - 1):
             history = pred[trial, index - lag + 1 : index + 1, 3:].reshape(-1)
             phi = np.concatenate((history, u[trial, index], [1.0]))
-            pred[trial, index + 1] = normalize_state(pred[trial, index] + phi @ weights)
+            dt = float(np.median(np.diff(t)))
+            pred[trial, index + 1] = kinematic_step(pred[trial, index], pred[trial, index, 3:] + phi @ weights, dt)
     return pred
 
 
@@ -1325,7 +1342,7 @@ def run_methods(
     start = time.perf_counter()
     cpu_start = time.process_time()
     phi = linear_features(fit_x, fit_u)
-    weights_deriv, mean_deriv, scale_deriv = fit_standardized_ridge(phi, fit_dxdt, ridge)
+    weights_deriv, mean_deriv, scale_deriv = fit_standardized_ridge(phi, fit_dxdt[:, 3:], ridge)
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
@@ -1354,7 +1371,7 @@ def run_methods(
     var_xk = smoothed_x[:, :-1, :].reshape(-1, len(STATE_NAMES))[fit_idx_poly]
     var_uk = train.u_cmd[:, :-1, :].reshape(-1, len(INPUT_NAMES))[fit_idx_poly]
     var_dxdt = ((smoothed_x[:, 1:, :] - smoothed_x[:, :-1, :]) / train.dt).reshape(-1, len(STATE_NAMES))[fit_idx_poly]
-    weights_var, mean_var, scale_var = fit_standardized_ridge(linear_features(var_xk, var_uk), var_dxdt, 10.0 * ridge)
+    weights_var, mean_var, scale_var = fit_standardized_ridge(linear_features(var_xk, var_uk), var_dxdt[:, 3:], 10.0 * ridge)
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
@@ -1382,7 +1399,7 @@ def run_methods(
     cpu_start = time.process_time()
     phi_poly = poly_features(fit_x, fit_u, degree=2)
     weights_sindy, mean_sindy, scale_sindy = stlsq_fit(
-        phi_poly, fit_dxdt, 10.0 * ridge, fraction=0.06, protected=1 + len(STATE_NAMES) - 3 + len(INPUT_NAMES)
+        phi_poly, fit_dxdt[:, 3:], 10.0 * ridge, fraction=0.06, protected=1 + len(STATE_NAMES) - 3 + len(INPUT_NAMES)
     )
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
@@ -1408,7 +1425,7 @@ def run_methods(
 
     start = time.perf_counter()
     cpu_start = time.process_time()
-    weights_symbolic, mean_symbolic, scale_symbolic = fit_standardized_ridge(phi_poly, fit_xkp1 - fit_x, ridge)
+    weights_symbolic, mean_symbolic, scale_symbolic = fit_standardized_ridge(phi_poly, (fit_xkp1 - fit_x)[:, 3:], ridge)
     weights_symbolic = sparsify_weights(weights_symbolic, fraction=0.12, protected=1 + len(STATE_NAMES) - 3 + len(INPUT_NAMES))
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
@@ -1435,7 +1452,7 @@ def run_methods(
 
     start = time.perf_counter()
     cpu_start = time.process_time()
-    weights_edmd, mean_edmd, scale_edmd = fit_standardized_ridge(phi_poly, fit_xkp1 - fit_x, 100.0 * ridge)
+    weights_edmd, mean_edmd, scale_edmd = fit_standardized_ridge(phi_poly, (fit_xkp1 - fit_x)[:, 3:], 100.0 * ridge)
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
@@ -1463,7 +1480,7 @@ def run_methods(
     cpu_start = time.process_time()
     residual = xkp1 - nominal_next
     fit_residual = residual.reshape(-1, len(STATE_NAMES))[fit_idx_poly]
-    weights_ude, mean_ude, scale_ude = fit_standardized_ridge(phi_poly, fit_residual, 10.0 * ridge)
+    weights_ude, mean_ude, scale_ude = fit_standardized_ridge(phi_poly, fit_residual[:, 3:], 10.0 * ridge)
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
@@ -1522,7 +1539,7 @@ def run_methods(
     for trial in range(train_x.shape[0]):
         for index in range(lag - 1, train_x.shape[1] - 1):
             history.append(np.concatenate((train_x[trial, index - lag + 1 : index + 1, 3:].reshape(-1), train.u_cmd[trial, index], [1.0])))
-            targets.append(train_x[trial, index + 1] - train_x[trial, index])
+            targets.append(train_x[trial, index + 1, 3:] - train_x[trial, index, 3:])
     weights_hankel = ridge_fit(np.asarray(history)[:, None, :], np.asarray(targets)[:, None, :], ridge)
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
@@ -1566,7 +1583,7 @@ def run_methods(
     length_scale = np.std(z[fit_idx], axis=0)
     length_scale = np.where(length_scale > 1e-6, length_scale, 1.0)
     phi_rbf = np.concatenate((rbf_features(z[fit_idx], centers, length_scale), np.ones((fit_count, 1))), axis=1)
-    weights_rbf = np.linalg.solve(phi_rbf.T @ phi_rbf + 1e-4 * np.eye(phi_rbf.shape[1]), phi_rbf.T @ target_res[fit_idx])
+    weights_rbf = np.linalg.solve(phi_rbf.T @ phi_rbf + 1e-4 * np.eye(phi_rbf.shape[1]), phi_rbf.T @ target_res[fit_idx][:, 3:])
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
@@ -1594,7 +1611,7 @@ def run_methods(
     nn_count = min(128, fit_count)
     nn_centers = centers[:nn_count]
     nn_phi = np.concatenate((rbf_features(z[fit_idx], nn_centers, length_scale), linear_features(xk.reshape(-1, len(STATE_NAMES))[fit_idx], uk.reshape(-1, len(INPUT_NAMES))[fit_idx])), axis=1)
-    weights_nn = np.linalg.solve(nn_phi.T @ nn_phi + 1e-4 * np.eye(nn_phi.shape[1]), nn_phi.T @ target_res[fit_idx])
+    weights_nn = np.linalg.solve(nn_phi.T @ nn_phi + 1e-4 * np.eye(nn_phi.shape[1]), nn_phi.T @ target_res[fit_idx][:, 3:])
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
 

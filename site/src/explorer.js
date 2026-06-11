@@ -352,6 +352,14 @@ function applyStandardizedJS(phi, spec) {
   return out;
 }
 
+// Generic surrogates predict only the ten dynamic states; position advances
+// kinematically so travel is bounded by the (clamped) velocity state.
+function kinematicStepJS(x, dyn, dt) {
+  const quat = normQuat([x[6], x[7], x[8], x[9]]);
+  const step = matVec(rotationBodyToInertial(quat), [x[3], x[4], x[5]]);
+  return postStep([x[0] + step[0] * dt, x[1] + step[1] * dt, x[2] + step[2] * dt, ...dyn]);
+}
+
 function makeSurrogateStepper(spec, dt, cfg) {
   if (spec.kind === "hankel") {
     // Lagged ARX on position-free state history, increment-integrated. The
@@ -364,13 +372,13 @@ function makeSurrogateStepper(spec, dt, cfg) {
       const phi = [];
       for (const h of hist) phi.push(...h.slice(3));
       phi.push(...u, 1);
-      const delta = new Array(x.length).fill(0);
+      const delta = new Array(10).fill(0);
       for (let i = 0; i < phi.length; i++) {
         if (phi[i] === 0) continue;
         const row = spec.weights[i];
         for (let j = 0; j < delta.length; j++) delta[j] += phi[i] * row[j];
       }
-      const next = postStep(x.map((v, j) => v + delta[j]));
+      const next = kinematicStepJS(x, delta.map((d, j) => x[3 + j] + d), dt);
       hist = [...hist.slice(1), next];
       last = next;
       return next;
@@ -389,19 +397,19 @@ function makeSurrogateStepper(spec, dt, cfg) {
         return Math.exp(-0.5 * d2);
       });
       phi.push(1);
-      const out = new Array(x.length).fill(0);
+      const out = new Array(10).fill(0);
       for (let i = 0; i < phi.length; i++) {
         const row = spec.weights[i];
         for (let j = 0; j < out.length; j++) out[j] += phi[i] * row[j];
       }
-      return postStep(base.map((v, j) => v + out[j]));
+      return postStep(base.map((v, j) => (j < 3 ? v : v + out[j - 3])));
     };
   }
   return (x, u) => {
     const phi = spec.degree === 1 ? linearFeaturesJS(x, u) : polyFeaturesJS(x, u);
     const delta = applyStandardizedJS(phi, spec);
-    if (spec.kind === "derivative") return postStep(x.map((v, j) => v + dt * delta[j]));
-    return postStep(x.map((v, j) => v + delta[j]));
+    const gain = spec.kind === "derivative" ? dt : 1;
+    return kinematicStepJS(x, delta.map((d, j) => x[3 + j] + gain * d), dt);
   };
 }
 
@@ -552,6 +560,73 @@ function safeScoreNote() {
   const scores = ex.data?.models?.safe_scores;
   if (!scores || scores.validation_pos_err_5s_m == null) return "";
   return ` (currently ${scores.validation_pos_err_5s_m.toFixed(1)} m mean over ${scores.validation_windows} held-out windows)`;
+}
+
+const FEATURE_STATE_NAMES = ["u", "v", "w", "qw", "qx", "qy", "qz", "p", "q", "r"];
+const STICK_NAMES = ["thr", "elev", "ail", "rud"];
+const DYN_TARGET_NAMES = ["u\u0307", "v\u0307", "w\u0307", "q\u0307w", "q\u0307x", "q\u0307y", "q\u0307z", "p\u0307", "q\u0307", "r\u0307"];
+
+function polyFeatureNames() {
+  const z = [...FEATURE_STATE_NAMES, ...STICK_NAMES];
+  const names = ["1", ...z];
+  for (let i = 0; i < z.length; i++) for (let j = i; j < z.length; j++) names.push(`${z[i]}\u00b7${z[j]}`);
+  return names;
+}
+
+function renderModelInspector() {
+  const grid = document.querySelector("#models-grid");
+  if (!grid || !ex.data) return;
+  grid.innerHTML = "";
+  const card = (title, sub, bodyHtml) => {
+    const el = document.createElement("div");
+    el.className = "model-card";
+    el.innerHTML = `<h3>${title}</h3><p>${sub}</p>${bodyHtml}`;
+    grid.append(el);
+  };
+  const m = ex.data.models;
+  // Grey-box: full physical parameter table.
+  const gb = m.greybox;
+  if (gb) {
+    const rows = gb.parameter_names.map((n, i) => `<tr><td>${n}</td><td>${gb.parameters[i].toPrecision(4)}</td></tr>`).join("");
+    const fixed = Object.entries(gb.fixed_parameters).map(([k, v]) => `${k}=${v}`).join(", ");
+    card("GreyBoxOEM", "22 physical aerodynamic coefficients, segment-wise output error",
+      `<table class="model-table"><tbody>${rows}</tbody></table><p class="model-note">fixed: ${fixed}; max deflection ${Object.entries(gb.max_deflection_deg).map(([k,v])=>`${k} ${v}\u00b0`).join(", ")}</p>`);
+  }
+  // SAFE closed loop.
+  if (m.safe_invariant_weights) {
+    const sc = m.safe_scores || {};
+    card("SAFE closed loop (stabilized handoff)", "heading/position-invariant ridge: [u,v,w,\u03c6,\u03b8,p,q,r,stick,1] \u2192 next dynamics + \u0394\u03c8",
+      `<p class="model-note">weights 13\u00d79 \u00b7 ${sc.train_samples ?? "?"} train samples \u00b7 held-out 5 s position error ${sc.validation_pos_err_5s_m ?? "?"} m over ${sc.validation_windows ?? "?"} windows</p>`);
+  }
+  // Affine baselines.
+  if (m.linear_weights) card("LinearSS", "one-step affine map x[k+1] = W\u1d40[x,u,1]", `<p class="model-note">weights ${m.linear_weights.length}\u00d7${m.linear_weights[0].length}</p>`);
+  if (m.residual_weights) card("RidgeResidual", "attached-flow nominal RK4 + affine one-step residual", `<p class="model-note">weights ${m.residual_weights.length}\u00d7${m.residual_weights[0].length}</p>`);
+  // Surrogates with top terms where sparse structure exists.
+  const featureNames = polyFeatureNames();
+  for (const [name, spec] of Object.entries(m.surrogates || {})) {
+    const short = name.replace("6DOF-", "");
+    if (spec.kind === "hankel") {
+      card(short, `lag-${spec.lag} position-free ARX, increment-integrated`, `<p class="model-note">weights ${spec.weights.length}\u00d7${spec.weights[0].length}</p>`);
+      continue;
+    }
+    if (spec.kind === "rbf_residual") {
+      card(short, "kernel residual around the nominal model", `<p class="model-note">${spec.centers.length} RBF centers \u00b7 weights ${spec.weights.length}\u00d7${spec.weights[0].length}</p>`);
+      continue;
+    }
+    const names = spec.degree === 1 ? [...FEATURE_STATE_NAMES, ...STICK_NAMES, "1"] : featureNames;
+    const terms = [];
+    for (let j = 0; j < spec.weights[0].length; j++) {
+      let best = 0, bi = -1;
+      for (let i = 0; i < spec.weights.length; i++) {
+        const v = Math.abs(spec.weights[i][j]);
+        if (v > best) { best = v; bi = i; }
+      }
+      if (bi >= 0) terms.push(`${DYN_TARGET_NAMES[j]} \u2190 ${names[bi]}`);
+    }
+    const nnz = spec.weights.flat().filter((v) => v !== 0).length;
+    card(short, `${spec.kind === "derivative" ? "derivative" : "one-step increment"} model, ${spec.degree === 1 ? "linear" : "quadratic"} features`,
+      `<p class="model-note">${nnz} nonzero of ${spec.weights.length * spec.weights[0].length} coefficients \u00b7 dominant standardized term per output:</p><p class="model-terms">${terms.join(" \u00b7 ")}</p>`);
+  }
 }
 
 function renderSplitsView() {
@@ -795,6 +870,7 @@ export async function initExplorer() {
   bind();
   renderAll();
   renderSplitsView();
+  renderModelInspector();
   // Handshake with the playback module: announce the full-flight view and
   // retry until acknowledged, so no module load order or transient error can
   // leave the 3D viewer on the benchmark-window view.

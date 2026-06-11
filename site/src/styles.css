@@ -1033,3 +1033,52 @@ svg text {
   border-right: 5px solid transparent;
   border-top: 7px solid #cbd5e1;
 }
+
+/* Model inspector */
+.models-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.model-card {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #1a1f24;
+}
+
+.model-card h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.model-card > p {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.model-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.model-table td {
+  padding: 1px 6px;
+  border-bottom: 1px solid #262b31;
+}
+
+.model-table td:last-child {
+  text-align: right;
+}
+
+.model-note,
+.model-terms {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
