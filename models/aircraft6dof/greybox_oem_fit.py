@@ -40,6 +40,12 @@ from .greybox import (
     wrap_angle_np,
 )
 
+LAG_PARAMETERS = ("TAUS", "TAUM", "KB")
+# The production fit uses the 22 aerodynamic parameters; the lag/battery
+# extension is gated out (see the paper) and its parameters are excluded so
+# their zero-gradient columns cannot poison the covariance.
+GREYBOX_FIT_NAMES = tuple(n for n in SPORTCUB_PARAMETER_NAMES if n not in LAG_PARAMETERS)
+
 TRAIN_DEFAULT = Path("data/sportcub_mocap_5_22_26_train.npz")
 VALIDATION_DEFAULT = Path("data/sportcub_mocap_5_22_26_validation.npz")
 MODEL_RATE_HZ = 60.0
@@ -118,26 +124,52 @@ def fit_greybox(x_quat: np.ndarray, u_cmd: np.ndarray, dt: float, max_nfev: int 
     _dynamics, rk4 = build_casadi_dynamics(spec, dt * stride)
     sigma = np.asarray(spec.output_sigma)
 
-    setup = spec.default_parameter_setup()
+    setup = [row for row in spec.default_parameter_setup() if row[0] in GREYBOX_FIT_NAMES]
     lower = np.array([row[1] for row in setup])
     theta0 = np.array([row[2] for row in setup])
     upper = np.array([row[3] for row in setup])
 
+    def full_vector(theta: np.ndarray) -> np.ndarray:
+        values = dict(zip(GREYBOX_FIT_NAMES, theta))
+        for name in LAG_PARAMETERS:
+            values[name] = spec.default_parameter_bounds[name].initial
+        return spec.full_parameter_vector(np.array([values[n] for n in SPORTCUB_PARAMETER_NAMES]))
+
     def residual(theta: np.ndarray) -> np.ndarray:
-        full = spec.full_parameter_vector(theta)
-        pred = chunk_rollouts(rk4, full, x_train, u_train, stride)
+        pred = chunk_rollouts(rk4, full_vector(theta), x_train, u_train, stride)
         return output_residuals(pred, x_train, stride, sigma)
 
     fit = least_squares(residual, theta0, bounds=(lower, upper), max_nfev=max_nfev, verbose=1)
     theta = fit.x
-    full = spec.full_parameter_vector(theta)
+    full = full_vector(theta)
+    # Cramer-Rao bounds and parameter correlations from the Jacobian at the
+    # solution (residual coloring uncorrected: optimistic lower bounds).
+    jac = fit.jac
+    dof = max(jac.shape[0] - jac.shape[1], 1)
+    s2 = 2.0 * fit.cost / dof
+    cr_std = np.full(len(theta), np.nan)
+    couplings: list[dict[str, object]] = []
+    try:
+        cov = s2 * np.linalg.inv(jac.T @ jac + 1e-12 * np.eye(jac.shape[1]))
+        cr_std = np.sqrt(np.maximum(np.diag(cov), 0.0))
+        corr = cov / np.outer(cr_std, cr_std)
+        for i in range(len(theta)):
+            for j in range(i + 1, len(theta)):
+                if abs(corr[i, j]) > 0.9:
+                    couplings.append({"a": GREYBOX_FIT_NAMES[i], "b": GREYBOX_FIT_NAMES[j], "r": float(corr[i, j])})
+        couplings.sort(key=lambda d: -abs(d["r"]))
+    except np.linalg.LinAlgError:
+        pass
     return {
         "spec": spec,
+        "parameter_names": list(GREYBOX_FIT_NAMES),
         "theta": theta,
         "theta_full": full,
+        "cr_std": cr_std,
+        "couplings": couplings,
         "lower": lower,
         "upper": upper,
-        "train_nrmse_initial": rollout_nrmse(rk4, spec.full_parameter_vector(theta0), x_train, u_train, stride),
+        "train_nrmse_initial": rollout_nrmse(rk4, full_vector(theta0), x_train, u_train, stride),
         "train_nrmse": rollout_nrmse(rk4, full, x_train, u_train, stride),
         "model_rate_hz": 1.0 / (dt * stride),
         "cost": float(fit.cost),
@@ -292,7 +324,7 @@ def main() -> int:
     for name, value in scores.items():
         print(f"  {name}: {value:.4f}")
     at_bounds = []
-    for name, value, lo, hi in zip(SPORTCUB_PARAMETER_NAMES, theta, fit["lower"], fit["upper"]):
+    for name, value, lo, hi in zip(GREYBOX_FIT_NAMES, theta, fit["lower"], fit["upper"]):
         # Within 1% of the box span counts as pinned: TRF stops just inside.
         pinned = min(value - lo, hi - value) < 0.01 * (hi - lo)
         if pinned:
@@ -304,7 +336,7 @@ def main() -> int:
     args.results_dir.mkdir(parents=True, exist_ok=True)
     output = args.results_dir / "sportcub_greybox_params.json"
     output.write_text(json.dumps({
-        "parameter_names": list(SPORTCUB_PARAMETER_NAMES),
+        "parameter_names": list(GREYBOX_FIT_NAMES),
         "parameters": [float(v) for v in theta],
         "fixed_parameters": spec.fixed_parameters,
         "max_deflection_deg": spec.max_deflection_deg,

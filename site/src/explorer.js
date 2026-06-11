@@ -664,14 +664,24 @@ function renderModelInspector() {
       const gb = m.greybox;
       const groups = [["lift/drag/side", 0, 6], ["roll", 6, 12], ["pitch", 12, 16], ["yaw", 16, 22]];
       const tables = groups.map(([label, a, b]) => {
-        const rows = gb.parameter_names.slice(a, b).map((n, i) => `<tr><td>${n}</td><td>${gb.parameters[a + i].toPrecision(4)}</td></tr>`).join("");
+        const rows = gb.parameter_names.slice(a, b).map((n, i) => {
+          const v = gb.parameters[a + i];
+          const sd = gb.cr_std ? gb.cr_std[a + i] : null;
+          const rel = sd != null && Math.abs(v) > 1e-9 ? (100 * sd) / Math.abs(v) : null;
+          const flag = rel != null && rel > 100 ? " \u26a0 unidentifiable" : rel != null && rel > 25 ? " \u26a0 weak" : "";
+          const pm = sd != null ? ` \u00b1 ${sd.toPrecision(2)}` : "";
+          return `<tr><td>${n}${flag}</td><td>${v.toPrecision(4)}${pm}</td></tr>`;
+        }).join("");
         return `<div><p class="model-note">${label}</p><table class="model-table"><tbody>${rows}</tbody></table></div>`;
       }).join("");
+      const couplings = (gb.couplings || []).map((c) => `${c.a}\u2194${c.b} (r=${c.r.toFixed(2)})`).join(", ");
       const fixed = Object.entries(gb.fixed_parameters).map(([k, v]) => `${k}=${v}`).join(", ");
       return `<p class="model-note">22 physical aerodynamic coefficients identified by segment-wise output error on the manual training chunks; the same parameters integrate in the browser.</p>
         <div class="model-columns">${tables}</div>
         <p class="model-note">fixed: ${fixed}</p>
-        <p class="model-note">surface throws: ${Object.entries(gb.max_deflection_deg).map(([k, v]) => `${k} ${v}\u00b0`).join(", ")}</p>`;
+        <p class="model-note">surface throws: ${Object.entries(gb.max_deflection_deg).map(([k, v]) => `${k} ${v}\u00b0`).join(", ")}</p>
+        ${couplings ? `<p class="model-note">strongly coupled pairs (|r|&gt;0.9): ${couplings}</p>` : ""}
+        ${gb.uncertainty_note ? `<p class="model-note">${gb.uncertainty_note}</p>` : ""}`;
     }]);
   }
   if (m.safe_invariant_weights) {
