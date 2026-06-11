@@ -2690,12 +2690,24 @@ position-invariant state: $[u,v,w,\phi,\theta,p,q,r,\mathrm{stick},1]
 heading integrates the fitted increment and position integrates
 $R(q)\mathbf v$ exactly (a raw-state affine fit cannot represent
 heading-dependent position kinematics: 8.3\,m $\rightarrow$ 2.9\,m at 5\,s
-from this change alone). Stabilized spans are cut into ten-second windows,
-round-robin per flight, every third held out; the autonomous flight is
-excluded (its lateral commands bypass the recorded sticks --- the rudder
-channel is constant while the aircraft banks).
-\paragraph{Results.} Held-out five-second free-run position error 3.4\,m
-over 11 windows (52k training samples); free runs fly complete laps. The
+from this change alone). After the one-step ridge fit, the same
+13$\times$9 weights are re-optimized against one-second free-run shooting
+residuals over the training windows (simulation-error minimization):
+one-step regression on noisy states carries an attenuation bias that
+compounds over a 1{,}200-step rollout, and the multi-step objective removes
+it with no structure change. Stabilized spans are cut into ten-second
+windows, round-robin per flight, every third held out; the autonomous
+flight is excluded (its lateral commands bypass the recorded sticks --- the
+rudder channel is constant while the aircraft banks).
+\paragraph{Results.} Held-out five-second free-run position error 2.98\,m
+over 11 windows (52k training samples; 3.41\,m before the simulation-error
+refinement, against a 21.9\,m naive constant-turn baseline); free runs fly
+complete laps. Envelope-protection saturation was hypothesized to dominate
+the residual error and tested: one-step residuals are 74\% higher near
+command saturation, but only $\sim$4\% of stabilized samples are affected
+and a Hammerstein extension (fitted command scale and envelope saturation
+ahead of the linear loop) improved the held-out error by only 3\%, so the
+linear structure is retained and the finding is recorded here. The
 fitted weights read as physics in the model inspector:
 $\dot\phi\approx1.00\,p$, $\dot u\approx14.2-11.5\,\theta$ (thrust trim and
 the $-g\theta$ gravity coupling), and $\dot p\approx-25\,\phi$ exposing the
