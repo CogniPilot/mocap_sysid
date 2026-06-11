@@ -2708,6 +2708,20 @@ command saturation, but only $\sim$4\% of stabilized samples are affected
 and a Hammerstein extension (fitted command scale and envelope saturation
 ahead of the linear loop) improved the held-out error by only 3\%, so the
 linear structure is retained and the finding is recorded here. The
+manufacturer's manual clarifies the mechanism: the SAFE unit (gyro and
+accelerometer only, no airspeed sensor) limits pitch and roll angles and
+self-levels on stick release (the switch has three positions ---
+self-leveling, envelope-only, and manual --- of which the recordings use
+only the two extremes; the recorded mode channel is strictly bimodal at
+1000/2000\,$\mu$s and the converter now refuses sessions that use the
+middle position), so the pilot-perceived low-airspeed
+unresponsiveness is not a control-law gate but an authority contest ---
+the self-leveling loop holds wings level with full servo authority while
+the clipped bank command acts through collapsing dynamic pressure. A
+speed-gated aileron-authority feature was tested accordingly and rejected
+(held-out error worsened, 2.98\,m $\rightarrow$ 3.03--3.11\,m), and the
+measured stick-to-roll coupling collapse below $\approx$4.5\,m/s is
+explained by the same mechanism. The
 fitted weights read as physics in the model inspector:
 $\dot\phi\approx1.00\,p$, $\dot u\approx14.2-11.5\,\theta$ (thrust trim and
 the $-g\theta$ gravity coupling), and $\dot p\approx-25\,\phi$ exposing the
