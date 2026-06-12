@@ -50,14 +50,23 @@ from .greybox import (
 )
 from .greybox_oem_fit import OEM_CONTROL_ORDER, euler_states_to_quat, fit_greybox, quat_states_to_euler
 from .safe_controller import fit_safe_controller, safe_controller
+from .segmentation import (
+    GROUND_ALTITUDE_M,
+    STABILIZED_MIN_WINDOW_S,
+    GROUND_EFFECT_ALTITUDE_M,
+    LABELS,
+    STABILIZED_VALIDATION_PERIOD,
+    euler_from_quat_array,
+    is_autonomous,
+    sample_labels,
+    stabilized_windows,
+)
 
 FLIGHTS_DEFAULT = Path("data/sportcub_mocap_5_22_26_flights.npz")
 TRAIN_DEFAULT = Path("data/sportcub_mocap_5_22_26_train.npz")
 VALIDATION_DEFAULT = Path("data/sportcub_mocap_5_22_26_validation.npz")
 OUTPUT_DEFAULT = ROOT / "site" / "public" / "data" / "flight_explorer.json"
 
-GROUND_ALTITUDE_M = 0.5
-GROUND_EFFECT_ALTITUDE_M = 0.65
 DISPLAY_RATE_HZ = 10.0  # browser display rate; stride derived from the data rate
 RIDGE = 1e-5
 # 6DOF-Nominal is omitted: it is the synthetic benchmark's truth-minus-residual
@@ -75,27 +84,6 @@ METHODS = (
     "6DOF-GP-RBF",
 )
 HANKEL_LAG = 3
-LABELS = ("ground", "ground_effect", "stabilized", "manual")
-
-
-def sample_labels(x: np.ndarray, mode: np.ndarray) -> np.ndarray:
-    """Per-sample segmentation label index into LABELS."""
-    altitude = -x[:, 2]
-    airborne = np.zeros(len(x), dtype=bool)
-    state = altitude[0] > GROUND_ALTITUDE_M
-    for k, alt in enumerate(altitude):
-        if state and alt < GROUND_ALTITUDE_M - 0.15:
-            state = False
-        elif not state and alt > GROUND_ALTITUDE_M + 0.15:
-            state = True
-        airborne[k] = state
-    labels = np.zeros(len(x), dtype=np.int8)  # ground
-    labels[airborne & (altitude < GROUND_EFFECT_ALTITUDE_M)] = 1
-    labels[airborne & (altitude >= GROUND_EFFECT_ALTITUDE_M) & (mode == 1)] = 2
-    labels[airborne & (altitude >= GROUND_EFFECT_ALTITUDE_M) & (mode == 0)] = 3
-    # Low-altitude samples keep their controller state distinction when manual.
-    labels[airborne & (altitude < GROUND_EFFECT_ALTITUDE_M) & (mode == 0)] = 1
-    return labels
 
 
 def contiguous_segments(labels: np.ndarray) -> list[tuple[int, int, int]]:
@@ -113,53 +101,6 @@ def euler_array(x: np.ndarray) -> np.ndarray:
 
 def ned_to_enu_pos(pos_ned: np.ndarray) -> np.ndarray:
     return np.column_stack([pos_ned[:, 1], pos_ned[:, 0], -pos_ned[:, 2]])
-
-
-def is_autonomous(name: str) -> bool:
-    """Whether a flight record was flown by the offboard autopilot.
-
-    The autopilot's lateral commands never reach the recorded transmitter
-    channels (the aileron stick barely moves and the rudder is constant while
-    the aircraft banks through laps), so stick-driven identification and
-    prediction are unsound for these records. A stick-variance test cannot
-    separate them from piloted elevator-only flights (the autopilot passes
-    pitch commands through the elevator channel), so the recording name is
-    the authoritative marker.
-    """
-    return name.startswith("auto")
-
-
-def euler_from_quat_array(quat: np.ndarray) -> np.ndarray:
-    q = quat / np.maximum(np.linalg.norm(quat, axis=1, keepdims=True), 1e-12)
-    q0, q1, q2, q3 = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
-    roll = np.arctan2(2 * (q0 * q1 + q2 * q3), 1 - 2 * (q1 * q1 + q2 * q2))
-    pitch = np.arcsin(np.clip(2 * (q0 * q2 - q3 * q1), -1.0, 1.0))
-    yaw = np.arctan2(2 * (q0 * q3 + q1 * q2), 1 - 2 * (q2 * q2 + q3 * q3))
-    return np.column_stack([roll, pitch, yaw])
-
-
-STABILIZED_WINDOW_S = 10.0
-STABILIZED_MIN_WINDOW_S = 5.0
-STABILIZED_VALIDATION_PERIOD = 3  # every third window held out, like manual
-
-
-def stabilized_windows(labels: np.ndarray, tracked: np.ndarray, dt: float) -> list[tuple[int, int]]:
-    """Cut the tracked stabilized spans into fitting/validation windows."""
-    keep = (labels == 2) & tracked
-    edges = np.flatnonzero(np.diff(keep.astype(np.int8)))
-    bounds = [0, *(edges + 1).tolist(), len(keep)]
-    windows: list[tuple[int, int]] = []
-    span = int(round(STABILIZED_WINDOW_S / dt))
-    minimum = int(round(STABILIZED_MIN_WINDOW_S / dt))
-    for left, right in zip(bounds[:-1], bounds[1:]):
-        if not keep[left]:
-            continue
-        start = left
-        while right - start >= minimum:
-            stop = min(start + span, right)
-            windows.append((start, stop))
-            start = stop
-    return windows
 
 
 def train_safe_closed_loop(data: np.lib.npyio.NpzFile) -> tuple[np.ndarray, dict[str, list[dict[str, object]]], dict[str, float]]:
@@ -517,6 +458,28 @@ def load_window_records(paths: dict[str, Path]) -> list[dict[str, object]]:
     return records
 
 
+SAFE_CONTROLLER_CACHE = ROOT / "results" / "sportcub_safe_controller.json"
+
+
+def load_or_fit_safe_controller(args, greybox_fit: dict, safe_weights: np.ndarray) -> dict:
+    """The joint simulation-error fit takes ~10 minutes; reuse the committed
+    result unless asked to refit (the standalone CLI also refreshes it)."""
+    if SAFE_CONTROLLER_CACHE.exists() and not args.refit_controller:
+        print(f"SAFE controller: using cached {SAFE_CONTROLLER_CACHE}")
+        return json.loads(SAFE_CONTROLLER_CACHE.read_text())
+    greybox_payload = {
+        "parameter_names": greybox_fit["parameter_names"],
+        "parameters": greybox_fit["theta"],
+        "cr_std": greybox_fit["cr_std"],
+        "fixed_parameters": greybox_fit["spec"].fixed_parameters,
+        "max_deflection_deg": greybox_fit["spec"].max_deflection_deg,
+    }
+    controller = fit_safe_controller(args.flights, greybox_payload, safe_weights)
+    SAFE_CONTROLLER_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    SAFE_CONTROLLER_CACHE.write_text(json.dumps(controller, indent=2, sort_keys=True) + "\n")
+    return controller
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", choices=["5_22", "4_17"], default="5_22")
@@ -524,6 +487,7 @@ def main() -> int:
     parser.add_argument("--train", type=Path, default=TRAIN_DEFAULT)
     parser.add_argument("--validation", type=Path, default=VALIDATION_DEFAULT)
     parser.add_argument("--output", type=Path, default=OUTPUT_DEFAULT)
+    parser.add_argument("--refit-controller", action="store_true", help="rerun the SAFE controller joint fit instead of reading results/sportcub_safe_controller.json")
     args = parser.parse_args()
     windows_mode = args.dataset == "4_17"
     if windows_mode:
@@ -546,7 +510,8 @@ def main() -> int:
     if not windows_mode:
         safe_weights, safe_membership, safe_scores = train_safe_closed_loop(data)
         safe_step = make_safe_step(safe_weights, dt)
-        gains, _rmse, _count = fit_safe_controller(args.flights)
+        controller = load_or_fit_safe_controller(args, weights["6DOF-GreyBoxOEM"], safe_weights)
+        gains = controller["gains"]
     membership = manual_window_splits({"train": args.train, "validation": args.validation})
 
     if windows_mode:
@@ -664,7 +629,8 @@ def main() -> int:
             "linear_weights": np.round(weights["6DOF-LinearSS"], 6).tolist(),
             "residual_weights": np.round(weights["6DOF-RidgeResidual"], 6).tolist(),
             **({
-                "safe_gains": {axis: np.round(coef, 5).tolist() for axis, coef in gains.items()},
+                "safe_gains": {axis: np.round(np.asarray(coef, dtype=float), 5).tolist() for axis, coef in gains.items()},
+                "safe_controller": {key: controller[key] for key in ("surface_lag_s", "scores", "airframe_corrections", "implied_law") if key in controller},
                 "safe_invariant_weights": np.round(safe_weights, 8).tolist(),
                 "safe_scores": safe_scores,
             } if not windows_mode else {}),

@@ -1422,26 +1422,65 @@ the $-g\theta$ gravity coupling), and $\dot p\approx-25\,\phi$ exposing the
 SAFE self-leveling stiffness.
 
 \subsection{SAFE Controller Grey-Box}
-\paragraph{Approach.} A guessed attitude-command structure with fitted
-gains and saturations: $\delta=K_p(\mathrm{sat}(c\cdot\mathrm{stick},
-\pm\ell)-\mathrm{att})-K_d\cdot\mathrm{rate}+b$ per axis (rudder: stick
-gain, yaw-rate gain, bias).
-\paragraph{Implementation.} Staged grid search over $(c,\ell)$ with Huber
-regression for the gains, fitted from stabilized segments by inverse
-dynamics against the nominal airframe. The law is
-proportional--derivative only --- no integral action --- consistent with
-three observations: the transmitter carries manual elevator trim buttons
-(integral action would make them redundant in stabilized mode), the fitted
-closed-loop residuals show no unexplained slow mode, and attitude
-integrators wind up in exactly the low-authority regime this airframe
-occupies. A ten-second ground test discriminates directly: hold the
-airframe tilted --- a ramping surface deflection indicates integral action,
-a steady deflection pure PD.
-\paragraph{Results.} Retained for interpretability and as the free-run
-fallback; identified against the nominal airframe, which is why its
-composition with each method's airframe currently loses to the direct
-closed-loop fit --- re-identification against the fitted grey-box is the
-planned route to per-method SAFE handoff.
+\paragraph{Approach.} The hidden inner loop is modeled per attitude axis as
+$\delta=K_p(\mathrm{sat}(c\cdot\mathrm{stick},
+\pm\ell)-\mathrm{att})-K_d\cdot\mathrm{rate}+b$ followed by a
+first-order surface lag (rudder: stick gain, yaw-rate gain, bias), and is
+identified against the \emph{fitted} grey-box airframe --- never the nominal
+model, whose control-effectiveness rows are wrong for this airframe.
+Identification is staged. (1) \emph{Structure inference from the
+closed-loop fit}: on the body-rate rows the $3\times3$ surface
+effectiveness of the fitted grey-box is invertible, so the static law
+implied by the identified closed-loop dynamics is recovered exactly from
+$B\,K = A_{\mathrm{cl}}-A$; restricting the feedback to states the
+speed-blind SAFE unit can sense (attitude and rates) attributes the
+remainder of the closed-loop change to stabilized-regime airframe mismatch
+rather than control action. (2) \emph{Effective-surface initialization}:
+inverse dynamics through the fitted moment model recovers per-sample
+deflections --- scalar in $K_{Me}$ for pitch and a coupled $2\times2$
+lateral solve in $(K_{L\delta_a},K_{L\delta_r};K_{N\delta_a},K_{N\delta_r})$,
+because the fitted airframe carries roughly fifty times more roll authority
+in the dihedral/rudder path than in the ailerons, which makes per-axis
+scalar inversion structurally wrong and the recovered aileron channel
+weakly identified. A staged grid over $(c,\ell)$ wraps a Huber regression
+for $(K_p,K_d,b)$. (3) \emph{Joint closed-loop refinement}: the controller
+parameters, surface lags, and corrections to all 22 airframe parameters ---
+each correction penalized in units of its manual-fit Cram\'er--Rao standard
+deviation, a Gaussian prior centered on the manual estimate --- are
+optimized by simulation error over 5\,s rollouts of the composed system on
+the train stabilized windows, the same horizon the validation metric uses.
+The law is proportional--derivative only --- no integral action ---
+consistent with three observations: the transmitter carries manual elevator
+trim buttons (integral action would make them redundant in stabilized
+mode), the fitted closed-loop residuals show no unexplained slow mode, and
+attitude integrators wind up in exactly the low-authority regime this
+airframe occupies. A ten-second ground test discriminates directly: hold
+the airframe tilted --- a ramping surface deflection indicates integral
+action, a steady deflection pure PD.
+\paragraph{Implementation.}
+\texttt{models/aircraft6dof/safe\_controller.py}; vectorized batched RK4
+rollouts of the Euler-state grey-box (verified to machine precision against
+the CasADi reference) make the joint trust-region solve tractable; the
+stabilized window cuts and round-robin train/validation splits are shared
+with the closed-loop fit through
+\texttt{models/aircraft6dof/segmentation.py}, so the composed model and the
+direct fit score on identical held-out windows.
+\paragraph{Results.} The structure inference supports the attitude-command
+PD form but shows that sensed attitude/rate feedback explains only about
+40\% of the rate-row closed-loop change; the rest is regime mismatch
+between the manual-maneuver airframe fit and stabilized-lap flight, which
+no static feedback law can absorb. The composed grey-box+controller
+improves from 16.8\,m (effective-surface staged initialization; the
+previous nominal-airframe identification scored 13.6\,m on the same
+metric) to 10.8\,m held-out 5\,s position error after the joint
+refinement, with an elevator lag near 50\,ms and the aileron channel
+effectively decoupled (consistent with its negligible fitted roll
+authority). The direct closed-loop linear fit remains better (2.98\,m) and
+stays the stabilized-segment prediction model: the gap quantifies the
+closed-loop dynamics that static-feedback composition with a
+manual-regime airframe cannot represent, and is the standing motivation
+for a regime-aware airframe (per-flight thrust scale, stabilized-trim
+corrections) rather than a richer controller.
 
 \subsection{Browser Ports}
 Every exported model has a JavaScript stepper implementing the same
