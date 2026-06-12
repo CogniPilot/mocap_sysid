@@ -1,0 +1,125 @@
+{
+  "ground": {
+    "fixed": {
+      "g": 9.81,
+      "mass": 0.063,
+      "max_thrust_n": 0.32,
+      "thrust_exponent": 1.45
+    },
+    "ground_z": {
+      "auto_rosbag2_2026_05_22-15_03_31": -0.321,
+      "badrosbag2_2026_05_22-15_56_13": 0.09,
+      "elev3211_2026_05_22-15_47_14": -0.288,
+      "elevDoublet_rosbag2_2026_05_22-16_01_17": 0.014,
+      "rosbag2_2026_05_22-15_57_43": 0.039,
+      "trim_2026_05_22-15_43_38": -0.291
+    },
+    "membership": {
+      "auto_rosbag2_2026_05_22-15_03_31": [
+        {
+          "split": "train",
+          "start_s": 0.0,
+          "stop_s": 5.74
+        },
+        {
+          "split": "train",
+          "start_s": 40.73,
+          "stop_s": 50.73
+        },
+        {
+          "split": "validation",
+          "start_s": 50.73,
+          "stop_s": 60.73
+        },
+        {
+          "split": "train",
+          "start_s": 60.73,
+          "stop_s": 69.26
+        }
+      ],
+      "badrosbag2_2026_05_22-15_56_13": [
+        {
+          "split": "train",
+          "start_s": 22.9,
+          "stop_s": 32.9
+        }
+      ],
+      "elev3211_2026_05_22-15_47_14": [
+        {
+          "split": "train",
+          "start_s": 0.0,
+          "stop_s": 10.0
+        },
+        {
+          "split": "train",
+          "start_s": 10.0,
+          "stop_s": 17.39
+        }
+      ],
+      "elevDoublet_rosbag2_2026_05_22-16_01_17": [
+        {
+          "split": "train",
+          "start_s": 150.71,
+          "stop_s": 156.18
+        }
+      ],
+      "rosbag2_2026_05_22-15_57_43": [
+        {
+          "split": "train",
+          "start_s": 0.0,
+          "stop_s": 5.5
+        },
+        {
+          "split": "train",
+          "start_s": 67.52,
+          "stop_s": 77.52
+        },
+        {
+          "split": "validation",
+          "start_s": 91.97,
+          "stop_s": 97.34
+        }
+      ],
+      "trim_2026_05_22-15_43_38": [
+        {
+          "split": "train",
+          "start_s": 0.0,
+          "stop_s": 10.0
+        },
+        {
+          "split": "train",
+          "start_s": 10.0,
+          "stop_s": 15.88
+        },
+        {
+          "split": "validation",
+          "start_s": 96.6,
+          "stop_s": 104.05
+        }
+      ]
+    },
+    "parameters": {
+      "cv": 0.01983,
+      "k0": -0.40665,
+      "kT": 1.18214,
+      "ks": 1.84222,
+      "mu": 0.27816
+    },
+    "scores": {
+      "constant_velocity_baseline_m": 11.445,
+      "ground_pos_err_5s_m": 2.716,
+      "hold_position_baseline_m": 3.421,
+      "train_windows": 11,
+      "validation_windows": 3
+    }
+  },
+  "ground_effect": {
+    "band_samples": 3144,
+    "band_seconds": 13.1,
+    "dCD": 0.0436,
+    "dCD_sem": 0.0026,
+    "dCL": -0.0542,
+    "dCL_sem": 0.002,
+    "note": "Equation-error contrast of in-band force-coefficient residuals against the airborne-manual reference. The band is dominated by rotation/flare maneuvers, so the recovered lift deficit / drag excess reflects those high-alpha transitions rather than classical ground-effect augmentation; reported as a diagnostic, not applied to the prediction models."
+  }
+}

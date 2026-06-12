@@ -519,16 +519,43 @@ function quatMul(a, b) {
   ];
 }
 
+function makeGroundStepper(ground, dt) {
+  // Planar rolling model on the 13-state: position/heading integrate the
+  // fitted (kT, mu, cv, ks, k0) law, altitude pins to the flight's ground
+  // plane, attitude is level at the rolled heading.
+  const p = ground.parameters;
+  const f = ground.fixed;
+  return (x, stick, groundZ) => {
+    const psi0 = eulerFromQuat([x[6], x[7], x[8], x[9]])[2];
+    let V = Math.hypot(x[3], x[4]);
+    const thr = Math.max(stick[0], 0);
+    const acc = p.kT * (f.max_thrust_n / f.mass) * Math.pow(thr, f.thrust_exponent) - p.mu * f.g - p.cv * V * V;
+    V = Math.max(V + dt * acc, 0);
+    const psi = psi0 + dt * (p.ks * stick[3] + p.k0) * V;
+    const out = x.slice();
+    out[0] = x[0] + dt * V * Math.cos(psi);
+    out[1] = x[1] + dt * V * Math.sin(psi);
+    out[2] = groundZ != null ? groundZ : x[2];
+    out[3] = V; out[4] = 0; out[5] = 0;
+    out[6] = Math.cos(psi / 2); out[7] = 0; out[8] = 0; out[9] = Math.sin(psi / 2);
+    out[10] = 0; out[11] = 0; out[12] = (p.ks * stick[3] + p.k0) * V;
+    return out;
+  };
+}
+
 function rolloutFrom(flight, models, method, timeS) {
   const dt = flight.dt_full;
   const startIdx = Math.max(0, Math.round(timeS / dt));
   const sticks = flight.stick_full;
   const labels = flight.labels_full;
   const modes = flight.mode_full || labels.map((label) => (label === 2 ? 1 : 0));
-  // Stop at the next ground contact: the airframe models have no gear model.
+  const groundStep = models.ground ? makeGroundStepper(models.ground, dt) : null;
+  // Without a ground model, stop at the next ground contact (no gear physics).
   let endIdx = sticks.length;
-  for (let k = startIdx + Math.round(1 / dt); k < labels.length; k++) {
-    if (labels[k] === 0) { endIdx = k; break; }
+  if (!groundStep) {
+    for (let k = startIdx + Math.round(1 / dt); k < labels.length; k++) {
+      if (labels[k] === 0) { endIdx = k; break; }
+    }
   }
   const stepper = makeStepper(method, models, dt);
   const safeStep = models.safe_invariant_weights ? makeSafeStepper(models.safe_invariant_weights, dt) : null;
@@ -550,7 +577,12 @@ function rolloutFrom(flight, models, method, timeS) {
       quatEnu.push(quatMul(Q_NED_TO_ENU, normQuat([x[6], x[7], x[8], x[9]])));
     }
     const stick = sticks[k];
-    if (modes[k] === 1 && safeStep) {
+    if (labels[k] === 0 && groundStep) {
+      // On the ground (per the recorded segmentation) the planar rolling
+      // model drives the state; at liftoff the airborne model takes over
+      // from the rolled position/heading/speed.
+      x = groundStep(x, stick, flight.ground_z);
+    } else if (modes[k] === 1 && safeStep) {
       // SAFE engaged: the directly identified closed-loop model replaces the
       // bare airframe + provisional controller decomposition. The handoff
       // keys off the recorded mode channel (a low SAFE pass is still
@@ -600,6 +632,12 @@ function safeScoreNote() {
   const scores = ex.data?.models?.safe_scores;
   if (!scores || scores.validation_pos_err_5s_m == null) return "";
   return ` (currently ${scores.validation_pos_err_5s_m.toFixed(1)} m mean over ${scores.validation_windows} held-out windows)`;
+}
+
+function groundScoreNote() {
+  const sc = ex.data?.models?.ground?.scores;
+  if (!sc || sc.ground_pos_err_5s_m == null) return "";
+  return `; currently ${sc.ground_pos_err_5s_m.toFixed(1)} m mean over ${sc.validation_windows} held-out windows`;
 }
 
 const FEATURE_STATE_NAMES = ["u", "v", "w", "g\u2093", "g\u1d67", "g\u1d22", "p", "q", "r"];
@@ -730,6 +768,23 @@ function renderModelInspector() {
         ${corrRows ? `<p class="model-note">airframe parameters pulled &gt; 0.5\u03c3 from the manual fit by the stabilized regime:</p><table class="model-table"><tbody><tr><td></td><td>manual</td><td>refined</td><td>shift</td></tr>${corrRows}</tbody></table>` : ""}`;
     }]);
   }
+  if (m.ground) {
+    catalog.push(["Ground roll & ground effect", () => {
+      const p = m.ground.parameters;
+      const sc = m.ground.scores || {};
+      const ge = m.ground_effect || {};
+      return `<p class="model-note">planar rolling model fitted by simulation error on the tracked ground windows: dV/dt = kT\u00b7(T\u2098\u2090\u2093/m)\u00b7thr<sup>1.45</sup> \u2212 \u03bc\u00b7g \u2212 c\u1d65\u00b7V\u00b2, d\u03c8/dt = (k\u209b\u00b7rudder + k\u2080)\u00b7V. Free runs anchored on the ground use it until the recorded liftoff, then hand the rolled state to the selected airframe method.</p>
+        <table class="model-table"><tbody>
+        <tr><td>thrust scale kT</td><td>${p.kT}</td></tr>
+        <tr><td>rolling resistance \u03bc</td><td>${p.mu}</td></tr>
+        <tr><td>quadratic drag c\u1d65</td><td>${p.cv}</td></tr>
+        <tr><td>steering gain k\u209b (rad/m per cmd)</td><td>${p.ks}</td></tr>
+        <tr><td>steering trim k\u2080 (rad/m)</td><td>${p.k0}</td></tr>
+        </tbody></table>
+        <p class="model-note">held-out 5 s position error ${sc.ground_pos_err_5s_m ?? "?"} m over ${sc.validation_windows ?? "?"} windows (hold-position baseline ${sc.hold_position_baseline_m ?? "?"} m, constant-velocity ${sc.constant_velocity_baseline_m ?? "?"} m).</p>
+        ${ge.dCL != null ? `<p class="model-note">ground-effect band (${ge.band_seconds} s of rotation/flare transition): equation-error force-coefficient increments \u0394C\u2097 = ${ge.dCL} \u00b1 ${ge.dCL_sem}, \u0394C\u1d05 = ${ge.dCD} \u00b1 ${ge.dCD_sem} relative to the airborne reference. ${ge.note}</p>` : ""}`;
+    }]);
+  }
   if (m.linear_weights) catalog.push(["LinearSS", () => affineDetail(m.linear_weights, dt, false)]);
   if (m.residual_weights) catalog.push(["RidgeResidual", () => affineDetail(m.residual_weights, dt, true)]);
   for (const [name, spec] of Object.entries(m.surrogates || {})) {
@@ -814,6 +869,10 @@ function renderSplitsView() {
       addStrip(window.start_s, window.stop_s, window.split,
         `stabilized ${window.start_s}-${window.stop_s} s -> ${window.split} (closed-loop SAFE model)`, true);
     }
+    for (const window of f.ground_splits || []) {
+      addStrip(window.start_s, window.stop_s, window.split,
+        `ground ${window.start_s}-${window.stop_s} s -> ${window.split} (planar rolling model)`, true);
+    }
     row.append(lane);
     chart.append(row);
   }
@@ -822,7 +881,7 @@ function renderSplitsView() {
   legend.innerHTML = [
     ...Object.entries(LABEL_COLORS).map(([label, color]) => `<span><i style="background:${color}"></i>${label.replace("_", " ")}</span>`),
     '<span><i style="background:#4a5159"></i>mocap dropout</span>',
-    '<span><i class="splits-train-key"></i>train window (above: airframe methods, below: SAFE model)</span>',
+    '<span><i class="splits-train-key"></i>train window (above: airframe methods, below: SAFE / ground models)</span>',
     '<span><i class="splits-validation-key"></i>validation window</span>',
   ].join("");
   chart.append(legend);
@@ -839,8 +898,12 @@ function renderSplitsView() {
       manual windows: the tracked stabilized spans are cut into ~10&nbsp;s windows (strips below the bar), every third
       window per flight is held out, the model fits on the train windows only, and the held-out windows score it by
       5&nbsp;s free-run position error${safeScoreNote()}. The autonomous flight is excluded: its lateral commands
-      bypass the recorded sticks. Ground (brown) windows feed the rolling-friction and thrust analysis, ground
-      effect (teal) is kept out of all airframe fits, and mocap dropouts (gray) are never trained on or scored.</p>`;
+      bypass the recorded sticks.</p>
+      <p>Ground (brown) spans train the <em>planar rolling model</em> with the same discipline (strips below the
+      bar, every third window held out${groundScoreNote()}); free runs anchored on the ground roll with it until the
+      recorded liftoff and then hand off to the selected airframe method. Ground effect (teal) is kept out of all
+      airframe fits — its few seconds of rotation/flare transition only support the equation-error lift/drag
+      increments reported in the Model Inspector — and mocap dropouts (gray) are never trained on or scored.</p>`;
   }
 }
 
@@ -934,13 +997,14 @@ function buildPlaybackTrack() {
 }
 
 function firstFlyableTime(f, timeS) {
-  // The airframe models have no gear physics and mocap dropouts have no
-  // state: anchor free-runs at the first airborne, tracked sample at or
-  // after the requested time.
+  // Mocap dropouts have no state, so anchors require tracked samples. Ground
+  // anchors are allowed when the planar rolling model is available;
+  // otherwise free-runs anchor at the first airborne sample.
   const dtFull = f.dt_full;
   let k = Math.max(0, Math.round(timeS / dtFull));
   const tracked = f.tracked_full || null;
-  const okAt = (index) => f.labels_full[index] !== 0 && (!tracked || tracked[index]);
+  const groundOk = Boolean(ex.data?.models?.ground);
+  const okAt = (index) => (groundOk || f.labels_full[index] !== 0) && (!tracked || tracked[index]);
   // Require a short run of clean samples so the anchor never sits on a
   // tracking-reacquisition edge where smoothed attitude is contaminated.
   const margin = Math.round(0.3 / dtFull);
@@ -963,7 +1027,7 @@ function setAnchor(timeS) {
     publishOverlay(null);
     return;
   }
-  ex.anchorNote = snapped - timeS > 0.1 ? "anchor moved past ground/dropout to the first airborne sample" : "";
+  ex.anchorNote = snapped - timeS > 0.1 ? "anchor moved past a dropout to the next tracked sample" : "";
   ex.anchorTimeS = snapped;
   recomputePredictions();
   renderAll();

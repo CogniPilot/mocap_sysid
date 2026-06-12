@@ -1482,6 +1482,45 @@ manual-regime airframe cannot represent, and is the standing motivation
 for a regime-aware airframe (per-flight thrust scale, stabilized-trim
 corrections) rather than a richer controller.
 
+\subsection{Ground-Roll and Ground-Effect Models}
+\paragraph{Approach.} The recorded sessions include 133\,s of tracked
+ground rolling (taxi and takeoff rolls), segmented automatically by the
+altitude hysteresis. A planar rolling model with states
+$(p_n,p_e,\psi,V)$ is identified on those spans:
+$\dot V = k_T (T_{\max}/m)\,\delta_T^{1.45} - \mu g - c_v V^2$ and
+$\dot\psi = (k_s\,\delta_r + k_0)\,V$, with position integrating along
+heading. Thrust uses the nominal map as a stated prior with a fitted scale
+(the near-constant ground throttle cannot separate thrust from rolling
+resistance; the standalone ground-roll study reports the sensitivity), the
+heading rate scales with ground speed as wheel steering does, and $k_0$
+absorbs wheel-alignment and thrust asymmetry. The ground spans are cut into
+the same 10\,s windows with the same round-robin held-out assignment as the
+stabilized windows, the parameters are fitted by simulation error on the
+train windows, and the held-out windows score 5\,s free-run position error
+--- the identical protocol and metric as the airborne models. The
+ground-effect band (between the ground and 0.65\,m altitude) holds only
+13\,s of rotation/flare transition, too little for a validated rollout
+model; instead the in-band lift and drag increments are identified by
+equation error against the fitted grey-box, as the difference between the
+band's force-coefficient residuals and the airborne-manual reference.
+\paragraph{Implementation.}
+\texttt{models/aircraft6dof/ground\_model.py}; the explorer free runs
+anchored on the ground integrate the planar model until the recorded
+liftoff and then hand the rolled position, heading, and speed to the
+selected airframe method, mirroring the SAFE-segment handoff.
+\paragraph{Results.} Held-out 5\,s position error 2.7\,m over the ground
+windows, against 3.4\,m for a hold-position baseline and 11.4\,m for
+constant-velocity extrapolation; the fitted thrust scale (1.18) is
+consistent with the nominal map, rolling resistance $\mu=0.28$ reflects
+wheel scrub on the gym floor, and the steering trim $k_0$ captures the
+airframe's consistent left pull. The ground-effect contrast is
+statistically significant but reads as a lift \emph{deficit}
+($\Delta C_L=-0.054\pm0.002$) with a drag excess
+($\Delta C_D=+0.044\pm0.003$): the band is dominated by high-incidence
+rotation and flare maneuvers, so the classical ground-effect augmentation
+is not resolvable from it, and the increments are reported as a band
+diagnostic rather than applied to the prediction models.
+
 \subsection{Browser Ports}
 Every exported model has a JavaScript stepper implementing the same
 equations as its Python counterpart; the grey-box port is verified against
