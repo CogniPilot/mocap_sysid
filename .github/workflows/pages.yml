@@ -47,6 +47,11 @@ jobs:
       - name: Validate site
         run: python3 site/check_site.py
 
+      - name: Stamp asset URLs for cache busting
+        run: |
+          STAMP="${{ github.event.workflow_run.head_sha || github.sha }}"
+          sed -i "s#\./src/app\.js#./src/app.js?v=$STAMP#; s#\./src/explorer\.js#./src/explorer.js?v=$STAMP#; s#\./src/styles\.css#./src/styles.css?v=$STAMP#" site/index.html
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
         with:

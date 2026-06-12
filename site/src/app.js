@@ -179,10 +179,8 @@ function renderModelTabs() {
   const host = document.querySelector("#model-tabs");
   host.innerHTML = "";
   // A selector with one option is noise; hide the whole Model control.
-  // The labeled wrapper is the parent div; the hidden attribute alone is
-  // insufficient on #model-tabs because .segmented sets display.
   const wrap = host.parentElement;
-  if (wrap) wrap.style.display = state.manifest.model_families.length <= 1 ? "none" : "";
+  if (wrap) wrap.hidden = state.manifest.model_families.length <= 1;
   for (const family of state.manifest.model_families) {
     const button = document.createElement("button");
     button.type = "button";
@@ -826,9 +824,11 @@ function renderPlaybackMethodPicker() {
     menu.append(row);
   }
   // With nothing checked the explorer falls back to LinearSS.
-  summary.textContent = checked.length
-    ? `${checked.length} selected`
-    : "LinearSS (default)";
+  summary.textContent = checked.length === 1
+    ? checked[0].replace("6DOF-", "")
+    : checked.length
+      ? `${checked.length} methods`
+      : "LinearSS (default)";
 }
 
 function renderDatasets() {
@@ -1060,9 +1060,6 @@ new GLTFLoader().load(
     scene.position.sub(center);
     const wrapper = new THREE.Group();
     wrapper.add(scene);
-    // Static cosmetic pitch: the mesh sits nose-low relative to the body
-    // frame; tip the nose up (asset X is the span axis).
-    scene.rotation.x = -10 * Math.PI / 180;
     // glTF assets face +Z with +Y up; the playback body frame is x-forward.
     wrapper.rotation.y = Math.PI / 2;
     // Normalize the span to the procedural model's 2.2 units so the existing
@@ -1726,9 +1723,9 @@ function setPlaybackTrack(track, force = false) {
   if (force || trackChanged) {
     // Only re-home the camera when the displayed flight actually changes;
     // overlay updates (Predict here, method toggles) keep the current view.
-    // Start close to the aircraft rather than fitted to the whole flight.
-    playback.controls.target.copy(points[0] || center);
-    playback.controls.distance = 2.5;
+    // Fit the whole flight in view (fov 42 deg => distance ~1.3x extent).
+    playback.controls.target.copy(center);
+    playback.controls.distance = clamp(size * 1.3, 4, 80);
   }
   playback.controls.minDistance = 0.25;
   playback.controls.maxDistance = Math.max(size * 8, 20);
@@ -1856,6 +1853,7 @@ function updatePlaybackScrub(track) {
   const scrub = document.querySelector("#playback-scrub");
   if (!scrub) return;
   paintScrubSegmentation(scrub, track);
+  paintScrubLegend(track);
   updateTrailHandles(playbackDuration(track));
   if (state.playbackScrubbing) return;
   scrub.value = String(clamp(state.playbackTimeS / playbackDuration(track), 0, 1));
@@ -1882,6 +1880,26 @@ function paintScrubSegmentation(scrub, track) {
     }
   }
   scrub.style.background = `linear-gradient(to right, ${stops.join(", ")})`;
+}
+
+const SCRUB_LEGEND = [
+  ["#8d6e63", "ground"],
+  ["#26a69a", "ground effect"],
+  ["#5c7cfa", "stabilized"],
+  ["#f08c00", "manual"],
+  ["#4a5159", "dropout"],
+];
+
+function paintScrubLegend(track) {
+  const legend = document.querySelector("#scrub-legend");
+  if (!legend) return;
+  const showing = Boolean(track?.labels && track.time_s?.length);
+  legend.hidden = !showing;
+  if (!showing || legend.dataset.painted) return;
+  legend.dataset.painted = "1";
+  legend.innerHTML = SCRUB_LEGEND
+    .map(([color, label]) => `<span><i style="background:${color}"></i>${label}</span>`)
+    .join("");
 }
 
 function renderPlaybackControls(track) {
