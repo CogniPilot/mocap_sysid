@@ -1,6 +1,6 @@
-# System Identification Benchmark
+# Motion Capture based System Identifiation
 
-Benchmark website: https://jgoppert.github.io/sysid_litreview_26/
+Website: https://cognipilot.github.io/mocap_sysid/
 
 Per-method implementation details and design justifications: the
 "Implementation Details and Design Justifications" appendix of the paper
