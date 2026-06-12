@@ -49,6 +49,7 @@ from .greybox import (
     rotation_body_to_inertial,
 )
 from .greybox_oem_fit import OEM_CONTROL_ORDER, euler_states_to_quat, fit_greybox, quat_states_to_euler
+from .ground_model import fit_ground_effect, fit_ground_model, ground_rollout, planar_track
 from .safe_controller import fit_safe_controller, safe_controller
 from .segmentation import (
     GROUND_ALTITUDE_M,
@@ -501,6 +502,7 @@ def main() -> int:
         safe_weights, safe_membership, safe_scores = None, {}, None
         safe_step = None
         gains = None
+        ground, ground_effect = None, None
     else:
         data = np.load(args.flights, allow_pickle=False)
         dt = float(data["sample_period_s"])
@@ -512,6 +514,16 @@ def main() -> int:
         safe_step = make_safe_step(safe_weights, dt)
         controller = load_or_fit_safe_controller(args, weights["6DOF-GreyBoxOEM"], safe_weights)
         gains = controller["gains"]
+        greybox_payload = {
+            "parameter_names": weights["6DOF-GreyBoxOEM"]["parameter_names"],
+            "parameters": weights["6DOF-GreyBoxOEM"]["theta"],
+            "fixed_parameters": weights["6DOF-GreyBoxOEM"]["spec"].fixed_parameters,
+            "max_deflection_deg": weights["6DOF-GreyBoxOEM"]["spec"].max_deflection_deg,
+        }
+        fixed = greybox_payload["fixed_parameters"]
+        ground = fit_ground_model(data, fixed["m"], fixed["g"])
+        ground_effect = fit_ground_effect(data, greybox_payload)
+        print(f"ground model: {ground['scores']}", flush=True)
     membership = manual_window_splits({"train": args.train, "validation": args.validation})
 
     if windows_mode:
@@ -574,10 +586,10 @@ def main() -> int:
                 "stop_s": round(stop * dt, 2),
                 "split": (window_records[flight_index]["split"] if windows_mode and label == 3 else membership.get((name, start))),
             }
-            if label in (2, 3) and stop - start >= 30:
+            keep = tracked[start:stop]
+            if label in (1, 2, 3) and stop - start >= 30 and keep.sum() >= 10:
                 x0 = suite.local_state_estimate(x, dt, start, window=12)
                 scores = {}
-                keep = tracked[start:stop]
                 for method in METHODS:
                     pred = rollout(steppers[method], x0, sticks[start:stop], mode_int[start:stop], bias, safe_step)
                     pred_aligned = suite.align_quaternion_signs(pred, x[start:stop])
@@ -585,6 +597,12 @@ def main() -> int:
                     # dropout spans are fabricated data.
                     scores[method] = round(float(suite.nrmse_score(pred_aligned[keep], x[start:stop][keep])), 4)
                 row["scores"] = scores
+            elif label == 0 and ground is not None and stop - start >= 30 and tracked[start:stop].all():
+                pn, pe, psi, v_h = planar_track(x[start:stop])
+                params = [ground["parameters"][n] for n in ("kT", "mu", "cv", "ks", "k0")]
+                pred = ground_rollout(params, ground["fixed"]["mass"], ground["fixed"]["g"], (pn[0], pe[0], psi[0], v_h[0]), sticks[start:stop], stop - start - 1, dt)
+                err = np.hypot(pred[:, 0] - pn[1:], pred[:, 1] - pe[1:])
+                row["scores"] = {"GroundRoll": round(float(np.mean(err)), 4)}
             segment_rows.append(row)
 
         ds = slice(None, None, downsample)
@@ -617,6 +635,9 @@ def main() -> int:
                 # Stabilized train/validation windows of the closed-loop SAFE
                 # model, mirrored in the Data Splits view.
                 "stabilized_splits": safe_membership.get(name, []),
+                # Ground train/validation windows of the planar rolling model.
+                "ground_splits": (ground["membership"].get(name, []) if ground else []),
+                "ground_z": (ground["ground_z"].get(name) if ground else None),
             }
         )
         print(f"{name}: {len(segment_rows)} segments", flush=True)
@@ -631,6 +652,8 @@ def main() -> int:
             **({
                 "safe_gains": {axis: np.round(np.asarray(coef, dtype=float), 5).tolist() for axis, coef in gains.items()},
                 "safe_controller": {key: controller[key] for key in ("surface_lag_s", "scores", "airframe_corrections", "implied_law") if key in controller},
+                "ground": {key: ground[key] for key in ("parameters", "fixed", "scores")},
+                "ground_effect": ground_effect,
                 "safe_invariant_weights": np.round(safe_weights, 8).tolist(),
                 "safe_scores": safe_scores,
             } if not windows_mode else {}),
