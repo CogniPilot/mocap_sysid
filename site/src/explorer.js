@@ -474,8 +474,8 @@ function safeController(gains) {
     const ge = gains.elevator;
     const ga = gains.aileron;
     const gr = gains.rudder;
-    const thetaCmd = clamp(ge[1] * stick[1], -ge[2], ge[2]);
-    const phiCmd = clamp(ga[1] * stick[2], -ga[2], ga[2]);
+    const thetaCmd = clamp(ge[1] * stick[1], -Math.abs(ge[2]), Math.abs(ge[2]));
+    const phiCmd = clamp(ga[1] * stick[2], -Math.abs(ga[2]), Math.abs(ga[2]));
     return [
       stick[0],
       clamp(ge[0] * (thetaCmd - euler[1]) - ge[3] * x[11] + ge[4], -0.65, 0.65),
@@ -713,13 +713,21 @@ function renderModelInspector() {
   if (m.safe_gains) {
     catalog.push(["SAFE controller (grey-box)", () => {
       const g = m.safe_gains;
-      const row = (axis) => `<tr><td>${axis}</td>${(g[axis] || []).map((v) => `<td>${v.toPrecision(3)}</td>`).join("")}</tr>`;
-      return `<p class="model-note">guessed attitude-command structure with fitted gains and saturations: \u03b4 = K\u209a\u00b7(sat(scale\u00b7stick, \u00b1envelope) \u2212 attitude) \u2212 K\u1d48\u00b7rate + bias. Rudder row is (stick gain, yaw-rate gain, bias).</p>
+      const c = m.safe_controller || {};
+      const lag = c.surface_lag_s || {};
+      const sc = c.scores || {};
+      const corr = Object.entries(c.airframe_corrections || {});
+      const row = (axis) => `<tr><td>${axis}</td>${(g[axis] || []).map((v) => `<td>${v.toPrecision(3)}</td>`).join("")}${lag[axis] != null ? `<td>${lag[axis]}</td>` : ""}</tr>`;
+      const corrRows = corr.map(([n, v]) => `<tr><td>${n}</td><td>${v.manual}</td><td>${v.refined}</td><td>${v.sigma > 0 ? "+" : ""}${v.sigma}\u03c3</td></tr>`).join("");
+      const implied = c.implied_law ? `<p class="model-note">structure check: feedback through the grey-box's rate-row effectiveness attributes ${(100 * c.implied_law.sensed_feedback_explained).toFixed(0)}% of the closed-loop change to sensed attitude/rate states; the remainder is stabilized-regime airframe mismatch (the SAFE unit has no airspeed sensor).</p>` : "";
+      return `<p class="model-note">attitude-command law identified jointly with Cram\u00e9r\u2013Rao-regularized airframe corrections by closed-loop simulation error through the <b>fitted</b> grey-box: \u03b4 = K\u209a\u00b7(sat(scale\u00b7stick, \u00b1envelope) \u2212 attitude) \u2212 K\u1d48\u00b7rate + bias, then a first-order surface lag. Rudder row is (stick gain, yaw-rate gain, bias).</p>
         <table class="model-table"><tbody>
-        <tr><td></td><td>K\u209a</td><td>scale</td><td>envelope (rad)</td><td>K\u1d48</td><td>bias</td></tr>
+        <tr><td></td><td>K\u209a</td><td>scale</td><td>envelope (rad)</td><td>K\u1d48</td><td>bias</td><td>lag (s)</td></tr>
         ${row("elevator")}${row("aileron")}${row("rudder")}
         </tbody></table>
-        <p class="model-note">retained for interpretability and as the fallback when no closed-loop fit exists; identified against the nominal airframe \u2014 re-identifying against the fitted grey-box is the planned upgrade.</p>`;
+        <p class="model-note">composed grey-box+controller held-out 5 s position error ${sc.composed_pos_err_5s_m ?? "?"} m (staged init ${sc.staged_init_pos_err_5s_m ?? "?"} m) over ${sc.validation_windows ?? "?"} windows \u2014 the direct closed-loop fit above remains the stabilized-segment prediction model.</p>
+        ${implied}
+        ${corrRows ? `<p class="model-note">airframe parameters pulled &gt; 0.5\u03c3 from the manual fit by the stabilized regime:</p><table class="model-table"><tbody><tr><td></td><td>manual</td><td>refined</td><td>shift</td></tr>${corrRows}</tbody></table>` : ""}`;
     }]);
   }
   if (m.linear_weights) catalog.push(["LinearSS", () => affineDetail(m.linear_weights, dt, false)]);
