@@ -28,6 +28,7 @@ from . import comparison_suite as suite
 from .model import INPUT_NAMES
 from .greybox import (
     CONTROL_NAMES_OEM,
+    FIXED_PARAMETER_NAMES,
     STATE_NAMES_LAG,
     build_casadi_dynamics_lag,
     SPORTCUB_PARAMETER_NAMES,
@@ -39,6 +40,43 @@ from .greybox import (
     sportcub_greybox_spec,
     wrap_angle_np,
 )
+from .modelica.export_identified import write_identified_modelica
+
+def write_identified_greybox_model(theta_full, out_path, *, provenance=None, new_model_name=None):
+    """Write the identified Sport Cub grey-box as a standalone Modelica file.
+
+    ``theta_full`` is the full parameter vector (fixed(10) + SPORTCUB
+    aerodynamic(25)); its values are baked into ``SportCubGreybox.mo``'s
+    parameter defaults. Returns the written path.
+    """
+    full_names = FIXED_PARAMETER_NAMES + SPORTCUB_PARAMETER_NAMES
+    values = dict(zip(full_names, (float(v) for v in np.asarray(theta_full).ravel())))
+    return write_identified_modelica(
+        "SportCubGreybox", values, out_path,
+        new_model_name=new_model_name, provenance=provenance,
+    )
+
+
+def greybox_modelica_sources(theta_full, *, provenance=None) -> dict:
+    """Return the baseline and identified Sport Cub grey-box Modelica source text.
+
+    Used to ship the actual ``.mo`` source (single source of truth) into the
+    website's Model Inspector, alongside the fitted parameter tables.
+    """
+    from .modelica.export_identified import HERE as _MO_DIR, identified_model_source
+
+    base_mo = _MO_DIR / "SportCubGreybox.mo"
+    full_names = FIXED_PARAMETER_NAMES + SPORTCUB_PARAMETER_NAMES
+    values = dict(zip(full_names, (float(v) for v in np.asarray(theta_full).ravel())))
+    return {
+        "baseline_name": "SportCubGreybox",
+        "baseline_source": base_mo.read_text(),
+        "identified_name": "SportCubGreyboxIdentified",
+        "identified_source": identified_model_source(
+            base_mo, values, "SportCubGreyboxIdentified", provenance=provenance
+        ),
+    }
+
 
 LAG_PARAMETERS = ("TAUS", "TAUM", "KB")
 # The production fit uses the 22 aerodynamic parameters; the lag/battery
@@ -441,6 +479,20 @@ def main() -> int:
         "nfev": fit["nfev"],
     }, indent=2) + "\n")
     print(f"wrote {output}")
+
+    # Round-trip the identified model back out as Modelica: the base grey-box
+    # with the fitted parameter values baked into the parameter defaults. The
+    # result is a self-contained, Rumoca-recompilable model of the found system.
+    provenance = (
+        f"fit: train_nrmse={scores['train_nrmse']:.4f}, "
+        f"validation_nrmse={scores['validation_nrmse']:.4f}, "
+        f"cost={fit['cost']:.6g}, nfev={fit['nfev']}"
+    )
+    mo_out = write_identified_greybox_model(
+        fit["theta_full"], args.results_dir / "SportCubGreyboxIdentified.mo",
+        provenance=provenance,
+    )
+    print(f"wrote {mo_out}")
     return 0
 
 

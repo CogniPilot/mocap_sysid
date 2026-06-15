@@ -435,6 +435,12 @@ def check_setup(_args: argparse.Namespace) -> None:
         "models/aircraft6dof/model.py",
         "models/aircraft6dof/comparison_suite.py",
         "models/aircraft6dof/smoke.py",
+        "models/aircraft6dof/modelica/rumoca_backend.py",
+        "models/aircraft6dof/modelica/dynamics.py",
+        "models/aircraft6dof/modelica/generate.py",
+        "models/aircraft6dof/modelica/check_parity.py",
+        "models/aircraft6dof/modelica/export_identified.py",
+        "models/aircraft6dof/greybox_oem_fit.py",
         "results.py",
     ]
     run([sys.executable, "-m", "py_compile", *py_files])
@@ -456,6 +462,7 @@ def check_setup(_args: argparse.Namespace) -> None:
     if not method_results:
         raise SystemExit("site method_results.json has no method rows")
     run([sys.executable, "-m", "models.aircraft6dof.smoke"], cwd=ROOT)
+    run([sys.executable, "-m", "models.aircraft6dof.modelica.check_parity"], cwd=ROOT)
     print("Setup check passed.")
     print(f"Site data: {len(manifest['scenarios'])} scenarios, {len(method_results)} method result rows")
 

@@ -23,14 +23,36 @@ from .model import (
     control_schedule,
     euler_from_quaternion,
     forces_and_moments,
-    nominal_rk4_step,
     normalize_quaternion,
     quaternion_from_euler,
     rhs,
-    rk4_step,
     rotation_body_to_inertial,
     simulate_smoke,
 )
+
+
+def rk4_step(x, u_cmd, dt, config):
+    """Full nonlinear truth 6DOF RK4 step (the synthetic-data generator's model).
+
+    Generated from ``modelica/Aircraft6DOF.mo`` (nl=1) via Rumoca -- the single
+    source of truth. ``model.py``'s numpy version is retained only as the
+    independent parity oracle in ``modelica/check_parity.py``.
+    """
+    from .modelica.dynamics import rk4_step as _modelica_rk4
+
+    return _modelica_rk4(x, u_cmd, dt, config)
+
+
+def nominal_rk4_step(x, u_cmd, dt, config):
+    """Attached-flow nominal 6DOF RK4 step (the residual/hybrid methods' baseline).
+
+    Generated from ``modelica/Aircraft6DOF.mo`` (nl=0) via Rumoca -- the single
+    source of truth. ``model.py``'s numpy version is retained only as the
+    independent parity oracle in ``modelica/check_parity.py``.
+    """
+    from .modelica.dynamics import nominal_rk4_step as _modelica_nominal
+
+    return _modelica_nominal(x, u_cmd, dt, config)
 
 
 STATE_NAMES_EULER = (
@@ -231,6 +253,23 @@ def build_casadi_dynamics(config: SportCubGreyboxConfig, dt: float):
     State order is ``STATE_NAMES_EULER`` and control order is
     ``CONTROL_NAMES_OEM``.  The parameter vector is fixed parameters followed by
     ``SPORTCUB_PARAMETER_NAMES``.
+
+    The physics is owned by ``modelica/SportCubGreybox.mo`` and generated through
+    Rumoca; this returns that Modelica-backed kernel. The hand-written CasADi
+    below is retained only as the independent parity oracle in
+    ``modelica/check_parity.py`` (note it would honour a non-default
+    ``max_deflection_deg``, which the Modelica model bakes in).
+    """
+    from .modelica.dynamics import build_casadi_dynamics as _modelica_build
+
+    return _modelica_build(config, dt)
+
+
+def _build_casadi_dynamics_legacy(config: SportCubGreyboxConfig, dt: float):
+    """Hand-written CasADi grey-box dynamics -- parity oracle only (not a runtime path).
+
+    Superseded by the Modelica-generated kernel; kept as the parity oracle and a
+    debugging fallback. See ``build_casadi_dynamics``.
     """
 
     n_states = len(STATE_NAMES_EULER)
@@ -413,7 +452,18 @@ def build_casadi_dynamics_lag(config: SportCubGreyboxConfig, dt: float):
     time in seconds, entering only the battery thrust multiplier
     ``(1 + KB * t_flight)``. The aerodynamics consume the lag states instead
     of the instantaneous commands.
+
+    Generated from ``modelica/SportCubGreyboxLag.mo`` via Rumoca. The hand-written
+    CasADi below is retained only as the parity oracle in check_parity.
     """
+    from .modelica.dynamics import build_casadi_dynamics_lag as _modelica_lag
+
+    return _modelica_lag(config, dt)
+
+
+def _build_casadi_dynamics_lag_legacy(config: SportCubGreyboxConfig, dt: float):
+    """Hand-written CasADi lag dynamics -- parity oracle only (not a runtime path).
+    See ``build_casadi_dynamics_lag``."""
 
     n_states = len(STATE_NAMES_LAG)
     n_params = len(FIXED_PARAMETER_NAMES) + len(SPORTCUB_PARAMETER_NAMES)

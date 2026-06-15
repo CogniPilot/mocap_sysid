@@ -48,7 +48,13 @@ from .greybox import (
     quaternion_from_euler,
     rotation_body_to_inertial,
 )
-from .greybox_oem_fit import OEM_CONTROL_ORDER, euler_states_to_quat, fit_greybox, quat_states_to_euler
+from .greybox_oem_fit import (
+    OEM_CONTROL_ORDER,
+    euler_states_to_quat,
+    fit_greybox,
+    greybox_modelica_sources,
+    quat_states_to_euler,
+)
 from .ground_model import fit_ground_effect, fit_ground_model, ground_rollout, planar_track
 from .safe_controller import fit_safe_controller, safe_controller
 from .segmentation import (
@@ -672,6 +678,12 @@ def main() -> int:
                 "uncertainty_note": "Cramer-Rao lower bounds from the output-error Jacobian; residual coloring uncorrected (optimistic).",
                 "fixed_parameters": weights["6DOF-GreyBoxOEM"]["spec"].fixed_parameters,
                 "max_deflection_deg": weights["6DOF-GreyBoxOEM"]["spec"].max_deflection_deg,
+                # Actual Modelica source (single source of truth) + the identified
+                # model with these fitted parameters baked in, for the inspector.
+                "modelica": greybox_modelica_sources(
+                    weights["6DOF-GreyBoxOEM"]["theta_full"],
+                    provenance="GreyBoxOEM output-error fit on the manual training chunks",
+                ),
             },
             "config": {
                 "mass": config.mass,

@@ -706,6 +706,30 @@ function affineDetail(weights, dt, residual) {
     + weightEquations(weights, featNames, STATE13_NAMES.map((n) => `${n}\u0307`), { cutoff: 0.05, transform });
 }
 
+function escapeHtml(text) {
+  return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function moDownloadLink(filename, text) {
+  const uri = "data:text/x-modelica;charset=utf-8," + encodeURIComponent(text);
+  return `<a class="mo-download" href="${uri}" download="${filename}">download ${filename}</a>`;
+}
+
+// Show the actual Modelica source: the single source of truth for the physics
+// (compiled to CasADi/JAX via Rumoca) plus the identified model with the fitted
+// parameters baked in.
+function modelicaSection(mo) {
+  if (!mo) return "";
+  return `<details class="modelica-source">
+      <summary>Modelica model source &mdash; single source of truth</summary>
+      <p class="model-note">The benchmark's physics is written once in Modelica and compiled (via Rumoca) to the CasADi/JAX kernels used everywhere. Baseline structure lives in <code>models/aircraft6dof/modelica/${mo.baseline_name}.mo</code>; the identified model bakes the fitted parameters above into the parameter defaults and recompiles.</p>
+      <p class="model-note"><strong>Identified</strong> &mdash; <code>${mo.identified_name}.mo</code> &middot; ${moDownloadLink(mo.identified_name + ".mo", mo.identified_source)}</p>
+      <pre class="modelica-code">${escapeHtml(mo.identified_source)}</pre>
+      <p class="model-note"><strong>Baseline</strong> &mdash; <code>${mo.baseline_name}.mo</code> &middot; ${moDownloadLink(mo.baseline_name + ".mo", mo.baseline_source)}</p>
+      <pre class="modelica-code">${escapeHtml(mo.baseline_source)}</pre>
+    </details>`;
+}
+
 function renderModelInspector() {
   const grid = document.querySelector("#models-grid");
   if (!grid || !ex.data) return;
@@ -734,7 +758,8 @@ function renderModelInspector() {
         <p class="model-note">fixed: ${fixed}</p>
         <p class="model-note">surface throws: ${Object.entries(gb.max_deflection_deg).map(([k, v]) => `${k} ${v}\u00b0`).join(", ")}</p>
         ${couplings ? `<p class="model-note">strongly coupled pairs (|r|&gt;0.9): ${couplings}</p>` : ""}
-        ${gb.uncertainty_note ? `<p class="model-note">${gb.uncertainty_note}</p>` : ""}`;
+        ${gb.uncertainty_note ? `<p class="model-note">${gb.uncertainty_note}</p>` : ""}
+        ${modelicaSection(gb.modelica)}`;
     }]);
   }
   if (m.safe_invariant_weights) {
