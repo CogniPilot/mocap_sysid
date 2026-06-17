@@ -28,6 +28,7 @@ MODELS = {
     "Aircraft6DOF": "Aircraft6DOF",
     "SportCubGreybox": "SportCubGreybox",
     "SportCubGreyboxLag": "SportCubGreyboxLag",
+    "SafeController": "SafeController",
 }
 
 

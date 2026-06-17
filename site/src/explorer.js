@@ -790,7 +790,8 @@ function renderModelInspector() {
         </tbody></table>
         <p class="model-note">composed grey-box+controller held-out 5 s position error ${sc.composed_pos_err_5s_m ?? "?"} m (staged init ${sc.staged_init_pos_err_5s_m ?? "?"} m) over ${sc.validation_windows ?? "?"} windows \u2014 the direct closed-loop fit above remains the stabilized-segment prediction model.</p>
         ${implied}
-        ${corrRows ? `<p class="model-note">airframe parameters pulled &gt; 0.5\u03c3 from the manual fit by the stabilized regime:</p><table class="model-table"><tbody><tr><td></td><td>manual</td><td>refined</td><td>shift</td></tr>${corrRows}</tbody></table>` : ""}`;
+        ${corrRows ? `<p class="model-note">airframe parameters pulled &gt; 0.5\u03c3 from the manual fit by the stabilized regime:</p><table class="model-table"><tbody><tr><td></td><td>manual</td><td>refined</td><td>shift</td></tr>${corrRows}</tbody></table>` : ""}
+        ${modelicaSection(c.modelica)}`;
     }]);
   }
   if (m.ground) {

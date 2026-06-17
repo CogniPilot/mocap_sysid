@@ -159,6 +159,31 @@ def check_base_models() -> float:
     return worst
 
 
+def check_safe_controller(n: int = 500) -> float:
+    """SafeController.mo der(delta) vs the Python pd_command + clip + lag."""
+    from .. import safe_controller as sc
+
+    rhs, _ = md._casadi_kernel("SafeController")
+    surf = sc.SURFACE_LIMITS
+    rng = np.random.default_rng(0)
+    worst = 0.0
+    for _ in range(n):
+        delta = rng.uniform(-0.8, 0.8, 3)
+        stick = rng.uniform(-1, 1, 3)
+        phi, theta = rng.uniform(-0.6, 0.6, 2)
+        p_r, q_r, r_r = rng.uniform(-2, 2, 3)
+        u = np.array([stick[0], stick[1], stick[2], phi, theta, p_r, q_r, r_r])
+        gains = rng.uniform(-1.5, 1.5, 13)
+        taus = rng.uniform(0.03, 0.3, 3)
+        p = np.concatenate([gains, taus])
+        s12 = np.zeros(12); s12[6] = phi; s12[7] = theta; s12[9] = p_r; s12[10] = q_r; s12[11] = r_r
+        cmd = np.clip(sc.pd_command(gains, np.array([0.0, *stick])[None, :], s12[None, :])[0], -surf, surf)
+        ref = (cmd - delta) / taus
+        got = np.array(rhs(delta, u, p)).flatten()
+        worst = max(worst, float(np.max(np.abs(ref - got))))
+    return worst
+
+
 def check_jax() -> float | None:
     """Literal JAX kernel vs model.py for the truth model. Returns None (skip) if
     JAX is unavailable -- the NumPy backend (verified above) is its exact mirror."""
@@ -191,6 +216,7 @@ def main() -> int:
         "greybox rk4  (SportCubGreybox.mo vs legacy CasADi)": check_greybox(),
         "greybox-lag rk4 (SportCubGreyboxLag.mo vs legacy CasADi)": check_greybox_lag(),
         "base-model wiring (nominal_base vs model.py; greybox_base distinct)": check_base_models(),
+        "safe-controller (SafeController.mo vs pd_command + lag)": check_safe_controller(),
     }
     ok = True
     for name, worst in checks.items():

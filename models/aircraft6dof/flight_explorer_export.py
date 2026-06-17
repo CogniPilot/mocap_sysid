@@ -56,7 +56,7 @@ from .greybox_oem_fit import (
     quat_states_to_euler,
 )
 from .ground_model import fit_ground_effect, fit_ground_model, ground_rollout, planar_track
-from .safe_controller import fit_safe_controller, safe_controller
+from .safe_controller import fit_safe_controller, safe_controller, safe_modelica_sources
 from .segmentation import (
     GROUND_ALTITUDE_M,
     STABILIZED_MIN_WINDOW_S,
@@ -657,7 +657,13 @@ def main() -> int:
             "residual_weights": np.round(weights["6DOF-RidgeResidual"], 6).tolist(),
             **({
                 "safe_gains": {axis: np.round(np.asarray(coef, dtype=float), 5).tolist() for axis, coef in gains.items()},
-                "safe_controller": {key: controller[key] for key in ("surface_lag_s", "scores", "airframe_corrections", "implied_law") if key in controller},
+                "safe_controller": {
+                    **{key: controller[key] for key in ("surface_lag_s", "scores", "airframe_corrections", "implied_law") if key in controller},
+                    "modelica": safe_modelica_sources(
+                        controller["gains"], controller["surface_lag_s"],
+                        provenance="SAFE inner-loop controller fit (pd_command + surface lag) on the stabilized windows",
+                    ),
+                },
                 "ground": {key: ground[key] for key in ("parameters", "fixed", "scores")},
                 "ground_effect": ground_effect,
                 "safe_invariant_weights": np.round(safe_weights, 8).tolist(),

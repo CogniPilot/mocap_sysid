@@ -219,6 +219,38 @@ def pd_command(theta_c: np.ndarray, u_stick: np.ndarray, s12: np.ndarray) -> np.
     return np.stack([de, da, dr], axis=1)
 
 
+def safe_modelica_sources(gains: dict, surface_lag_s: dict, *, provenance=None) -> dict:
+    """Baseline + identified SafeController Modelica source (fitted gains baked in).
+
+    Maps the fitted SAFE controller (per-axis [Kp, c, limit, Kd, b] gains, rudder
+    [gs, Kr, b], and per-surface lags) onto ``SafeController.mo``'s parameters, so
+    the identified controller round-trips as a recompilable ``.mo`` -- the same
+    treatment as the grey-box airframe.
+    """
+    from .modelica.export_identified import HERE as _MO_DIR, identified_model_source
+
+    base_mo = _MO_DIR / "SafeController.mo"
+    ge = [float(v) for v in gains["elevator"]]
+    ga = [float(v) for v in gains["aileron"]]
+    gr = [float(v) for v in gains["rudder"]]
+    values = {
+        "Kp_e": ge[0], "c_e": ge[1], "limit_e": ge[2], "Kd_e": ge[3], "b_e": ge[4],
+        "Kp_a": ga[0], "c_a": ga[1], "limit_a": ga[2], "Kd_a": ga[3], "b_a": ga[4],
+        "gs_r": gr[0], "Kr_r": gr[1], "b_r": gr[2],
+        "tau_e": float(surface_lag_s["elevator"]),
+        "tau_a": float(surface_lag_s["aileron"]),
+        "tau_r": float(surface_lag_s["rudder"]),
+    }
+    return {
+        "baseline_name": "SafeController",
+        "baseline_source": base_mo.read_text(),
+        "identified_name": "SafeControllerIdentified",
+        "identified_source": identified_model_source(
+            base_mo, values, "SafeControllerIdentified", provenance=provenance
+        ),
+    }
+
+
 def safe_controller(gains: dict[str, np.ndarray]):
     """Static controller u_eff = controller(u_stick, x_quat13) from gains.
 
@@ -510,6 +542,12 @@ def main() -> int:
     output = args.results_dir / "sportcub_safe_controller.json"
     output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(f"wrote {output}")
+
+    # Round-trip the identified controller back out as Modelica.
+    provenance = f"SAFE controller fit: composed 5s pos err {result['scores']['composed_pos_err_5s_m']} m"
+    mo_out = args.results_dir / "SafeControllerIdentified.mo"
+    mo_out.write_text(safe_modelica_sources(result["gains"], result["surface_lag_s"], provenance=provenance)["identified_source"])
+    print(f"wrote {mo_out}")
     return 0
 
 
