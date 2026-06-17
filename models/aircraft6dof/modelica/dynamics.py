@@ -1,7 +1,8 @@
 """Modelica-generated dynamics for the 6DOF benchmark.
 
 This is the integration layer between the Rumoca-generated continuous kernels
-(``rumoca_backend``) and the benchmark's existing call sites. The Modelica
+(the standalone ``*_casadi_solve.py`` / ``*_jax_solve.py`` modules emitted from
+the solve IR) and the benchmark's existing call sites. The Modelica
 sources in this directory are the single source of truth for the physics; this
 module adds only the fixed-step RK4 discretization and the post-step guards
 (quaternion renormalization / speed & rate clamps for the truth model, psi-wrap
@@ -19,20 +20,48 @@ Two public surfaces, each a drop-in for an existing benchmark API:
 
 from __future__ import annotations
 
+import importlib.util
 from functools import lru_cache
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
-
-from . import rumoca_backend as rb
 
 GENERATED = Path(__file__).resolve().parent / "generated"
 
 
+def _load_generated(model_stem: str, suffix: str):
+    """Import a Rumoca-generated standalone kernel module (``*_casadi_solve.py`` /
+    ``*_jax_solve.py``) emitted from the solve IR.
+
+    The module exposes ``rhs(x, u, p) -> xdot`` plus ``STATE_NAMES`` /
+    ``INPUT_NAMES`` / ``PARAM_NAMES`` and ``N_Y`` / ``N_U`` / ``N_P``. We wrap the
+    latter in a ``meta`` namespace matching the metadata the call sites expect, so
+    nothing downstream changes.
+    """
+    path = GENERATED / f"{model_stem}_{suffix}.py"
+    spec = importlib.util.spec_from_file_location(f"_rumoca_{model_stem}_{suffix}", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    meta = SimpleNamespace(
+        state_names=tuple(mod.STATE_NAMES),
+        input_names=tuple(mod.INPUT_NAMES),
+        param_names=tuple(mod.PARAM_NAMES),
+        n_x=mod.N_Y, n_u=mod.N_U, n_p=mod.N_P,
+    )
+    return mod.rhs, meta
+
+
 @lru_cache(maxsize=None)
 def _casadi_kernel(model_stem: str):
-    ir = rb.load_ir(GENERATED / f"{model_stem}.solve.json")
-    return rb.build_casadi_rhs(ir)
+    """CasADi ``rhs(x, u, p)`` Function + metadata (generated ``*_casadi_solve.py``)."""
+    return _load_generated(model_stem, "casadi_solve")
+
+
+@lru_cache(maxsize=None)
+def load_jax_kernel(model_stem: str):
+    """JAX ``rhs(x, u, p)`` closure + metadata (generated ``*_jax_solve.py``)."""
+    return _load_generated(model_stem, "jax_solve")
 
 
 # --------------------------------------------------------------------------- #

@@ -23,20 +23,22 @@ dynamics**, and live in the Python RK4 wrapper (`dynamics.py`), not the `.mo`.
 ## How it works
 
 ```
-Aircraft6DOF.mo ──rumoca compile --emit solve-json──> generated/*.solve.json
-                                                              │
-                          rumoca_backend.py (bytecode interpreter)
-                                          │
-                    build_casadi_rhs / build_jax_rhs / build_numpy_rhs
+Aircraft6DOF.mo ──rumoca compile --target casadi-solve / jax-solve──┐
+                                                                     ▼
+                       generated/<Model>_casadi_solve.py   (ca.Function rhs(x,u,p))
+                       generated/<Model>_jax_solve.py       (jit/grad/vmap rhs(x,u,p))
                                           │
                        dynamics.py  (RK4 + post-step wrappers)
                                           │
                   greybox.build_casadi_dynamics  ·  comparison_suite
 ```
 
-The cached `generated/*.solve.json` artifacts are committed, so **the benchmark
-does not need Rumoca installed at runtime** — only to regenerate after a `.mo`
-change.
+The explicit ODE `xdot = rhs(x, u, p)` is rendered directly from Rumoca's
+scalarized, causalized **solve IR** (the same source the C / FMI / Rust backends
+use) — no DAE residual, no rootfinder, no runtime interpreter. The generated
+kernels are self-contained and committed, so **the benchmark does not need Rumoca
+installed at runtime** — only to regenerate after a `.mo` change. A
+`generated/*.solve.json` IR dump is also written for inspection.
 
 ## Workflow
 
@@ -55,12 +57,14 @@ python -m models.aircraft6dof.modelica.check_parity
 
 ## Backends
 
-`rumoca_backend.py` replays the same `solve`-IR bytecode into three backends that
-share one interpreter:
+Each model is rendered from the solve IR into standalone kernel modules, both
+exposing `rhs(x, u, p) -> xdot` (states in `STATE_NAMES`, inputs in
+`INPUT_NAMES`, params in `PARAM_NAMES` / model-declaration order):
 
-- `build_casadi_rhs(ir)` → CasADi `Function('rhs', [x,u,p], [xdot])`
-- `build_jax_rhs(ir)` → `jit`/`grad`/`vmap`-compatible closure
-- `build_numpy_rhs(ir)` → dependency-free reference (and JAX structural mirror)
+- `generated/<Model>_casadi_solve.py` → CasADi `Function('rhs', [x,u,p], [xdot])`
+- `generated/<Model>_jax_solve.py` → pure-`jnp`, `jit`/`grad`/`vmap`-compatible `rhs`
+
+`dynamics.py` imports these via `_casadi_kernel(stem)` / `load_jax_kernel(stem)`.
 
 ## Notes
 

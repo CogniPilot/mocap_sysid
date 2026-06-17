@@ -1,10 +1,11 @@
 """Regenerate cached Rumoca solve-IR artifacts from the Modelica sources.
 
 Run this whenever a ``.mo`` model in this directory changes. It invokes the
-Rumoca compiler (``rumoca`` on PATH, or ``$RUMOCA``) and writes the
-``solve``-IR JSON the runtime backend consumes into ``generated/``. The runtime
-(``dynamics.py`` / ``rumoca_backend.py``) reads only the committed JSON, so the
-benchmark itself never needs Rumoca installed.
+Rumoca compiler (``rumoca`` on PATH, or ``$RUMOCA``) and writes, into
+``generated/``: the ``solve``-IR JSON dump (for inspection) and the standalone
+explicit-ODE kernels ``<Model>_casadi_solve.py`` / ``<Model>_jax_solve.py``
+(``xdot = rhs(x, u, p)``) that the runtime imports. The committed kernels are
+self-contained, so the benchmark itself never needs Rumoca installed.
 
 Usage::
 
@@ -44,6 +45,8 @@ def generate(model_stem: str, model_class: str, rumoca: str) -> Path:
     if not mo.exists():
         raise SystemExit(f"missing Modelica source: {mo}")
     GENERATED.mkdir(exist_ok=True)
+
+    # Solve-IR JSON dump (canonical IR; kept for inspection / debugging).
     out = GENERATED / f"{model_stem}.solve.json"
     proc = subprocess.run(
         [rumoca, "compile", str(mo), "--model", model_class, "--emit", "solve-json"],
@@ -52,6 +55,18 @@ def generate(model_stem: str, model_class: str, rumoca: str) -> Path:
     if proc.returncode != 0:
         raise SystemExit(f"rumoca failed for {model_stem}:\n{proc.stderr}")
     out.write_text(proc.stdout)
+
+    # Standalone explicit-ODE kernels  xdot = rhs(x, u, p)  for CasADi and JAX,
+    # rendered directly from the solve IR. These are what the runtime imports
+    # (dynamics.py / check_parity.py); no interpreter is needed anymore.
+    for target in ("casadi-solve", "jax-solve"):
+        proc = subprocess.run(
+            [rumoca, "compile", str(mo), "--model", model_class,
+             "--target", target, "--output", str(GENERATED)],
+            capture_output=True, text=True,
+        )
+        if proc.returncode != 0:
+            raise SystemExit(f"rumoca {target} failed for {model_stem}:\n{proc.stderr}")
     return out
 
 

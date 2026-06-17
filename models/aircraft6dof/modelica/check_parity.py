@@ -19,7 +19,6 @@ import numpy as np
 from .. import greybox as gb
 from .. import model as truth
 from . import dynamics as md
-from . import rumoca_backend as rb
 
 TOL = 1e-9
 GEN = __import__("pathlib").Path(__file__).resolve().parent / "generated"
@@ -32,7 +31,7 @@ def _truth_base(cfg) -> list[float]:
 
 
 def check_truth_rhs(n: int = 500) -> float:
-    rhs, _ = rb.build_casadi_rhs(rb.load_ir(GEN / "Aircraft6DOF.solve.json"))
+    rhs, _ = md._casadi_kernel("Aircraft6DOF")
     cfg = truth.Aircraft6DOFConfig()
     base = _truth_base(cfg)
     rng = np.random.default_rng(0)
@@ -168,7 +167,7 @@ def check_jax() -> float | None:
         jax.config.update("jax_enable_x64", True)
     except Exception:
         return None
-    rhs_j, _ = rb.build_jax_rhs(rb.load_ir(GEN / "Aircraft6DOF.solve.json"))
+    rhs_j, _ = md.load_jax_kernel("Aircraft6DOF")
     cfg = truth.Aircraft6DOFConfig()
     base = _truth_base(cfg)
     rng = np.random.default_rng(9)

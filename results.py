@@ -435,7 +435,6 @@ def check_setup(_args: argparse.Namespace) -> None:
         "models/aircraft6dof/model.py",
         "models/aircraft6dof/comparison_suite.py",
         "models/aircraft6dof/smoke.py",
-        "models/aircraft6dof/modelica/rumoca_backend.py",
         "models/aircraft6dof/modelica/dynamics.py",
         "models/aircraft6dof/modelica/generate.py",
         "models/aircraft6dof/modelica/check_parity.py",
