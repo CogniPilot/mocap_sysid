@@ -48,7 +48,8 @@ def generate(model_stem: str, model_class: str, rumoca: str) -> Path:
         raise SystemExit(f"missing Modelica source: {mo}")
     GENERATED.mkdir(exist_ok=True)
 
-    # Solve-IR JSON dump (canonical IR; kept for inspection / debugging).
+    # Solve-IR JSON dump (canonical IR; for inspection / debugging only -- nothing
+    # imports it, so it is git-ignored and just regenerated here on demand).
     out = GENERATED / f"{model_stem}.solve.json"
     proc = subprocess.run(
         [rumoca, "compile", str(mo), "--model", model_class, "--emit", "solve-json"],
