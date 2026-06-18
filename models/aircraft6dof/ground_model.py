@@ -211,6 +211,34 @@ def fit_ground_effect(data, greybox: dict) -> dict:
     }
 
 
+def ground_modelica_sources(parameters: dict, fixed: dict, *, provenance=None) -> dict:
+    """Baseline + identified GroundRoll Modelica source (fitted params baked in).
+
+    Maps the planar ground-roll fit (kT, mu, cv, ks, k0) plus the fixed mass/g
+    onto ``GroundRoll.mo``'s parameters, so the identified ground model
+    round-trips as a recompilable ``.mo`` -- the same treatment as the airframe
+    and the SAFE controller. (Ground *effect* is a dCL/dCD diagnostic, not a
+    dynamical model, so it has no ``.mo``.)
+    """
+    from .modelica.export_identified import HERE as _MO_DIR, identified_model_source
+
+    base_mo = _MO_DIR / "GroundRoll.mo"
+    values = {
+        "kT": float(parameters["kT"]), "mu": float(parameters["mu"]),
+        "cv": float(parameters["cv"]), "ks": float(parameters["ks"]),
+        "k0": float(parameters["k0"]),
+        "m": float(fixed["mass"]), "g": float(fixed["g"]),
+    }
+    return {
+        "baseline_name": "GroundRoll",
+        "baseline_source": base_mo.read_text(),
+        "identified_name": "GroundRollIdentified",
+        "identified_source": identified_model_source(
+            base_mo, values, "GroundRollIdentified", provenance=provenance
+        ),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--flights", type=Path, default=FLIGHTS_DEFAULT)
@@ -230,6 +258,11 @@ def main() -> int:
     output = args.results_dir / "sportcub_ground_model.json"
     output.write_text(json.dumps({"ground": ground, "ground_effect": effect}, indent=2, sort_keys=True) + "\n")
     print(f"wrote {output}")
+
+    provenance = f"ground-roll fit: 5s pos err {ground['scores']['ground_pos_err_5s_m']} m"
+    mo_out = args.results_dir / "GroundRollIdentified.mo"
+    mo_out.write_text(ground_modelica_sources(ground["parameters"], ground["fixed"], provenance=provenance)["identified_source"])
+    print(f"wrote {mo_out}")
     return 0
 
 

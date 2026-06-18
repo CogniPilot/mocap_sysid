@@ -31,4 +31,8 @@ packages = [
   "dataset_tools.sportcub_mocap_5_22_26",
   "models",
   "models.aircraft6dof",
+  "models.aircraft6dof.modelica",
 ]
+
+[tool.setuptools.package-data]
+"models.aircraft6dof.modelica" = ["*.mo", "generated/*.json"]

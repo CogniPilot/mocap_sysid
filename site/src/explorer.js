@@ -691,7 +691,8 @@ function surrogateDetail(name, spec) {
   const nnz = spec.weights.flat().filter((v) => v !== 0).length;
   const outs = spec.kind === "derivative" ? DYN_TARGET_NAMES : DYN_TARGET_NAMES.map((n) => `\u0394${n.replace("\u0307", "")}`);
   return `<p class="model-note">${spec.kind === "derivative" ? "continuous-time derivative" : "one-step increment"} model on ${spec.degree === 1 ? "linear" : "quadratic"} invariant features \u00b7 ${nnz} nonzero of ${spec.weights.length * spec.weights[0].length} standardized coefficients. Position and attitude integrate kinematically.</p>`
-    + weightEquations(spec.weights, names, outs, { cutoff: 1e-3 });
+    + weightEquations(spec.weights, names, outs, { cutoff: 1e-3 })
+    + modelicaSection(spec.modelica);
 }
 
 function affineDetail(weights, dt, residual) {
@@ -704,6 +705,112 @@ function affineDetail(weights, dt, residual) {
     : (v, i, j) => (i === j ? v - 1 : v) / dt;
   return `<p class="model-note">${note}; weights ${weights.length}\u00d7${weights[0].length}, raw state/stick features (positions included by the affine contract).</p>`
     + weightEquations(weights, featNames, STATE13_NAMES.map((n) => `${n}\u0307`), { cutoff: 0.05, transform });
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function moDownloadLink(filename, text) {
+  const uri = "data:text/x-modelica;charset=utf-8," + encodeURIComponent(text);
+  return `<a class="mo-download" href="${uri}" download="${filename}">download ${filename}</a>`;
+}
+
+// Show the actual Modelica source: the single source of truth for the physics
+// (compiled to CasADi/JAX via Rumoca) plus the identified model with the fitted
+// parameters baked in.
+// Per-method "what it is / inputs / outputs", shown at the top of every Model
+// Inspector card. Keyed by the card title. In the flight explorer every method
+// is rolled out open-loop from the state at the chosen start time, driven by
+// the recorded pilot sticks, so inputs/outputs are described in those terms.
+const METHOD_INFO = {
+  "GreyBoxOEM": {
+    what: "Physical lumped-parameter grey-box airframe; its ~22 aerodynamic coefficients are fitted by output-error (multiple shooting) against the real flights.",
+    in: "initial flight state + recorded pilot commands (throttle, elevator, aileron, rudder)",
+    out: "open-loop predicted trajectory — position, attitude, body velocity & rates",
+  },
+  "SAFE closed loop (shared)": {
+    what: "Direct closed-loop linear fit of the SAFE-stabilized dynamics: one heading/position-invariant linear map (sticks + state → next state), with no controller/airframe split. Deployed model for stabilized segments.",
+    in: "invariant state + pilot sticks (attitude commands while SAFE is engaged)",
+    out: "next state, integrated to a closed-loop trajectory",
+  },
+  "SAFE controller (grey-box)": {
+    what: "The identified SAFE PD attitude controller (sat·stick − attitude PD + rate damping, surface lag) composed with the grey-box airframe to close the loop. Interpretable structure diagnostic.",
+    in: "pilot sticks (commanding attitude); the controller computes surfaces, the airframe integrates",
+    out: "closed-loop trajectory of the composed controller + airframe",
+  },
+  "Ground roll & ground effect": {
+    what: "Planar runway ground-roll: thrust minus rolling/quadratic drag drives speed, rudder steers the heading rate, position integrates along heading. (Ground-effect is a reported ΔCL/ΔCD diagnostic, not a model.)",
+    in: "throttle, rudder",
+    out: "ground track — north, east, heading ψ, ground speed V",
+  },
+  "LinearSS": {
+    what: "A single global affine discrete state-space, x[k+1] = A·x[k] + B·u + c, fit by ridge regression.",
+    in: "full state + pilot commands",
+    out: "next state, integrated to a trajectory",
+  },
+  "RidgeResidual": {
+    what: "The attached-flow nominal physics plus a ridge-fitted one-step residual correction on the dynamic states.",
+    in: "state + pilot commands",
+    out: "nominal RK4 step + learned residual → trajectory",
+  },
+  "SINDy": {
+    what: "Sparse regression over a quadratic feature library to discover a parsimonious symbolic ODE (the equations shown below), via sequentially-thresholded least squares (STLSQ).",
+    in: "heading/position-invariant features (body velocity, gravity direction, body rates) + pilot sticks",
+    out: "state derivative ẋ, integrated open-loop to a trajectory",
+  },
+  "EquationError-LS": {
+    what: "Affine regression of the state derivatives on the invariant features (equation error), then integrated open-loop.",
+    in: "invariant features + pilot sticks",
+    out: "state derivative ẋ → trajectory",
+  },
+  "Koopman-EDMD": {
+    what: "Koopman / extended DMD: lift the state into quadratic features and fit a single linear one-step operator, rolled out back in the original coordinates.",
+    in: "lifted (quadratic) state features + pilot sticks",
+    out: "next-state increment → trajectory",
+  },
+  "Symbolic-Stepwise": {
+    what: "Sparse quadratic one-step predictor — the discrete-time cousin of SINDy.",
+    in: "invariant features + pilot sticks",
+    out: "next-state increment → trajectory",
+  },
+  "Subspace-Hankel": {
+    what: "Lagged ARX / Hankel linear predictor using a short window of past state samples.",
+    in: "invariant state history (a few lags) + pilot sticks",
+    out: "next-state increment → trajectory",
+  },
+  "GP-RBF": {
+    what: "The attached-flow nominal physics plus a radial-basis (Gaussian-process-style) kernel residual on the dynamic states.",
+    in: "invariant state + pilot sticks",
+    out: "nominal step + kernel residual → trajectory",
+  },
+};
+
+function methodInfo(title) {
+  const i = METHOD_INFO[title];
+  if (!i) return "";
+  return `<div class="method-info">
+      <p class="model-note"><strong>What it is.</strong> ${i.what}</p>
+      <p class="model-note"><strong>Inputs:</strong> ${i.in}. &nbsp;<strong>Output:</strong> ${i.out}.</p>
+    </div>`;
+}
+
+function modelicaSection(mo) {
+  if (!mo) return "";
+  if (mo.generated_source) {
+    return `<details class="modelica-source">
+      <summary>Modelica Model</summary>
+      <p class="model-note"><code>${mo.generated_name}.mo</code> &middot; ${moDownloadLink(mo.generated_name + ".mo", mo.generated_source)}</p>
+      <pre class="modelica-code">${escapeHtml(mo.generated_source)}</pre>
+    </details>`;
+  }
+  return `<details class="modelica-source">
+      <summary>Modelica Model</summary>
+      <p class="model-note"><strong>Identified</strong> &mdash; <code>${mo.identified_name}.mo</code> &middot; ${moDownloadLink(mo.identified_name + ".mo", mo.identified_source)}</p>
+      <pre class="modelica-code">${escapeHtml(mo.identified_source)}</pre>
+      <p class="model-note"><strong>Baseline</strong> &mdash; <code>${mo.baseline_name}.mo</code> &middot; ${moDownloadLink(mo.baseline_name + ".mo", mo.baseline_source)}</p>
+      <pre class="modelica-code">${escapeHtml(mo.baseline_source)}</pre>
+    </details>`;
 }
 
 function renderModelInspector() {
@@ -734,7 +841,8 @@ function renderModelInspector() {
         <p class="model-note">fixed: ${fixed}</p>
         <p class="model-note">surface throws: ${Object.entries(gb.max_deflection_deg).map(([k, v]) => `${k} ${v}\u00b0`).join(", ")}</p>
         ${couplings ? `<p class="model-note">strongly coupled pairs (|r|&gt;0.9): ${couplings}</p>` : ""}
-        ${gb.uncertainty_note ? `<p class="model-note">${gb.uncertainty_note}</p>` : ""}`;
+        ${gb.uncertainty_note ? `<p class="model-note">${gb.uncertainty_note}</p>` : ""}
+        ${modelicaSection(gb.modelica)}`;
     }]);
   }
   if (m.safe_invariant_weights) {
@@ -745,7 +853,8 @@ function renderModelInspector() {
       const transform = (v, i, j) => ((j < 8 && i === j) ? v - 1 : v) / dt;
       return `<p class="model-note">stabilized segments always use this single heading/position-invariant linear ridge fit (not a neural network, not per-method); the method picker only changes the manual-segment airframe. Direct closed-loop identification beats composing the identified controller with each airframe (2.9 m vs 13.6 m at 5 s).</p>`
         + weightEquations(m.safe_invariant_weights, featNames, outNames, { cutoff: 0.05, transform })
-        + `<p class="model-note">${sc.train_samples ?? "?"} train samples \u00b7 held-out 5 s position error ${sc.validation_pos_err_5s_m ?? "?"} m over ${sc.validation_windows ?? "?"} windows</p>`;
+        + `<p class="model-note">${sc.train_samples ?? "?"} train samples \u00b7 held-out 5 s position error ${sc.validation_pos_err_5s_m ?? "?"} m over ${sc.validation_windows ?? "?"} windows</p>`
+        + modelicaSection(m.safe_closed_loop_modelica);
     }]);
   }
   if (m.safe_gains) {
@@ -765,7 +874,8 @@ function renderModelInspector() {
         </tbody></table>
         <p class="model-note">composed grey-box+controller held-out 5 s position error ${sc.composed_pos_err_5s_m ?? "?"} m (staged init ${sc.staged_init_pos_err_5s_m ?? "?"} m) over ${sc.validation_windows ?? "?"} windows \u2014 the direct closed-loop fit above remains the stabilized-segment prediction model.</p>
         ${implied}
-        ${corrRows ? `<p class="model-note">airframe parameters pulled &gt; 0.5\u03c3 from the manual fit by the stabilized regime:</p><table class="model-table"><tbody><tr><td></td><td>manual</td><td>refined</td><td>shift</td></tr>${corrRows}</tbody></table>` : ""}`;
+        ${corrRows ? `<p class="model-note">airframe parameters pulled &gt; 0.5\u03c3 from the manual fit by the stabilized regime:</p><table class="model-table"><tbody><tr><td></td><td>manual</td><td>refined</td><td>shift</td></tr>${corrRows}</tbody></table>` : ""}
+        ${modelicaSection(c.modelica)}`;
     }]);
   }
   if (m.ground) {
@@ -782,10 +892,11 @@ function renderModelInspector() {
         <tr><td>steering trim k\u2080 (rad/m)</td><td>${p.k0}</td></tr>
         </tbody></table>
         <p class="model-note">held-out 5 s position error ${sc.ground_pos_err_5s_m ?? "?"} m over ${sc.validation_windows ?? "?"} windows (hold-position baseline ${sc.hold_position_baseline_m ?? "?"} m, constant-velocity ${sc.constant_velocity_baseline_m ?? "?"} m).</p>
-        ${ge.dCL != null ? `<p class="model-note">ground-effect band (${ge.band_seconds} s of rotation/flare transition): equation-error force-coefficient increments \u0394C\u2097 = ${ge.dCL} \u00b1 ${ge.dCL_sem}, \u0394C\u1d05 = ${ge.dCD} \u00b1 ${ge.dCD_sem} relative to the airborne reference. ${ge.note}</p>` : ""}`;
+        ${ge.dCL != null ? `<p class="model-note">ground-effect band (${ge.band_seconds} s of rotation/flare transition): equation-error force-coefficient increments \u0394C\u2097 = ${ge.dCL} \u00b1 ${ge.dCL_sem}, \u0394C\u1d05 = ${ge.dCD} \u00b1 ${ge.dCD_sem} relative to the airborne reference. ${ge.note}</p>` : ""}
+        ${modelicaSection(m.ground.modelica)}`;
     }]);
   }
-  if (m.linear_weights) catalog.push(["LinearSS", () => affineDetail(m.linear_weights, dt, false)]);
+  if (m.linear_weights) catalog.push(["LinearSS", () => affineDetail(m.linear_weights, dt, false) + modelicaSection(m.linear_modelica)]);
   if (m.residual_weights) catalog.push(["RidgeResidual", () => affineDetail(m.residual_weights, dt, true)]);
   for (const [name, spec] of Object.entries(m.surrogates || {})) {
     catalog.push([name.replace("6DOF-", ""), () => surrogateDetail(name, spec)]);
@@ -805,7 +916,7 @@ function renderModelInspector() {
   const show = (title) => {
     const entry = catalog.find(([t]) => t === title) || catalog[0];
     ex.modelInspectorChoice = entry[0];
-    detail.innerHTML = `<h3>${entry[0]}</h3>${entry[1]()}`;
+    detail.innerHTML = `<h3>${entry[0]}</h3>${methodInfo(entry[0])}${entry[1]()}`;
   };
   picker.addEventListener("change", () => show(picker.value));
   if (ex.modelInspectorChoice && catalog.some(([t]) => t === ex.modelInspectorChoice)) picker.value = ex.modelInspectorChoice;

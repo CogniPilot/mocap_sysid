@@ -8,6 +8,7 @@ import concurrent.futures
 import csv
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,6 +70,26 @@ METHOD_TRAINING_SCENARIOS = {
     "6DOF-UDE-Residual": "aircraft_6dof_aggressive",
     "6DOF-PINN-Closure": "aircraft_6dof_aggressive",
     "6DOF-NN-Surrogate": "aircraft_6dof_aggressive",
+}
+
+# Documented contract: which base dynamics model each type-A/B method runs on.
+# "nominal" -> Aircraft6DOF.mo (nl=0); "greybox" -> SportCubGreybox.mo. Methods
+# not listed are data-only (type C) and take no base model. This is the single
+# place to read a method's base; check_parity.py asserts the constructors wire to
+# the matching Modelica kernel. (UDE-Residual/PINN-Closure use the grey-box when
+# the grey-box fit is available, else fall back to the nominal numpy model.)
+METHOD_BASE_MODEL = {
+    "6DOF-NominalGreyBox": "nominal",
+    "6DOF-RidgeResidual": "nominal",
+    "6DOF-Frequency-Stitching": "nominal",
+    "6DOF-GP-RBF": "nominal",
+    "6DOF-NN-Surrogate": "nominal",
+    "6DOF-UDE-Residual": "greybox",
+    "6DOF-PINN-Closure": "greybox",
+    "6DOF-GreyBoxOEM": "greybox",
+    "6DOF-EKF-ParamID": "greybox",
+    "6DOF-Fisher-UQ": "greybox",
+    "6DOF-UDE-NN": "greybox",
 }
 
 
@@ -707,6 +728,51 @@ def kinematic_step(state: np.ndarray, dyn_next: np.ndarray, dt: float) -> np.nda
     return normalize_state(np.concatenate((pos, dyn_next[0:3], quat, dyn_next[3:6])))
 
 
+@dataclass(frozen=True)
+class BaseModel:
+    """Explicit, picklable handle to the base dynamics a method runs on.
+
+    Resolved to a one-step map ``step(x, u) -> x_next`` (benchmark 13-state
+    quaternion) by :func:`resolve_base_step`, inside the rollout -- including in
+    worker processes, where the underlying Modelica kernel is reconstructed and
+    cached. This makes "which model a method uses" an explicit, single-sourced
+    input instead of a hard-wired ``nominal_rk4_step`` call or an ad-hoc
+    reconstruction. ``kind`` is the only thing that selects the model:
+
+    * ``"nominal"``  -> ``Aircraft6DOF.mo`` (nl=0), attached-flow baseline.
+    * ``"greybox"``  -> ``SportCubGreybox.mo`` with the fitted ``theta_full``.
+    """
+
+    kind: str
+    config: Aircraft6DOFConfig | None = None
+    theta_full: tuple[float, ...] | None = None
+
+
+def nominal_base(config: Aircraft6DOFConfig) -> BaseModel:
+    """Base model = the attached-flow nominal physics (`Aircraft6DOF.mo`, nl=0)."""
+    return BaseModel("nominal", config=config)
+
+
+def greybox_base(theta_full) -> BaseModel:
+    """Base model = the Sport Cub grey-box (`SportCubGreybox.mo`) with these params."""
+    return BaseModel("greybox", theta_full=tuple(float(v) for v in np.asarray(theta_full).ravel()))
+
+
+def resolve_base_step(base: BaseModel, dt: float):
+    """Resolve a :class:`BaseModel` to its one-step map ``step(x, u) -> x_next``.
+
+    Both branches route to the Modelica-generated kernels; called inside the
+    rollout (and inside worker processes) so the kernel is built where it runs.
+    """
+    if base.kind == "nominal":
+        config = base.config
+        return lambda x, u: nominal_rk4_step(x, u, dt, config)
+    if base.kind == "greybox":
+        from .greybox_oem_fit import make_greybox_quat_step
+        return make_greybox_quat_step(np.asarray(base.theta_full), dt)
+    raise ValueError(f"unknown base model kind: {base.kind!r}")
+
+
 def derivative_rollout(
     initial: np.ndarray,
     u: np.ndarray,
@@ -751,53 +817,33 @@ def one_step_rollout(
     return pred
 
 
-def residual_feature_rollout(
+def residual_poly_rollout(
     initial: np.ndarray,
     u: np.ndarray,
     t: np.ndarray,
+    base: BaseModel,
     weights: np.ndarray,
     mean: np.ndarray,
     scale: np.ndarray,
-    config: Aircraft6DOFConfig,
     *,
     degree: int,
 ) -> np.ndarray:
+    """Base model (nominal or grey-box) plus a learned quadratic residual map.
+
+    Merges the former ``residual_feature_rollout`` (nominal base) and
+    ``greybox_residual_rollout`` (grey-box base): the only difference was which
+    base they integrated, now an explicit :class:`BaseModel` input.
+    """
     pred = np.zeros((u.shape[0], len(t), len(STATE_NAMES)))
     pred[:, 0, :] = initial
     dt = float(np.median(np.diff(t)))
-    cfg = Aircraft6DOFConfig(duration=float(t[-1] - t[0]), dt=dt, wing_speed=config.wing_speed)
+    step = resolve_base_step(base, dt)
     for trial in range(u.shape[0]):
         pred[trial, 0] = normalize_state(pred[trial, 0])
         for index in range(len(t) - 1):
-            base = nominal_rk4_step(pred[trial, index], u[trial, index], dt, cfg)
+            base_next = step(pred[trial, index], u[trial, index])
             phi = poly_features(pred[trial, index][None, :], u[trial, index][None, :], degree=degree)[0]
-            pred[trial, index + 1] = kinematic_step(pred[trial, index], base[DYNAMIC_ROWS] + apply_standardized(phi, weights, mean, scale), dt)
-    return pred
-
-
-def greybox_residual_rollout(
-    initial: np.ndarray,
-    u: np.ndarray,
-    t: np.ndarray,
-    weights: np.ndarray,
-    mean: np.ndarray,
-    scale: np.ndarray,
-    theta_full: np.ndarray,
-    *,
-    degree: int,
-) -> np.ndarray:
-    from .greybox_oem_fit import make_greybox_quat_step
-
-    pred = np.zeros((u.shape[0], len(t), len(STATE_NAMES)))
-    pred[:, 0, :] = initial
-    dt = float(np.median(np.diff(t)))
-    step = make_greybox_quat_step(theta_full, dt)
-    for trial in range(u.shape[0]):
-        pred[trial, 0] = normalize_state(pred[trial, 0])
-        for index in range(len(t) - 1):
-            base = step(pred[trial, index], u[trial, index])
-            phi = poly_features(pred[trial, index][None, :], u[trial, index][None, :], degree=degree)[0]
-            pred[trial, index + 1] = kinematic_step(pred[trial, index], base[DYNAMIC_ROWS] + apply_standardized(phi, weights, mean, scale), dt)
+            pred[trial, index + 1] = kinematic_step(pred[trial, index], base_next[DYNAMIC_ROWS] + apply_standardized(phi, weights, mean, scale), dt)
     return pred
 
 
@@ -866,14 +912,14 @@ def local_linear_rollout(
     weights: list[np.ndarray],
     *,
     residual: bool,
-    config: Aircraft6DOFConfig,
+    base: BaseModel | None = None,
 ) -> np.ndarray:
     pred = np.zeros((u.shape[0], len(t), len(STATE_NAMES)))
     pred[:, 0, :] = initial
     feature_scale = np.std(centers, axis=0)
     feature_scale = np.where(feature_scale > 1e-6, feature_scale, 1.0)
     dt = float(np.median(np.diff(t)))
-    cfg = Aircraft6DOFConfig(duration=float(t[-1] - t[0]), dt=dt, wing_speed=config.wing_speed)
+    step = resolve_base_step(base, dt) if residual else None  # base used only as a residual anchor
     for trial in range(u.shape[0]):
         pred[trial, 0] = normalize_state(pred[trial, 0])
         for index in range(len(t) - 1):
@@ -882,8 +928,8 @@ def local_linear_rollout(
             phi = linear_features(pred[trial, index][None, :], u[trial, index][None, :])[0]
             update = phi @ weights[center_index]
             if residual:
-                base = nominal_rk4_step(pred[trial, index], u[trial, index], dt, cfg)
-                pred[trial, index + 1] = normalize_state(base + update)
+                base_next = step(pred[trial, index], u[trial, index])
+                pred[trial, index + 1] = normalize_state(base_next + update)
             else:
                 pred[trial, index + 1] = normalize_state(update)
     return pred
@@ -893,22 +939,22 @@ def rbf_residual_rollout(
     initial: np.ndarray,
     u: np.ndarray,
     t: np.ndarray,
+    base: BaseModel,
     weights: np.ndarray,
     centers: np.ndarray,
     length_scale: np.ndarray,
-    config: Aircraft6DOFConfig,
 ) -> np.ndarray:
     pred = np.zeros((u.shape[0], len(t), len(STATE_NAMES)))
     pred[:, 0, :] = initial
     dt = float(np.median(np.diff(t)))
-    cfg = Aircraft6DOFConfig(duration=float(t[-1] - t[0]), dt=dt, wing_speed=config.wing_speed)
+    step = resolve_base_step(base, dt)
     for trial in range(u.shape[0]):
         pred[trial, 0] = normalize_state(pred[trial, 0])
         for index in range(len(t) - 1):
-            base = nominal_rk4_step(pred[trial, index], u[trial, index], dt, cfg)
+            base_next = step(pred[trial, index], u[trial, index])
             z = np.concatenate((invariant_state(pred[trial, index][None, :])[0], u[trial, index]))[None, :]
             phi = np.concatenate((rbf_features(z, centers, length_scale), np.ones((1, 1))), axis=1)[0]
-            pred[trial, index + 1] = kinematic_step(pred[trial, index], base[DYNAMIC_ROWS] + phi @ weights, dt)
+            pred[trial, index + 1] = kinematic_step(pred[trial, index], base_next[DYNAMIC_ROWS] + phi @ weights, dt)
     return pred
 
 
@@ -916,19 +962,19 @@ def nn_residual_rollout(
     initial: np.ndarray,
     u: np.ndarray,
     t: np.ndarray,
+    base: BaseModel,
     weights: np.ndarray,
     centers: np.ndarray,
     length_scale: np.ndarray,
-    config: Aircraft6DOFConfig,
 ) -> np.ndarray:
     pred = np.zeros((u.shape[0], len(t), len(STATE_NAMES)))
     pred[:, 0, :] = initial
     dt = float(np.median(np.diff(t)))
-    cfg = Aircraft6DOFConfig(duration=float(t[-1] - t[0]), dt=dt, wing_speed=config.wing_speed)
+    step = resolve_base_step(base, dt)
     for trial in range(u.shape[0]):
         pred[trial, 0] = normalize_state(pred[trial, 0])
         for index in range(len(t) - 1):
-            base = nominal_rk4_step(pred[trial, index], u[trial, index], dt, cfg)
+            base_next = step(pred[trial, index], u[trial, index])
             z_now = np.concatenate((invariant_state(pred[trial, index][None, :])[0], u[trial, index]))[None, :]
             phi_now = np.concatenate(
                 (
@@ -937,7 +983,7 @@ def nn_residual_rollout(
                 ),
                 axis=1,
             )[0]
-            pred[trial, index + 1] = kinematic_step(pred[trial, index], base[DYNAMIC_ROWS] + phi_now @ weights, dt)
+            pred[trial, index + 1] = kinematic_step(pred[trial, index], base_next[DYNAMIC_ROWS] + phi_now @ weights, dt)
     return pred
 
 
@@ -1003,15 +1049,15 @@ def _nominal_next_chunk(payload: tuple[np.ndarray, np.ndarray, float, Aircraft6D
     return nominal_next_grid(train_x, train_u, dt, config)
 
 
-def nominal_rollout(initial: np.ndarray, u: np.ndarray, t: np.ndarray, config: Aircraft6DOFConfig) -> np.ndarray:
+def nominal_rollout(initial: np.ndarray, u: np.ndarray, t: np.ndarray, base: BaseModel) -> np.ndarray:
     pred = np.zeros((u.shape[0], len(t), len(STATE_NAMES)))
     pred[:, 0, :] = initial
     dt = float(np.median(np.diff(t)))
-    cfg = Aircraft6DOFConfig(duration=float(t[-1] - t[0]), dt=dt, wing_speed=config.wing_speed)
+    step = resolve_base_step(base, dt)
     for trial in range(u.shape[0]):
         pred[trial, 0] = normalize_state(pred[trial, 0])
         for index in range(len(t) - 1):
-            pred[trial, index + 1] = nominal_rk4_step(pred[trial, index], u[trial, index], dt, cfg)
+            pred[trial, index + 1] = step(pred[trial, index], u[trial, index])
     return pred
 
 
@@ -1026,17 +1072,17 @@ def linear_rollout(initial: np.ndarray, u: np.ndarray, t: np.ndarray, weights: n
     return pred
 
 
-def residual_rollout(initial: np.ndarray, u: np.ndarray, t: np.ndarray, weights: np.ndarray, config: Aircraft6DOFConfig) -> np.ndarray:
+def residual_rollout(initial: np.ndarray, u: np.ndarray, t: np.ndarray, base: BaseModel, weights: np.ndarray) -> np.ndarray:
     pred = np.zeros((u.shape[0], len(t), len(STATE_NAMES)))
     pred[:, 0, :] = initial
     dt = float(np.median(np.diff(t)))
-    cfg = Aircraft6DOFConfig(duration=float(t[-1] - t[0]), dt=dt, wing_speed=config.wing_speed)
+    step = resolve_base_step(base, dt)
     for trial in range(u.shape[0]):
         pred[trial, 0] = normalize_state(pred[trial, 0])
         for index in range(len(t) - 1):
-            base = nominal_rk4_step(pred[trial, index], u[trial, index], dt, cfg)
+            base_next = step(pred[trial, index], u[trial, index])
             phi = np.concatenate((pred[trial, index], u[trial, index], [1.0]))
-            pred[trial, index + 1] = normalize_state(base + phi @ weights)
+            pred[trial, index + 1] = normalize_state(base_next + phi @ weights)
     return pred
 
 
@@ -1095,6 +1141,7 @@ def run_methods(
     ridge: float,
     workers: int,
     training_scenario_override: str | None = None,
+    identified_dir: Path | None = None,
 ) -> list[Result6DOF]:
     config = Aircraft6DOFConfig(duration=float(validation.t[-1] - validation.t[0]), dt=validation.dt)
     x0_window = min(max(int(round(0.2 / max(validation.dt, 1e-6))), 5), len(validation.t))
@@ -1123,13 +1170,16 @@ def run_methods(
         results.append(result)
 
     results: list[Result6DOF] = []
+    # Physical grey-box fits found during this run, keyed by method tag; each is
+    # written back out as an identified Modelica model before returning.
+    identified_models: dict[str, np.ndarray] = {}
 
     if training_scenario_override is None:
         # The attached-flow nominal row is the truth-minus-residual baseline of
         # the synthetic benchmark; on real flights it is just a wrong model
         # with no baseline meaning, so the row is omitted there.
         start = time.perf_counter()
-        pred = parallel_rollout("nominal_rollout", workers, validation_x0, validation.u_cmd, validation.t, config)
+        pred = parallel_rollout("nominal_rollout", workers, validation_x0, validation.u_cmd, validation.t, nominal_base(config))
         rollout_elapsed = time.perf_counter() - start
         add_result(
             score_state_method(
@@ -1182,7 +1232,7 @@ def run_methods(
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
-    pred = parallel_rollout("residual_rollout", workers, validation_x0, validation.u_cmd, validation.t, weights, config)
+    pred = parallel_rollout("residual_rollout", workers, validation_x0, validation.u_cmd, validation.t, nominal_base(config), weights)
     rollout_elapsed = time.perf_counter() - rollout_start
     add_result(
         score_state_method(
@@ -1208,7 +1258,7 @@ def run_methods(
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
-    pred = parallel_rollout("local_linear_rollout", workers, validation_x0, validation.u_cmd, validation.t, centers, local_weights, residual=False, config=config)
+    pred = parallel_rollout("local_linear_rollout", workers, validation_x0, validation.u_cmd, validation.t, centers, local_weights, residual=False)
     rollout_elapsed = time.perf_counter() - rollout_start
     add_result(
         score_state_method(
@@ -1262,7 +1312,7 @@ def run_methods(
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
-    pred = parallel_rollout("local_linear_rollout", workers, validation_x0, validation.u_cmd, validation.t, centers, local_residual_weights, residual=True, config=config)
+    pred = parallel_rollout("local_linear_rollout", workers, validation_x0, validation.u_cmd, validation.t, centers, local_residual_weights, residual=True, base=nominal_base(config))
     rollout_elapsed = time.perf_counter() - rollout_start
     add_result(
         score_state_method(
@@ -1291,6 +1341,7 @@ def run_methods(
         start = time.perf_counter()
         cpu_start = time.process_time()
         ekf = fit_greybox_ekf(train_x, train.u_cmd, train.dt)
+        identified_models["EKF-ParamID"] = np.asarray(ekf["theta_full"])
         train_elapsed = time.perf_counter() - start
         train_cpu = time.process_time() - cpu_start
         rollout_start = time.perf_counter()
@@ -1497,10 +1548,10 @@ def run_methods(
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
-    if greybox is not None:
-        pred = parallel_rollout("greybox_residual_rollout", workers, validation_x0, validation.u_cmd, validation.t, weights_ude, mean_ude, scale_ude, np.asarray(greybox["theta_full"]), degree=2)
-    else:
-        pred = parallel_rollout("residual_feature_rollout", workers, validation_x0, validation.u_cmd, validation.t, weights_ude, mean_ude, scale_ude, config, degree=2)
+    # Explicit base: the identified grey-box when available, else the nominal
+    # attached-flow model (numpy fallback when the grey-box fit was skipped).
+    ude_base = greybox_base(greybox["theta_full"]) if greybox is not None else nominal_base(config)
+    pred = parallel_rollout("residual_poly_rollout", workers, validation_x0, validation.u_cmd, validation.t, ude_base, weights_ude, mean_ude, scale_ude, degree=2)
     rollout_elapsed = time.perf_counter() - rollout_start
     add_result(
         score_state_method(
@@ -1525,10 +1576,8 @@ def run_methods(
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
-    if greybox is not None:
-        pred = parallel_rollout("greybox_residual_rollout", workers, validation_x0, validation.u_cmd, validation.t, weights_pinn, mean_ude, scale_ude, np.asarray(greybox["theta_full"]), degree=2)
-    else:
-        pred = parallel_rollout("residual_feature_rollout", workers, validation_x0, validation.u_cmd, validation.t, weights_pinn, mean_ude, scale_ude, config, degree=2)
+    pinn_base = greybox_base(greybox["theta_full"]) if greybox is not None else nominal_base(config)
+    pred = parallel_rollout("residual_poly_rollout", workers, validation_x0, validation.u_cmd, validation.t, pinn_base, weights_pinn, mean_ude, scale_ude, degree=2)
     rollout_elapsed = time.perf_counter() - rollout_start
     add_result(
         score_state_method(
@@ -1604,7 +1653,7 @@ def run_methods(
     train_elapsed = time.perf_counter() - start
     train_cpu = time.process_time() - cpu_start
     rollout_start = time.perf_counter()
-    pred = parallel_rollout("rbf_residual_rollout", workers, validation_x0, validation.u_cmd, validation.t, weights_rbf, centers, length_scale, config)
+    pred = parallel_rollout("rbf_residual_rollout", workers, validation_x0, validation.u_cmd, validation.t, nominal_base(config), weights_rbf, centers, length_scale)
     rollout_elapsed = time.perf_counter() - rollout_start
     add_result(
         score_state_method(
@@ -1632,7 +1681,7 @@ def run_methods(
     train_cpu = time.process_time() - cpu_start
 
     rollout_start = time.perf_counter()
-    pred = parallel_rollout("nn_residual_rollout", workers, validation_x0, validation.u_cmd, validation.t, weights_nn, nn_centers, length_scale, config)
+    pred = parallel_rollout("nn_residual_rollout", workers, validation_x0, validation.u_cmd, validation.t, nominal_base(config), weights_nn, nn_centers, length_scale)
     rollout_elapsed = time.perf_counter() - rollout_start
     add_result(
         score_state_method(
@@ -1657,6 +1706,7 @@ def run_methods(
         from .greybox_oem_fit import greybox_rollout_quat
 
         _scenario, train, train_x, train_samples = training_context("6DOF-GreyBoxOEM")
+        identified_models["GreyBoxOEM"] = np.asarray(greybox["theta_full"])
         train_elapsed = greybox_fit_elapsed
         train_cpu = greybox_fit_cpu
         rollout_start = time.perf_counter()
@@ -1735,6 +1785,23 @@ def run_methods(
                 f"strong couplings (|r|>0.9): {couples or 'none'}. Bounds are optimistic (residual coloring uncorrected).",
             )
         )
+
+    # Emit each found physical grey-box as an identified Modelica model, so any
+    # model identified in the suite (not just the standalone OEM script) is
+    # written back out as Rumoca-recompilable Modelica.
+    if identified_dir is not None and identified_models:
+        from .greybox_oem_fit import write_identified_greybox_model
+
+        dataset_tag = training_scenario_override or "dataset"
+        for method_tag, theta_full in identified_models.items():
+            name = re.sub(r"\W+", "_", f"SportCubGreybox_{method_tag}_{dataset_tag}")
+            out = Path(identified_dir) / "identified" / f"{name}.mo"
+            write_identified_greybox_model(
+                theta_full, out, new_model_name=name,
+                provenance=f"in-suite {method_tag} fit on {dataset_tag}",
+            )
+            print(f"wrote {out}")
+
     return results
 
 
@@ -2347,7 +2414,7 @@ def main() -> int:
         else:
             validation = load_split(dataset_validation_file)
         print(f"running 6DOF methods on {scenario} with {args.workers} rollout workers", flush=True)
-        dataset_results = run_methods(active_train_splits, validation, args.ridge, args.workers, training_scenario_override)
+        dataset_results = run_methods(active_train_splits, validation, args.ridge, args.workers, training_scenario_override, identified_dir=args.results_dir)
         rows.extend(result_to_row(result, scenario) for result in dataset_results)
         write_method_traces(dataset_results, validation, scenario, args.results_dir / f"{scenario}_method_traces.json")
         if trajectory_validation is None or scenario == "aircraft_6dof_aggressive":
