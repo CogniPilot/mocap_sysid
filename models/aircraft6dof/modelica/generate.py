@@ -29,6 +29,7 @@ MODELS = {
     "SportCubGreybox": "SportCubGreybox",
     "SportCubGreyboxLag": "SportCubGreyboxLag",
     "SafeController": "SafeController",
+    "GroundRoll": "GroundRoll",
 }
 
 

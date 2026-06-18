@@ -55,7 +55,12 @@ from .greybox_oem_fit import (
     greybox_modelica_sources,
     quat_states_to_euler,
 )
-from .ground_model import fit_ground_effect, fit_ground_model, ground_rollout, planar_track
+from .ground_model import fit_ground_effect, fit_ground_model, ground_modelica_sources, ground_rollout, planar_track
+from .modelica.export_linear import (
+    safe_closed_loop_modelica_source,
+    linear_ss_modelica_source,
+    poly_surrogate_modelica_source,
+)
 from .safe_controller import fit_safe_controller, safe_controller, safe_modelica_sources
 from .segmentation import (
     GROUND_ALTITUDE_M,
@@ -654,6 +659,12 @@ def main() -> int:
         "methods": list(METHODS),
         "models": {
             "linear_weights": np.round(weights["6DOF-LinearSS"], 6).tolist(),
+            # Global affine state-space -> standalone generated Modelica (the weight
+            # matrix is the whole structure; der(x) = (W*[x,u,1]-x)/dt).
+            "linear_modelica": {
+                "generated_name": "LinearSSIdentified",
+                "generated_source": linear_ss_modelica_source(weights["6DOF-LinearSS"], dt),
+            },
             "residual_weights": np.round(weights["6DOF-RidgeResidual"], 6).tolist(),
             **({
                 "safe_gains": {axis: np.round(np.asarray(coef, dtype=float), 5).tolist() for axis, coef in gains.items()},
@@ -664,15 +675,46 @@ def main() -> int:
                         provenance="SAFE inner-loop controller fit (pd_command + surface lag) on the stabilized windows",
                     ),
                 },
-                "ground": {key: ground[key] for key in ("parameters", "fixed", "scores")},
+                "ground": {
+                    **{key: ground[key] for key in ("parameters", "fixed", "scores")},
+                    "modelica": ground_modelica_sources(
+                        ground["parameters"], ground["fixed"],
+                        provenance="planar ground-roll fit on the tracked ground windows",
+                    ),
+                },
                 "ground_effect": ground_effect,
                 "safe_invariant_weights": np.round(safe_weights, 8).tolist(),
                 "safe_scores": safe_scores,
+                # The closed-loop fit is a linear map; emit it as a generated
+                # standalone Modelica model (no hand-written baseline -- the
+                # weight matrix IS the structure).
+                "safe_closed_loop_modelica": {
+                    "generated_name": "SafeClosedLoopIdentified",
+                    "generated_source": safe_closed_loop_modelica_source(safe_weights, dt),
+                },
             } if not windows_mode else {}),
             "surrogates": {
                 method: {
-                    key: (np.round(value, 7).tolist() if isinstance(value, np.ndarray) else value)
-                    for key, value in spec.items()
+                    **{
+                        key: (np.round(value, 7).tolist() if isinstance(value, np.ndarray) else value)
+                        for key, value in spec.items()
+                    },
+                    # Invariant-feature polynomial surrogates (derivative/increment)
+                    # fold to a standalone generated .mo; kernel surrogates (GP-RBF,
+                    # lagged Subspace-Hankel) have no polynomial form -- skip them.
+                    **(
+                        {
+                            "modelica": {
+                                "generated_name": method.replace("6DOF-", "").replace("-", "") + "Identified",
+                                "generated_source": poly_surrogate_modelica_source(
+                                    spec, dt,
+                                    model_name=method.replace("6DOF-", "").replace("-", "") + "Identified",
+                                ),
+                            }
+                        }
+                        if spec.get("kind") in ("derivative", "increment")
+                        else {}
+                    ),
                 }
                 for method, spec in weights["surrogates"].items()
             },

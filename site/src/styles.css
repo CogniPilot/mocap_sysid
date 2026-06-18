@@ -1185,6 +1185,18 @@ svg text {
   margin: 8px 0;
 }
 
+.method-info {
+  margin: 4px 0 10px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--accent);
+  background: rgba(110, 168, 254, 0.07);
+  border-radius: 4px;
+}
+
+.method-info .model-note:last-child {
+  margin-bottom: 0;
+}
+
 .modelica-source {
   margin-top: 12px;
   border-top: 1px solid var(--line);

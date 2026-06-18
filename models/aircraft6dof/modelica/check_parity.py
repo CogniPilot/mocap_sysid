@@ -184,6 +184,25 @@ def check_safe_controller(n: int = 500) -> float:
     return worst
 
 
+def check_ground(n: int = 500) -> float:
+    """GroundRoll.mo der(state) vs the planar ground-roll equations."""
+    rhs, _ = md._casadi_kernel("GroundRoll")
+    MAXT, EXP = 0.32, 1.45
+    rng = np.random.default_rng(0)
+    worst = 0.0
+    for _ in range(n):
+        pn, pe = rng.uniform(-50, 50, 2); psi = rng.uniform(-np.pi, np.pi); V = rng.uniform(0, 15)
+        thr = rng.uniform(0, 1); rud = rng.uniform(-1, 1)
+        kT, mu, cv, ks, k0 = rng.uniform([0.2, 0, 0, -5, -1], [3, 1, 1, 5, 1])
+        m, g = 0.063, 9.81
+        x = np.array([pn, pe, psi, V]); u = np.array([thr, rud]); p = np.array([kT, mu, cv, ks, k0, m, g])
+        acc = kT * (MAXT / m) * max(thr, 0.0) ** EXP - mu * g - cv * V * V
+        ref = np.array([V * np.cos(psi), V * np.sin(psi), (ks * rud + k0) * V, acc])
+        got = np.array(rhs(x, u, p)).flatten()
+        worst = max(worst, float(np.max(np.abs(ref - got))))
+    return worst
+
+
 def check_jax() -> float | None:
     """Literal JAX kernel vs model.py for the truth model. Returns None (skip) if
     JAX is unavailable -- the NumPy backend (verified above) is its exact mirror."""
@@ -217,6 +236,7 @@ def main() -> int:
         "greybox-lag rk4 (SportCubGreyboxLag.mo vs legacy CasADi)": check_greybox_lag(),
         "base-model wiring (nominal_base vs model.py; greybox_base distinct)": check_base_models(),
         "safe-controller (SafeController.mo vs pd_command + lag)": check_safe_controller(),
+        "ground-roll (GroundRoll.mo vs planar equations)": check_ground(),
     }
     ok = True
     for name, worst in checks.items():
