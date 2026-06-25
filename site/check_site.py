@@ -40,6 +40,8 @@ def main() -> int:
         "playback-segment",
         "timeseries-plots",
         "timeseries-status",
+        "modelica-flight-editor",
+        "modelica-flight-source",
     ]:
         require(selector in index, f"missing site element #{selector}")
 
@@ -56,6 +58,9 @@ def main() -> int:
     require(isinstance(method_traces, list), "method traces bundle must be a list")
     require("three" in app.lower() and "renderPlayback" in app, "Three.js playback code is missing")
     require("renderTimeseries" in app and "selectedTraceSegments" in app, "time-history trace code is missing")
+    require("monaco-editor" in index and "registerModelicaLanguage" in app, "Modelica Monaco editor wiring is missing")
+    require("setModelMarkers" in app and "modelicaDiagnostics" in app, "Modelica diagnostic marker wiring is missing")
+    require("registerCompletionItemProvider" in app and "registerHoverProvider" in app, "Modelica LSP provider wiring is missing")
     print(f"site ok: {len(scenarios)} scenarios, {len(datasets)} datasets, {len(method_results)} result rows")
     return 0
 

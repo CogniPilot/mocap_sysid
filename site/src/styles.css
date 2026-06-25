@@ -734,6 +734,23 @@ button:hover {
   outline: none;
 }
 
+.modelica-flight-editor {
+  display: none;
+  width: 100%;
+  height: min(520px, 52vh);
+  min-height: 340px;
+  border-top: 1px solid var(--line);
+  background: #07111d;
+}
+
+.modelica-flight-panel.monaco-ready .modelica-flight-editor {
+  display: block;
+}
+
+.modelica-flight-panel.monaco-ready .modelica-flight-source {
+  display: none;
+}
+
 .scrub-label,
 .speed-label,
 .segment-label {
