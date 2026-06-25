@@ -405,6 +405,18 @@ function identifiedEntry(label, mo, group = "Modelica") {
   };
 }
 
+function hasModelicaRealParameter(source, name) {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\bparameter\\s+Real\\s+${escapedName}\\b`).test(source);
+}
+
+function modelicaModifierList(source, modifiers) {
+  const entries = Object.entries(modifiers)
+    .filter(([name]) => hasModelicaRealParameter(source, name))
+    .map(([name, value]) => `${name} = ${value}`);
+  return entries.length ? `(${entries.join(", ")})` : "";
+}
+
 export function buildModelicaFlightCatalog(models, externalEntries = []) {
   if (!models) return [];
   const catalog = [];
@@ -415,7 +427,10 @@ export function buildModelicaFlightCatalog(models, externalEntries = []) {
   if (greyboxMo?.identified_source && ctrlMo?.identified_source) {
     const groundedName = "SportCubGreyboxSafeGrounded";
     const groundedSource = groundedGreyboxSource(greyboxMo.identified_source, groundedName);
-    const flyableMods = "(roll_fric = 0.002, CD0_fp = 0.30)";
+    const flyableMods = modelicaModifierList(groundedSource, {
+      roll_fric: "0.002",
+      CD0_fp: "0.30",
+    });
     push({
       label: "SafeControllerGreyBox",
       group: "airframe",
