@@ -163,6 +163,43 @@ end RumocaFixedWingFlight;
 `;
 }
 
+function escapedRegExp(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function modelicaModelSpan(source, modelName) {
+  if (!source || !modelName) return null;
+  const name = escapedRegExp(modelName);
+  const startMatch = new RegExp(`(^|\\n)\\s*model\\s+${name}\\b`).exec(source);
+  if (!startMatch) return null;
+  const start = startMatch.index + (startMatch[1] ? startMatch[1].length : 0);
+  const endMatch = new RegExp(`\\bend\\s+${name}\\s*;`).exec(source.slice(start));
+  if (!endMatch) return null;
+  return {
+    start,
+    end: start + endMatch.index + endMatch[0].length,
+  };
+}
+
+export function modelicaEditorSource(entry) {
+  return entry?.displaySource || entry?.source || "";
+}
+
+export function modelicaCompileSource(entry, editorSource) {
+  const source = entry?.source || "";
+  if (!entry?.displaySource) return editorSource || source;
+  const span = modelicaModelSpan(source, entry.modelName);
+  if (!span) return source;
+  return `${source.slice(0, span.start)}${editorSource || entry.displaySource}${source.slice(span.end)}`;
+}
+
+export function modelicaEditorLineOffset(entry) {
+  if (!entry?.displaySource) return 0;
+  const span = modelicaModelSpan(entry.source, entry.modelName);
+  if (!span) return 0;
+  return entry.source.slice(0, span.start).split("\n").length - 1;
+}
+
 function sourceWithInitialState(entry, source, initialState) {
   if (!initialState || entry?.label !== "RumocaFixedWing") return source;
   const x = initialState;
@@ -175,6 +212,7 @@ function sourceWithInitialState(entry, source, initialState) {
 }
 
 async function rumocaFixedWingSource() {
+  const wrapper = rumocaFixedWingWrapper();
   const [lieGroup, rigidBody, fixedWing] = await Promise.all([
     fetchText(`${CMM_RAW_BASE}/LieGroup/package.mo`),
     fetchText(`${CMM_RAW_BASE}/RigidBody/package.mo`),
@@ -186,7 +224,7 @@ async function rumocaFixedWingSource() {
     lieGroup,
     rigidBody,
     fixedWing,
-    rumocaFixedWingWrapper(),
+    wrapper,
   ].join("\n\n");
 }
 
@@ -195,11 +233,12 @@ export async function loadExternalFlightModelEntries() {
     externalFlightEntriesReady = rumocaFixedWingSource()
       .then((source) => [{
         label: "RumocaFixedWing",
-      group: "baseline",
-      modelName: "RumocaFixedWingFlight",
-      source,
-      output: "generic",
-      elevatorSign: 1,
+        group: "baseline",
+        modelName: "RumocaFixedWingFlight",
+        source,
+        displaySource: rumocaFixedWingWrapper(),
+        output: "generic",
+        elevatorSign: 1,
       }])
       .catch((error) => {
         console.warn("failed to load external Rumoca fixed-wing baseline", error);
@@ -431,22 +470,26 @@ export function buildModelicaFlightCatalog(models, externalEntries = []) {
       roll_fric: "0.002",
       CD0_fp: "0.30",
     });
+    const wrapperSource = safeGreyboxWrapper(groundedName, ctrlMo.identified_name, flyableMods);
     push({
       label: "SafeControllerGreyBox",
       group: "airframe",
       modelName: "SafeControllerGreyboxFlight",
-      source: `${groundedSource}\n${ctrlMo.identified_source}\n${safeGreyboxWrapper(groundedName, ctrlMo.identified_name, flyableMods)}`,
+      source: `${groundedSource}\n${ctrlMo.identified_source}\n${wrapperSource}`,
+      displaySource: wrapperSource,
       output: "generic",
       elevatorSign: -1,
     });
   } else if (greyboxMo?.identified_source && greyboxMo?.identified_name) {
     const groundedName = "SportCubGreyboxGrounded";
     const groundedSource = groundedGreyboxSource(greyboxMo.identified_source, groundedName);
+    const wrapperSource = genericAircraftWrapper(groundedName, "SportCubGreyboxFlight");
     push({
       label: "GreyBoxOEM",
       group: "airframe",
       modelName: "SportCubGreyboxFlight",
-      source: `${groundedSource}\n${genericAircraftWrapper(groundedName, "SportCubGreyboxFlight")}`,
+      source: `${groundedSource}\n${wrapperSource}`,
+      displaySource: wrapperSource,
       output: "generic",
       elevatorSign: -1,
     });

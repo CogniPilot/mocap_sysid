@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { registerModelicaLanguage } from "@cognipilot/rumoca/modelica-language";
-import { buildModelicaFlightCatalog, createModelicaFlightRunner, loadExternalFlightModelEntries, modelicaCompletions, modelicaDiagnostics, modelicaHover } from "./rumoca_flight.js";
+import { buildModelicaFlightCatalog, createModelicaFlightRunner, loadExternalFlightModelEntries, modelicaCompileSource, modelicaCompletions, modelicaDiagnostics, modelicaEditorLineOffset, modelicaEditorSource, modelicaHover } from "./rumoca_flight.js";
 
 const DATA_DIR = "./public/data";
 const AIRCRAFT_MODEL_SCALE = 0.6 / 2.2;
@@ -55,9 +55,6 @@ const state = {
     accumulator: 0,
     lastStartS: 0,
     elapsedS: 0,
-    inputLog: [],
-    replaying: false,
-    replayIndex: 0,
   },
   externalFlightModels: [],
   selectedMethods: new Set(),
@@ -257,13 +254,13 @@ function modelicaMarkerSeverity(monaco, diagnostic) {
   return monaco.MarkerSeverity.Info;
 }
 
-function diagnosticMarker(monaco, diagnostic) {
+function diagnosticMarker(monaco, diagnostic, lineOffset = 0) {
   const range = diagnostic.range || diagnostic.span || diagnostic.location || {};
   const start = range.start || range;
   const end = range.end || start;
-  const startLineNumber = Math.max(1, (start.line ?? diagnostic.line ?? 0) + 1);
+  const startLineNumber = Math.max(1, (start.line ?? diagnostic.line ?? 0) + 1 - lineOffset);
   const startColumn = Math.max(1, (start.character ?? start.column ?? diagnostic.column ?? 0) + 1);
-  const endLineNumber = Math.max(startLineNumber, (end.line ?? start.line ?? diagnostic.line ?? 0) + 1);
+  const endLineNumber = Math.max(startLineNumber, (end.line ?? start.line ?? diagnostic.line ?? 0) + 1 - lineOffset);
   const endColumn = Math.max(startColumn + 1, (end.character ?? end.column ?? start.character ?? start.column ?? diagnostic.column ?? 0) + 1);
   return {
     severity: modelicaMarkerSeverity(monaco, diagnostic),
@@ -279,8 +276,19 @@ function diagnosticMarker(monaco, diagnostic) {
 async function refreshModelicaDiagnostics(source = getFlightEditorSource()) {
   const editor = state.flightSim.editor;
   if (!editor || !window.monaco?.editor) return [];
-  const diagnostics = await modelicaDiagnostics(source);
-  const markers = diagnostics.map((diagnostic) => diagnosticMarker(window.monaco, diagnostic));
+  const entry = selectedFlightModelicaEntry();
+  const compileSource = modelicaCompileSource(entry, source);
+  const lineOffset = modelicaEditorLineOffset(entry);
+  const diagnostics = await modelicaDiagnostics(compileSource);
+  const displayLineCount = source.split("\n").length;
+  const markers = diagnostics
+    .filter((diagnostic) => {
+      const range = diagnostic.range || diagnostic.span || diagnostic.location || {};
+      const start = range.start || range;
+      const line = (start.line ?? diagnostic.line ?? 0) + 1 - lineOffset;
+      return line >= 1 && line <= displayLineCount;
+    })
+    .map((diagnostic) => diagnosticMarker(window.monaco, diagnostic, lineOffset));
   window.monaco.editor.setModelMarkers(editor.getModel(), "rumoca-modelica", markers);
   const errors = diagnostics.filter((d) => String(d.severity || "").toLowerCase() === "error" || d.severity === 1);
   if (errors.length) {
@@ -471,6 +479,7 @@ function renderModelTabs() {
     button.dataset.model = family;
     button.className = family === state.modelFamily ? "active" : "";
     button.textContent = family.replace("aircraft", "").toUpperCase();
+    button.title = `Show ${button.textContent} scenarios and model results`;
     button.addEventListener("click", () => {
       state.modelFamily = family;
       state.selectedMethods.clear();
@@ -618,20 +627,7 @@ function bindControls() {
     renderFlightSimControls();
   });
   document.querySelector("#modelica-compile").addEventListener("click", () => {
-    startFlightSim({ keepInputLog: true });
-  });
-  document.querySelector("#modelica-reset").addEventListener("click", () => {
-    resetFlightSim();
-  });
-  document.querySelector("#modelica-replay").addEventListener("click", () => {
-    startReplayInputs();
-  });
-  document.querySelector("#modelica-clear-replay").addEventListener("click", () => {
-    state.flightSim.inputLog = [];
-    state.flightSim.replaying = false;
-    state.flightSim.replayIndex = 0;
-    setFlightStatus("Input log cleared.");
-    renderFlightSimControls();
+    startFlightSim();
   });
   document.querySelector("#modelica-close").addEventListener("click", () => {
     state.flightSim.editorOpen = false;
@@ -827,6 +823,7 @@ function renderMeta() {
 function renderPlaybackTabs() {
   document.querySelectorAll("#playback-tabs button[data-playback-view]").forEach((button) => {
     button.classList.toggle("active", button.dataset.playbackView === state.playbackView);
+    if (!button.title) button.title = `Show the ${button.textContent.trim()} view`;
   });
   const animation = document.querySelector("#animation-view");
   const history = document.querySelector("#history-view");
@@ -1258,14 +1255,15 @@ function syncFlightEditorSource(force = false) {
   const editor = document.querySelector("#modelica-flight-source");
   const entry = selectedFlightModelicaEntry();
   if (!editor || !entry) return;
-  const sourceKey = `${entry.label}:${entry.modelName}:${entry.source.length}:${entry.source.includes("enable_safe")}`;
+  const displaySource = modelicaEditorSource(entry);
+  const sourceKey = `${entry.label}:${entry.modelName}:${displaySource.length}:${entry.source.length}`;
   if (force || state.flightSim.sourceModel !== sourceKey) {
-    state.flightSim.source = entry.source;
+    state.flightSim.source = displaySource;
     state.flightSim.sourceModel = sourceKey;
-    setFlightEditorSource(entry.source);
+    setFlightEditorSource(displaySource);
     scheduleModelicaDiagnostics();
   } else if (!state.flightSim.source) {
-    state.flightSim.source = editor.value || entry.source;
+    state.flightSim.source = editor.value || displaySource;
     setFlightEditorSource(state.flightSim.source);
   }
 }
@@ -1275,7 +1273,6 @@ function renderFlightSimControls() {
   const menu = document.querySelector("#playback-model-menu");
   const summary = document.querySelector("#playback-model-summary");
   const panel = document.querySelector("#modelica-flight-panel");
-  const replay = document.querySelector("#modelica-replay");
   if (!wrap || !menu || !summary || !panel) return;
   const choices = flightSimChoices();
   const showing = Boolean(state.playbackTrackOverride && choices.length);
@@ -1331,6 +1328,8 @@ function renderFlightSimControls() {
       edit.dataset.role = "edit";
       edit.dataset.model = choice;
       edit.textContent = "Edit";
+      edit.title = `Open the Modelica source editor for ${choice}`;
+      edit.setAttribute("aria-label", `Edit ${choice} Modelica source`);
       edit.classList.toggle("active", state.flightSim.editorOpen && state.flightSim.model === choice);
       const predict = document.createElement("input");
       predict.type = "checkbox";
@@ -1358,13 +1357,9 @@ function renderFlightSimControls() {
     ensureModelicaEditor();
     requestAnimationFrame(() => state.flightSim.editor?.layout());
   }
-  if (replay) {
-    replay.disabled = !state.flightSim.inputLog.length || state.flightSim.pending;
-    replay.classList.toggle("active", state.flightSim.replaying);
-  }
 }
 
-async function startFlightSim({ keepInputLog = false, preserveControls = false } = {}) {
+async function startFlightSim({ preserveControls = false } = {}) {
   const entry = selectedFlightModelicaEntry();
   if (!entry || state.flightSim.pending) return;
   const previous = {
@@ -1377,7 +1372,8 @@ async function startFlightSim({ keepInputLog = false, preserveControls = false }
   };
   const source = state.flightSim.editorOpen
     ? (getFlightEditorSource() || state.flightSim.source || entry.source)
-    : entry.source;
+    : modelicaEditorSource(entry);
+  const compileSource = modelicaCompileSource(entry, source);
   state.flightSim.pending = true;
   state.flightSim.active = false;
   setFlightStatus(`Compiling ${entry.modelName}...`);
@@ -1386,21 +1382,19 @@ async function startFlightSim({ keepInputLog = false, preserveControls = false }
   try {
     diagnostics = state.flightSim.editor
       ? await refreshModelicaDiagnostics(source)
-      : await modelicaDiagnostics(source);
+      : await modelicaDiagnostics(compileSource);
     const errors = diagnostics.filter((d) => String(d.severity || "").toLowerCase() === "error" || d.severity === 1);
     if (errors.length) {
       setFlightStatus(`Rumoca diagnostics: ${errors.map(formatRumocaDiagnostic).filter(Boolean).slice(0, 2).join(" | ")}`, true);
     }
-    const runner = await createModelicaFlightRunner(entry, source);
+    const runner = await createModelicaFlightRunner(entry, compileSource);
     state.flightSim.runner = runner;
     state.flightSim.active = true;
     state.flightSim.x = runner.reset();
     state.flightSim.source = source;
-    state.flightSim.sourceModel = `${entry.label}:${entry.modelName}:${entry.source.length}:${entry.source.includes("enable_safe")}`;
+    state.flightSim.sourceModel = `${entry.label}:${entry.modelName}:${modelicaEditorSource(entry).length}:${entry.source.length}`;
     state.flightSim.dt = 1 / 240;
     state.flightSim.elapsedS = 0;
-    state.flightSim.replaying = false;
-    state.flightSim.replayIndex = 0;
     state.flightSim.safeEnabled = false;
     clearFlightTrail(state.playbackScene);
     ensureFlightAircraft(state.playbackScene);
@@ -1412,7 +1406,6 @@ async function startFlightSim({ keepInputLog = false, preserveControls = false }
       state.flightSim.yaw = previous.yaw;
       state.flightSim.safeEnabled = previous.safeEnabled;
     }
-    if (!keepInputLog) state.flightSim.inputLog = [];
     const safeText = runner.supportsSafeToggle ? "Space toggles SAFE" : "SAFE toggle unavailable";
     setFlightStatus(`${entry.modelName} ready. ${safeText}, W/S throttle, arrows pitch/roll, A/D rudder, R reset.`, !runner.supportsSafeToggle);
   } catch (error) {
@@ -1434,7 +1427,7 @@ async function startFlightSim({ keepInputLog = false, preserveControls = false }
 function resetFlightSim() {
   const sim = state.flightSim;
   if (!sim.runner) {
-    startFlightSim({ keepInputLog: true });
+    startFlightSim();
     return;
   }
   sim.x = sim.runner.reset();
@@ -1451,7 +1444,6 @@ function resetFlightSim() {
   state.flightSim.trim.roll = 0;
   state.flightSim.trim.yaw = 0;
   state.flightSim.elapsedS = 0;
-  state.flightSim.replayIndex = 0;
   state.flightSim.active = true;
   state.playbackPlaying = false;
   state.playbackLastMs = null;
@@ -1463,22 +1455,11 @@ function stopFlightSim() {
   state.flightSim.active = false;
   state.flightSim.x = null;
   state.flightSim.accumulator = 0;
-  state.flightSim.replaying = false;
   hideFlightSimVisuals();
 }
 
 function updateFlightInputs(deltaS) {
   const sim = state.flightSim;
-  if (sim.replaying && sim.inputLog.length) {
-    while (sim.replayIndex < sim.inputLog.length - 1 && sim.inputLog[sim.replayIndex + 1].t <= sim.elapsedS) {
-      sim.replayIndex += 1;
-    }
-    const sample = sim.inputLog[sim.replayIndex];
-    if (sample) {
-      if (sim.replayIndex >= sim.inputLog.length - 1 && sim.elapsedS > sample.t + 0.5) sim.replaying = false;
-      return sample.stick.slice();
-    }
-  }
   const decay = Math.pow(0.85, deltaS / 0.016);
   const held = (key) => sim.keys.has(key);
   sim.roll = held("ArrowLeft") ? -0.6 : held("ArrowRight") ? 0.6 : sim.roll * decay;
@@ -1486,24 +1467,12 @@ function updateFlightInputs(deltaS) {
   sim.yaw = held("a") ? -0.6 : held("d") ? 0.6 : sim.yaw * decay;
   sim.throttleInput = held("w") ? 1 : held("s") ? -1 : sim.throttleInput * decay;
   sim.throttle = clamp(sim.throttle + sim.throttleInput * 0.7 * deltaS, 0, 1);
-  const stick = [
+  return [
     clamp(sim.throttle + sim.trim.throttle, 0, 1),
     clamp(sim.pitch + sim.trim.pitch, -1, 1),
     clamp(sim.roll + sim.trim.roll, -1, 1),
     clamp(sim.yaw + sim.trim.yaw, -1, 1),
   ];
-  sim.inputLog.push({ t: sim.elapsedS, stick: stick.slice() });
-  return stick;
-}
-
-function startReplayInputs() {
-  if (!state.flightSim.inputLog.length) return;
-  state.flightSim.replaying = true;
-  state.flightSim.replayIndex = 0;
-  resetFlightSim();
-  state.flightSim.replaying = true;
-  setFlightStatus(`Replaying ${state.flightSim.inputLog.length} recorded input samples.`);
-  renderFlightSimControls();
 }
 
 function interpolatePredictionState(predictionFlight, timeS) {

@@ -43,10 +43,10 @@
           <p id="explorer-status" class="explorer-status"></p>
         </div>
         <div class="view-tabs" id="playback-tabs" aria-label="Playback view">
-          <button type="button" data-playback-view="animation" class="active">Animation</button>
-          <button type="button" data-playback-view="history">Time Histories</button>
-          <button type="button" data-playback-view="splits">Data Splits</button>
-          <button type="button" data-playback-view="models">Models</button>
+          <button type="button" data-playback-view="animation" class="active" title="Show the animated aircraft playback and flight controls">Animation</button>
+          <button type="button" data-playback-view="history" title="Show state, input, and prediction time histories">Time Histories</button>
+          <button type="button" data-playback-view="splits" title="Show train, validation, and segment-label data splits">Data Splits</button>
+          <button type="button" data-playback-view="models" title="Inspect the fitted models and their equations">Models</button>
         </div>
         <div id="animation-view" class="playback-view">
           <div class="playback-stage">
@@ -116,11 +116,8 @@
           </div>
           <div id="modelica-flight-panel" class="modelica-flight-panel" hidden>
             <div class="modelica-flight-toolbar">
-              <button type="button" id="modelica-compile">Compile</button>
-              <button type="button" id="modelica-reset">Reset</button>
-              <button type="button" id="modelica-replay">Replay</button>
-              <button type="button" id="modelica-clear-replay">Clear inputs</button>
-              <button type="button" id="modelica-close">Close</button>
+              <button type="button" id="modelica-compile" title="Compile the edited Modelica model and start keyboard flight">Compile</button>
+              <button type="button" id="modelica-close" title="Close the Modelica source editor">Close</button>
               <span id="modelica-flight-status">Rumoca Modelica editor</span>
             </div>
             <div id="modelica-flight-editor" class="modelica-flight-editor" aria-label="Modelica source editor"></div>
