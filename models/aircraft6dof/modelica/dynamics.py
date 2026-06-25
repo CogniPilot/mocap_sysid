@@ -29,14 +29,84 @@ import numpy as np
 
 GENERATED = Path(__file__).resolve().parent / "generated"
 
+MODEL_METADATA = {
+    "Aircraft6DOF": SimpleNamespace(
+        state_names=(
+            "pos[1]", "pos[2]", "pos[3]",
+            "vel[1]", "vel[2]", "vel[3]",
+            "quat[1]", "quat[2]", "quat[3]", "quat[4]",
+            "omega[1]", "omega[2]", "omega[3]",
+        ),
+        input_names=("throttle", "elevator", "aileron", "rudder"),
+        param_names=(
+            "mass", "g", "ixx", "iyy", "izz", "ixz", "rho", "S", "b", "c",
+            "prop_arm", "max_thrust", "prop_wash_gain", "alpha_stall_deg",
+            "stall_width_deg", "cl_max", "cl_min", "nl",
+        ),
+    ),
+    "SportCubGreybox": SimpleNamespace(
+        state_names=(
+            "pos[1]", "pos[2]", "pos[3]",
+            "vel[1]", "vel[2]", "vel[3]",
+            "att[1]", "att[2]", "att[3]",
+            "rates[1]", "rates[2]", "rates[3]",
+        ),
+        input_names=("aileron", "elevator", "throttle", "rudder"),
+        param_names=(
+            "m", "S", "b", "cbar", "rho", "g", "Ixx", "Iyy", "Izz", "Ixz",
+            "wing_incidence", "thr_max", "ground_k", "ground_c", "roll_fric",
+            "side_fric", "ground_contact_eps", "CL0", "CLa", "CD0", "k_ind",
+            "CD0_fp", "Cm0", "Cma", "Cmq", "Cmde", "CYb", "CYda", "CYdr",
+            "CYp", "CYr", "CY_fp_coef", "Clb", "Clp", "Clr", "Clda", "Cldr",
+            "Cnb", "Cnp", "Cnr", "Cndr", "Cnda", "alpha_stall", "blend_width",
+            "max_defl_ail", "max_defl_elev", "max_defl_rud", "__pre__.c",
+        ),
+    ),
+    "SafeController": SimpleNamespace(
+        state_names=("delta_e", "delta_a", "delta_r"),
+        input_names=(
+            "stick_elevator", "stick_aileron", "stick_rudder",
+            "phi", "theta", "p", "q", "r",
+        ),
+        param_names=(
+            "Kp_e", "c_e", "limit_e", "Kd_e", "b_e",
+            "Kp_a", "c_a", "limit_a", "Kd_a", "b_a",
+            "gs_r", "Kr_r", "b_r", "tau_e", "tau_a", "tau_r",
+        ),
+    ),
+    "GroundRoll": SimpleNamespace(
+        state_names=("p_n", "p_e", "psi", "V"),
+        input_names=("throttle", "rudder"),
+        param_names=("kT", "mu", "cv", "ks", "k0", "m", "g"),
+    ),
+}
+
+
+def _module_tuple(mod, attr: str, fallback: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(getattr(mod, attr, fallback))
+
+
+def _validate_meta(model_stem: str, meta: SimpleNamespace) -> None:
+    if len(meta.state_names) != meta.n_x:
+        raise RuntimeError(
+            f"{model_stem} state metadata has {len(meta.state_names)} names for {meta.n_x} states"
+        )
+    if len(meta.input_names) != meta.n_u:
+        raise RuntimeError(
+            f"{model_stem} input metadata has {len(meta.input_names)} names for {meta.n_u} inputs"
+        )
+    if len(meta.param_names) != meta.n_p:
+        raise RuntimeError(
+            f"{model_stem} parameter metadata has {len(meta.param_names)} names for {meta.n_p} parameters"
+        )
+
 
 def _load_generated(model_stem: str, suffix: str):
     """Import a local Rumoca-generated kernel module.
 
-    The module exposes ``rhs(x, u, p) -> xdot`` plus ``STATE_NAMES`` /
-    ``INPUT_NAMES`` / ``PARAM_NAMES`` and ``N_Y`` / ``N_U`` / ``N_P``. We wrap the
-    latter in a ``meta`` namespace matching the metadata the call sites expect, so
-    nothing downstream changes.
+    The module exposes ``rhs(x, u, p) -> xdot`` plus ``N_Y`` / ``N_U`` / ``N_P``.
+    Newer generated files may also expose name tuples; otherwise the owned
+    Modelica model contracts above provide the metadata expected downstream.
     """
     from .generate import ensure_generated
 
@@ -45,12 +115,14 @@ def _load_generated(model_stem: str, suffix: str):
     spec = importlib.util.spec_from_file_location(f"_rumoca_{model_stem}_{suffix}", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    fallback = MODEL_METADATA[model_stem]
     meta = SimpleNamespace(
-        state_names=tuple(mod.STATE_NAMES),
-        input_names=tuple(mod.INPUT_NAMES),
-        param_names=tuple(mod.PARAM_NAMES),
+        state_names=_module_tuple(mod, "STATE_NAMES", fallback.state_names),
+        input_names=_module_tuple(mod, "INPUT_NAMES", fallback.input_names),
+        param_names=_module_tuple(mod, "PARAM_NAMES", fallback.param_names),
         n_x=mod.N_Y, n_u=mod.N_U, n_p=mod.N_P,
     )
+    _validate_meta(model_stem, meta)
     return mod.rhs, meta
 
 

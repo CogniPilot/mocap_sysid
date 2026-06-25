@@ -516,3 +516,26 @@ export async function modelicaDiagnostics(source) {
     return [];
   }
 }
+
+export async function modelicaCompletions(source, line, character) {
+  const wasm = await loadRumoca();
+  if (typeof wasm.lsp_completion !== "function") return [];
+  try {
+    const raw = wasm.lsp_completion(source, line, character);
+    const parsed = JSON.parse(raw || "[]");
+    return Array.isArray(parsed) ? parsed : (parsed.items || []);
+  } catch (_error) {
+    return [];
+  }
+}
+
+export async function modelicaHover(source, line, character) {
+  const wasm = await loadRumoca();
+  if (typeof wasm.lsp_hover !== "function") return null;
+  try {
+    const raw = wasm.lsp_hover(source, line, character);
+    return JSON.parse(raw || "null");
+  } catch (_error) {
+    return null;
+  }
+}

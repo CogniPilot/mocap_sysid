@@ -12,8 +12,7 @@ Usage::
     python -m models.aircraft6dof.modelica.generate
 """
 
-from __future__ import annotations
-
+import json
 import os
 import shutil
 import subprocess
@@ -86,6 +85,32 @@ def _compile(mo: Path, model_class: str, target: str | None, rumoca: str | None)
     return _compile_with_binary(mo, model_class, target, rumoca)
 
 
+def _target_source(text: str, filename: str) -> str:
+    """Return source text from Rumoca target output.
+
+    Rumoca CLI emits a target file directly, while some Python API builds return
+    a JSON file bundle: [{"path": "...", "content": "..."}]. Normalize both
+    forms before writing the generated cache file.
+    """
+    stripped = text.lstrip()
+    if not stripped.startswith("["):
+        return text
+    try:
+        bundle = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+    if not isinstance(bundle, list):
+        return text
+    for item in bundle:
+        if (
+            isinstance(item, dict)
+            and item.get("path") == filename
+            and isinstance(item.get("content"), str)
+        ):
+            return item["content"]
+    raise SystemExit(f"rumoca target output did not contain {filename}")
+
+
 def generated_paths(model_stem: str) -> list[Path]:
     return [
         GENERATED / f"{model_stem}_casadi_solve.py",
@@ -115,8 +140,8 @@ def generate(model_stem: str, model_class: str, rumoca: str | None = None) -> Pa
     # Standalone explicit-ODE kernels  xdot = rhs(x, u, p)  for CasADi and JAX,
     # rendered directly from Rumoca. These are local runtime cache files.
     for target in ("casadi-solve", "jax-solve"):
-        text = _compile(mo, model_class, target, rumoca)
         filename = f"{model_stem}_{target.replace('-', '_')}.py"
+        text = _target_source(_compile(mo, model_class, target, rumoca), filename)
         (GENERATED / filename).write_text(text)
     return out
 

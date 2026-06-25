@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { buildModelicaFlightCatalog, createModelicaFlightRunner, loadExternalFlightModelEntries, modelicaDiagnostics } from "./rumoca_flight.js";
+import { registerModelicaLanguage } from "@cognipilot/rumoca/modelica-language";
+import { buildModelicaFlightCatalog, createModelicaFlightRunner, loadExternalFlightModelEntries, modelicaCompletions, modelicaDiagnostics, modelicaHover } from "./rumoca_flight.js";
 
 const DATA_DIR = "./public/data";
 const AIRCRAFT_MODEL_SCALE = 0.6 / 2.2;
@@ -26,6 +27,11 @@ const state = {
     catalog: [],
     source: "",
     sourceModel: "",
+    editor: null,
+    editorReady: false,
+    editorLoading: false,
+    editorProvidersReady: false,
+    diagnosticsTimer: null,
     runner: null,
     pending: false,
     editorOpen: false,
@@ -72,6 +78,9 @@ const ENABLED_METHOD_KEYS = new Set(["6DOF-GreyBoxOEM"]);
 const CAMERA_MODES = ["first", "chase", "follow", "observer"];
 const MODELICA_METHOD_PREFIX = "Modelica:";
 const MODELICA_METHOD_COLORS = { "Modelica:RumocaFixedWing": 0x7dd3fc };
+const MONACO_VERSION = "0.49.0";
+const MONACO_BASE = `https://cdn.jsdelivr.net/npm/monaco-editor@${MONACO_VERSION}/min/vs`;
+const MONACO_LOADER = `${MONACO_BASE}/loader.js`;
 
 function finiteNumber(value) {
   return typeof value === "number" && Number.isFinite(value);
@@ -101,6 +110,231 @@ async function loadJson(name) {
   const response = await fetch(`${DATA_DIR}/${name}`);
   if (!response.ok) throw new Error(`failed to load ${name}: ${response.status}`);
   return response.json();
+}
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[src="${src}"]`);
+    if (existing) {
+      existing.addEventListener("load", resolve, { once: true });
+      existing.addEventListener("error", reject, { once: true });
+      if (existing.dataset.loaded === "true") resolve();
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = src;
+    script.async = true;
+    script.dataset.loaded = "false";
+    script.addEventListener("load", () => {
+      script.dataset.loaded = "true";
+      resolve();
+    }, { once: true });
+    script.addEventListener("error", reject, { once: true });
+    document.head.append(script);
+  });
+}
+
+async function loadMonaco() {
+  if (window.monaco?.editor) return window.monaco;
+  await loadScript(MONACO_LOADER);
+  window.MonacoEnvironment = {
+    getWorkerUrl() {
+      const code = `self.MonacoEnvironment={baseUrl:${JSON.stringify(`${MONACO_BASE}/`)}};importScripts(${JSON.stringify(`${MONACO_BASE}/base/worker/workerMain.js`)});`;
+      return `data:text/javascript;charset=utf-8,${encodeURIComponent(code)}`;
+    },
+  };
+  return new Promise((resolve, reject) => {
+    window.require.config({ paths: { vs: MONACO_BASE } });
+    window.require(["vs/editor/editor.main"], () => resolve(window.monaco), reject);
+  });
+}
+
+function defineModelicaTheme(monaco) {
+  monaco.editor.defineTheme("mocap-modelica-dark", {
+    base: "vs-dark",
+    inherit: true,
+    rules: [
+      { token: "keyword", foreground: "7dd3fc", fontStyle: "bold" },
+      { token: "type", foreground: "c4b5fd" },
+      { token: "predefined", foreground: "86efac" },
+      { token: "number", foreground: "fbbf24" },
+      { token: "string", foreground: "fca5a5" },
+      { token: "comment", foreground: "8aa1bd", fontStyle: "italic" },
+    ],
+    colors: {
+      "editor.background": "#07111d",
+      "editor.foreground": "#dce7f5",
+      "editor.lineHighlightBackground": "#102036",
+      "editorGutter.background": "#07111d",
+      "editorCursor.foreground": "#dce7f5",
+    },
+  });
+}
+
+function modelicaCompletionKind(monaco, kind) {
+  const kinds = monaco.languages.CompletionItemKind;
+  const byLspKind = {
+    3: kinds.Function,
+    6: kinds.Variable,
+    7: kinds.Class,
+    10: kinds.Property,
+    13: kinds.Enum,
+    14: kinds.Keyword,
+    15: kinds.Snippet,
+    20: kinds.EnumMember,
+    21: kinds.Constant,
+  };
+  return byLspKind[kind] || kinds.Text;
+}
+
+function hoverContents(hover) {
+  const contents = hover?.contents;
+  if (!contents) return [];
+  const list = Array.isArray(contents) ? contents : [contents];
+  return list.map((item) => {
+    if (typeof item === "string") return { value: item };
+    if (item.kind === "markdown" && typeof item.value === "string") return { value: item.value };
+    if (typeof item.value === "string") return { value: item.value };
+    return null;
+  }).filter(Boolean);
+}
+
+function registerModelicaLspProviders(monaco) {
+  if (state.flightSim.editorProvidersReady) return;
+  monaco.languages.registerCompletionItemProvider("modelica", {
+    triggerCharacters: [".", " ", "(", "["],
+    async provideCompletionItems(model, position) {
+      const word = model.getWordUntilPosition(position);
+      const range = {
+        startLineNumber: position.lineNumber,
+        endLineNumber: position.lineNumber,
+        startColumn: word.startColumn,
+        endColumn: word.endColumn,
+      };
+      const items = await modelicaCompletions(model.getValue(), position.lineNumber - 1, position.column - 1);
+      return {
+        suggestions: items.map((item) => ({
+          label: String(item.label || item.insertText || ""),
+          kind: modelicaCompletionKind(monaco, item.kind),
+          insertText: String(item.insertText || item.label || ""),
+          detail: item.detail || "",
+          documentation: item.documentation?.value || item.documentation || item.detail || "",
+          range,
+        })).filter((item) => item.label && item.insertText),
+      };
+    },
+  });
+  monaco.languages.registerHoverProvider("modelica", {
+    async provideHover(model, position) {
+      const hover = await modelicaHover(model.getValue(), position.lineNumber - 1, position.column - 1);
+      const contents = hoverContents(hover);
+      return contents.length ? { contents } : null;
+    },
+  });
+  state.flightSim.editorProvidersReady = true;
+}
+
+function setFlightEditorSource(source) {
+  const text = source || "";
+  const textarea = document.querySelector("#modelica-flight-source");
+  if (textarea && textarea.value !== text) textarea.value = text;
+  const editor = state.flightSim.editor;
+  if (editor && editor.getValue() !== text) editor.setValue(text);
+}
+
+function getFlightEditorSource() {
+  return state.flightSim.editor?.getValue()
+    ?? document.querySelector("#modelica-flight-source")?.value
+    ?? state.flightSim.source
+    ?? "";
+}
+
+function modelicaMarkerSeverity(monaco, diagnostic) {
+  const severity = String(diagnostic.severity || "").toLowerCase();
+  if (severity === "error" || diagnostic.severity === 1) return monaco.MarkerSeverity.Error;
+  if (severity === "warning" || diagnostic.severity === 2) return monaco.MarkerSeverity.Warning;
+  if (severity === "hint" || diagnostic.severity === 4) return monaco.MarkerSeverity.Hint;
+  return monaco.MarkerSeverity.Info;
+}
+
+function diagnosticMarker(monaco, diagnostic) {
+  const range = diagnostic.range || diagnostic.span || diagnostic.location || {};
+  const start = range.start || range;
+  const end = range.end || start;
+  const startLineNumber = Math.max(1, (start.line ?? diagnostic.line ?? 0) + 1);
+  const startColumn = Math.max(1, (start.character ?? start.column ?? diagnostic.column ?? 0) + 1);
+  const endLineNumber = Math.max(startLineNumber, (end.line ?? start.line ?? diagnostic.line ?? 0) + 1);
+  const endColumn = Math.max(startColumn + 1, (end.character ?? end.column ?? start.character ?? start.column ?? diagnostic.column ?? 0) + 1);
+  return {
+    severity: modelicaMarkerSeverity(monaco, diagnostic),
+    message: diagnostic.message || diagnostic.text || diagnostic.detail || String(diagnostic),
+    startLineNumber,
+    startColumn,
+    endLineNumber,
+    endColumn,
+    source: "Rumoca Modelica",
+  };
+}
+
+async function refreshModelicaDiagnostics(source = getFlightEditorSource()) {
+  const editor = state.flightSim.editor;
+  if (!editor || !window.monaco?.editor) return [];
+  const diagnostics = await modelicaDiagnostics(source);
+  const markers = diagnostics.map((diagnostic) => diagnosticMarker(window.monaco, diagnostic));
+  window.monaco.editor.setModelMarkers(editor.getModel(), "rumoca-modelica", markers);
+  const errors = diagnostics.filter((d) => String(d.severity || "").toLowerCase() === "error" || d.severity === 1);
+  if (errors.length) {
+    setFlightStatus(`Rumoca diagnostics: ${errors.map(formatRumocaDiagnostic).filter(Boolean).slice(0, 2).join(" | ")}`, true);
+  }
+  return diagnostics;
+}
+
+function scheduleModelicaDiagnostics() {
+  clearTimeout(state.flightSim.diagnosticsTimer);
+  state.flightSim.diagnosticsTimer = setTimeout(() => {
+    refreshModelicaDiagnostics().catch(() => {});
+  }, 450);
+}
+
+async function ensureModelicaEditor() {
+  const panel = document.querySelector("#modelica-flight-panel");
+  const mount = document.querySelector("#modelica-flight-editor");
+  if (!panel || !mount || state.flightSim.editorReady || state.flightSim.editorLoading) return;
+  state.flightSim.editorLoading = true;
+  try {
+    const monaco = await loadMonaco();
+    registerModelicaLanguage(monaco);
+    registerModelicaLspProviders(monaco);
+    defineModelicaTheme(monaco);
+    state.flightSim.editor = monaco.editor.create(mount, {
+      value: document.querySelector("#modelica-flight-source")?.value || state.flightSim.source || "",
+      language: "modelica",
+      theme: "mocap-modelica-dark",
+      automaticLayout: true,
+      minimap: { enabled: false },
+      scrollBeyondLastLine: false,
+      fontSize: 12,
+      lineHeight: 18,
+      tabSize: 2,
+      insertSpaces: true,
+      wordWrap: "off",
+    });
+    state.flightSim.editor.onDidChangeModelContent(() => {
+      state.flightSim.source = state.flightSim.editor.getValue();
+      const textarea = document.querySelector("#modelica-flight-source");
+      if (textarea) textarea.value = state.flightSim.source;
+      scheduleModelicaDiagnostics();
+    });
+    panel.classList.add("monaco-ready");
+    state.flightSim.editorReady = true;
+    state.flightSim.editor.layout();
+    scheduleModelicaDiagnostics();
+  } catch (error) {
+    console.warn("Modelica editor unavailable; using textarea fallback.", error);
+    setFlightStatus("Modelica editor highlighting unavailable; using plain text fallback.", true);
+  } finally {
+    state.flightSim.editorLoading = false;
+  }
 }
 
 function allRows() {
@@ -1028,10 +1262,11 @@ function syncFlightEditorSource(force = false) {
   if (force || state.flightSim.sourceModel !== sourceKey) {
     state.flightSim.source = entry.source;
     state.flightSim.sourceModel = sourceKey;
-    editor.value = entry.source;
+    setFlightEditorSource(entry.source);
+    scheduleModelicaDiagnostics();
   } else if (!state.flightSim.source) {
     state.flightSim.source = editor.value || entry.source;
-    editor.value = state.flightSim.source;
+    setFlightEditorSource(state.flightSim.source);
   }
 }
 
@@ -1119,6 +1354,10 @@ function renderFlightSimControls() {
   summary.textContent = `${state.flightSim.model}${flySuffix}${predictSuffix}`;
   syncFlightEditorSource();
   panel.hidden = !state.flightSim.editorOpen;
+  if (state.flightSim.editorOpen) {
+    ensureModelicaEditor();
+    requestAnimationFrame(() => state.flightSim.editor?.layout());
+  }
   if (replay) {
     replay.disabled = !state.flightSim.inputLog.length || state.flightSim.pending;
     replay.classList.toggle("active", state.flightSim.replaying);
@@ -1136,9 +1375,8 @@ async function startFlightSim({ keepInputLog = false, preserveControls = false }
     yaw: state.flightSim.yaw,
     safeEnabled: state.flightSim.safeEnabled,
   };
-  const editor = document.querySelector("#modelica-flight-source");
   const source = state.flightSim.editorOpen
-    ? (editor?.value || state.flightSim.source || entry.source)
+    ? (getFlightEditorSource() || state.flightSim.source || entry.source)
     : entry.source;
   state.flightSim.pending = true;
   state.flightSim.active = false;
@@ -1146,7 +1384,9 @@ async function startFlightSim({ keepInputLog = false, preserveControls = false }
   renderFlightSimControls();
   let diagnostics = [];
   try {
-    diagnostics = await modelicaDiagnostics(source);
+    diagnostics = state.flightSim.editor
+      ? await refreshModelicaDiagnostics(source)
+      : await modelicaDiagnostics(source);
     const errors = diagnostics.filter((d) => String(d.severity || "").toLowerCase() === "error" || d.severity === 1);
     if (errors.length) {
       setFlightStatus(`Rumoca diagnostics: ${errors.map(formatRumocaDiagnostic).filter(Boolean).slice(0, 2).join(" | ")}`, true);
