@@ -30,7 +30,6 @@ from .model import (
     simulate_smoke,
 )
 
-
 def rk4_step(x, u_cmd, dt, config):
     """Full nonlinear truth 6DOF RK4 step (the synthetic-data generator's model).
 
@@ -74,33 +73,66 @@ OUTPUT_NAMES_MOCAP = ("p_n", "p_e", "p_d", "phi", "theta", "psi")
 LATENT_INITIAL_NAMES = ("u0", "v0", "w0", "p0", "q0", "r0", "phi0", "theta0", "psi0")
 
 FIXED_PARAMETER_NAMES = ("m", "S", "b", "cbar", "rho", "g", "Ixx", "Iyy", "Izz", "Ixz")
+MEASURED_FIXED_PARAMETER_NAMES = (
+    "m",
+    "S",
+    "b",
+    "cbar",
+    "rho",
+    "g",
+    "wing_incidence",
+    "thr_max",
+    "max_defl_ail",
+    "max_defl_elev",
+    "max_defl_rud",
+)
+INERTIA_PARAMETER_NAMES = ("Ixx", "Iyy", "Izz", "Ixz")
+GROUND_PARAMETER_NAMES = ("ground_k", "ground_c", "roll_fric", "side_fric", "ground_contact_eps")
+GROUND_ESTIMATED_PARAMETER_NAMES = ("ground_contact_eps",)
 SPORTCUB_PARAMETER_NAMES = (
+    "wing_incidence",
+    "thr_max",
+    "ground_k",
+    "ground_c",
+    "roll_fric",
+    "side_fric",
+    "ground_contact_eps",
     "CL0",
     "CLa",
     "CD0",
-    "CDCLS",
+    "k_ind",
+    "CD0_fp",
+    "Cm0",
+    "Cma",
+    "Cmq",
+    "Cmde",
     "CYb",
-    "KT",
-    "KL0",
-    "KLb",
-    "KLp",
-    "KLr",
-    "KLda",
-    "KLdr",
-    "KM0",
-    "KMa",
-    "KMq",
-    "KMe",
-    "KN0",
-    "KNb",
-    "KNp",
-    "KNr",
-    "KNda",
-    "KNdr",
-    "TAUS",
-    "TAUM",
-    "KB",
+    "CYda",
+    "CYdr",
+    "CYp",
+    "CYr",
+    "CY_fp_coef",
+    "Clb",
+    "Clp",
+    "Clr",
+    "Clda",
+    "Cldr",
+    "Cnb",
+    "Cnp",
+    "Cnr",
+    "Cndr",
+    "Cnda",
+    "alpha_stall",
+    "blend_width",
+    "max_defl_ail",
+    "max_defl_elev",
+    "max_defl_rud",
 )
+AERO_PARAMETER_NAMES = tuple(
+    name for name in SPORTCUB_PARAMETER_NAMES
+    if name not in MEASURED_FIXED_PARAMETER_NAMES and name not in GROUND_PARAMETER_NAMES
+)
+GREYBOX_ESTIMATED_PARAMETER_NAMES = GROUND_ESTIMATED_PARAMETER_NAMES + INERTIA_PARAMETER_NAMES + AERO_PARAMETER_NAMES
 
 
 @dataclass(frozen=True)
@@ -136,33 +168,47 @@ class SportCubGreyboxConfig:
     )
     default_parameter_bounds: dict[str, Bounds1D] = field(
         default_factory=lambda: {
+            "Ixx": Bounds1D(1.0e-4, 6.9e-4, 2.5e-3),
+            "Iyy": Bounds1D(1.0e-4, 6.0e-4, 2.5e-3),
+            "Izz": Bounds1D(2.0e-4, 1.25e-3, 5.0e-3),
+            "Ixz": Bounds1D(-8.0e-4, 3.5e-5, 8.0e-4),
+            "wing_incidence": Bounds1D(-0.20, 0.10472, 0.30),
+            "thr_max": Bounds1D(0.02, 0.32, 2.00),
+            "ground_k": Bounds1D(10.0, 140.0, 3000.0),
+            "ground_c": Bounds1D(0.5, 7.0, 150.0),
+            "roll_fric": Bounds1D(0.0, 0.02, 2.0),
+            "side_fric": Bounds1D(0.0, 1.2, 50.0),
+            "ground_contact_eps": Bounds1D(1.0e-6, 1.0e-4, 2.0e-3),
             "CL0": Bounds1D(0.05, 0.50, 1.60),
-            "CLa": Bounds1D(1.50, 4.00, 7.00),
-            "CD0": Bounds1D(0.02, 0.08, 0.25),
-            "CDCLS": Bounds1D(0.00, 0.05, 0.30),
+            "CLa": Bounds1D(1.50, 4.70, 7.00),
+            "CD0": Bounds1D(0.02, 0.06, 0.25),
+            "k_ind": Bounds1D(0.00, 0.09, 0.40),
+            "CD0_fp": Bounds1D(0.10, 0.30, 1.50),
+            "Cm0": Bounds1D(-1.00, 0.00, 1.00),
+            "Cma": Bounds1D(-5.00, -0.80, 1.00),
+            "Cmq": Bounds1D(-80.00, -12.00, 0.00),
+            "Cmde": Bounds1D(-4.00, 0.30, 4.00),
             "CYb": Bounds1D(-1.20, -0.30, 0.20),
-            "KT": Bounds1D(0.50, 2.50, 9.00),
-            "KL0": Bounds1D(-2.00, 0.00, 2.00),
-            "KLb": Bounds1D(-50.00, -2.00, 50.00),
-            "KLp": Bounds1D(-200.00, -50.00, 0.00),
-            "KLr": Bounds1D(-50.00, 5.00, 50.00),
-            "KLda": Bounds1D(-200.00, 50.00, 200.00),
-            "KLdr": Bounds1D(-50.00, 2.00, 50.00),
-            "KM0": Bounds1D(-2.00, 0.00, 2.00),
-            "KMa": Bounds1D(-20.00, -2.00, 0.00),
-            "KMq": Bounds1D(-400.00, -25.00, 0.00),
-            "KMe": Bounds1D(-60.00, -0.40, 60.00),
-            "KN0": Bounds1D(-2.00, 0.00, 2.00),
-            "KNb": Bounds1D(-50.00, 3.00, 50.00),
-            "KNp": Bounds1D(-50.00, -1.00, 50.00),
-            "KNr": Bounds1D(-100.00, -8.00, 20.00),
-            "KNda": Bounds1D(-30.00, -1.00, 30.00),
-            "KNdr": Bounds1D(-50.00, -10.00, 50.00),
-            # First-order servo and motor lags plus linear battery thrust
-            # decay with flight time (packs sag over a 5-10 minute flight).
-            "TAUS": Bounds1D(0.02, 0.08, 0.30),
-            "TAUM": Bounds1D(0.04, 0.15, 0.80),
-            "KB": Bounds1D(-0.0020, -0.0005, 0.0),
+            "CYda": Bounds1D(-0.20, 0.004, 0.20),
+            "CYdr": Bounds1D(-0.30, -0.015, 0.30),
+            "CYp": Bounds1D(-2.00, -0.15, 1.00),
+            "CYr": Bounds1D(-1.00, 0.20, 2.00),
+            "CY_fp_coef": Bounds1D(0.00, 0.50, 2.00),
+            "Clb": Bounds1D(-5.00, -0.25, 2.00),
+            "Clp": Bounds1D(-5.00, -0.50, 0.00),
+            "Clr": Bounds1D(-2.00, 0.15, 2.00),
+            "Clda": Bounds1D(-2.00, 0.05, 2.00),
+            "Cldr": Bounds1D(-1.00, 0.006, 1.00),
+            "Cnb": Bounds1D(-2.00, 0.06, 2.00),
+            "Cnp": Bounds1D(-2.00, 0.010, 2.00),
+            "Cnr": Bounds1D(-5.00, -0.15, 0.00),
+            "Cndr": Bounds1D(-2.00, 0.015, 2.00),
+            "Cnda": Bounds1D(-2.00, 0.006, 2.00),
+            "alpha_stall": Bounds1D(0.10, 0.349, 0.70),
+            "blend_width": Bounds1D(0.01, 0.0873, 0.30),
+            "max_defl_ail": Bounds1D(0.10, 0.5236, 1.20),
+            "max_defl_elev": Bounds1D(0.10, 0.4189, 1.20),
+            "max_defl_rud": Bounds1D(0.10, 0.349, 1.20),
         }
     )
     literature_parameter_bounds: dict[str, Bounds1D] = field(
@@ -202,16 +248,35 @@ class SportCubGreyboxConfig:
     def fixed_parameter_vector(self) -> np.ndarray:
         return np.array([self.fixed_parameters[name] for name in FIXED_PARAMETER_NAMES], dtype=float)
 
+    def default_sportcub_parameters(self) -> dict[str, float]:
+        return {
+            name: self.default_parameter_bounds[name].initial
+            for name in SPORTCUB_PARAMETER_NAMES
+        }
+
+    def default_full_parameter_mapping(self) -> dict[str, float]:
+        values = dict(self.fixed_parameters)
+        values.update(self.default_sportcub_parameters())
+        return values
+
+    def full_parameter_vector_from_mapping(self, parameters: dict[str, float]) -> np.ndarray:
+        values = self.default_full_parameter_mapping()
+        values.update({name: float(value) for name, value in parameters.items()})
+        return np.array(
+            [values[name] for name in FIXED_PARAMETER_NAMES + SPORTCUB_PARAMETER_NAMES],
+            dtype=float,
+        )
+
     def full_parameter_vector(self, estimated_parameters: np.ndarray) -> np.ndarray:
         theta = np.asarray(estimated_parameters, dtype=float)
         if theta.shape != (len(SPORTCUB_PARAMETER_NAMES),):
             raise ValueError(f"expected {len(SPORTCUB_PARAMETER_NAMES)} estimated parameters, got {theta.shape}")
         return np.concatenate((self.fixed_parameter_vector(), theta))
 
-    def default_parameter_setup(self) -> list[tuple[str, float, float, float]]:
+    def default_parameter_setup(self, names=SPORTCUB_PARAMETER_NAMES) -> list[tuple[str, float, float, float]]:
         return [
             (name, bounds.lower, bounds.initial, bounds.upper)
-            for name, bounds in ((name, self.default_parameter_bounds[name]) for name in SPORTCUB_PARAMETER_NAMES)
+            for name, bounds in ((name, self.default_parameter_bounds[name]) for name in names)
         ]
 
 
@@ -255,173 +320,11 @@ def build_casadi_dynamics(config: SportCubGreyboxConfig, dt: float):
     ``SPORTCUB_PARAMETER_NAMES``.
 
     The physics is owned by ``modelica/SportCubGreybox.mo`` and generated through
-    Rumoca; this returns that Modelica-backed kernel. The hand-written CasADi
-    below is retained only as the independent parity oracle in
-    ``modelica/check_parity.py`` (note it would honour a non-default
-    ``max_deflection_deg``, which the Modelica model bakes in).
+    Rumoca; this returns that Modelica-backed kernel.
     """
     from .modelica.dynamics import build_casadi_dynamics as _modelica_build
 
     return _modelica_build(config, dt)
-
-
-def _build_casadi_dynamics_legacy(config: SportCubGreyboxConfig, dt: float):
-    """Hand-written CasADi grey-box dynamics -- parity oracle only (not a runtime path).
-
-    Superseded by the Modelica-generated kernel; kept as the parity oracle and a
-    debugging fallback. See ``build_casadi_dynamics``.
-    """
-
-    n_states = len(STATE_NAMES_EULER)
-    n_params = len(FIXED_PARAMETER_NAMES) + len(SPORTCUB_PARAMETER_NAMES)
-    x_sym = ca.SX.sym("x", n_states)
-    u_sym = ca.SX.sym("u", len(CONTROL_NAMES_OEM))
-    p_sym = ca.SX.sym("p", n_params)
-
-    u_b, v_b, w_b = x_sym[3], x_sym[4], x_sym[5]
-    phi, theta, psi = x_sym[6], x_sym[7], x_sym[8]
-    p_r, q_r, r_r = x_sym[9], x_sym[10], x_sym[11]
-    ail_cmd, elev_cmd, thr_cmd, rud_cmd = u_sym[0], u_sym[1], u_sym[2], u_sym[3]
-
-    (
-        m,
-        S,
-        b_span,
-        cbar,
-        rho,
-        g,
-        Ixx,
-        Iyy,
-        Izz,
-        Ixz,
-        CL0,
-        CLa,
-        CD0,
-        CDCLS,
-        CYb,
-        KT,
-        KL0,
-        KLb,
-        KLp,
-        KLr,
-        KLda,
-        KLdr,
-        KM0,
-        KMa,
-        KMq,
-        KMe,
-        KN0,
-        KNb,
-        KNp,
-        KNr,
-        KNda,
-        KNdr,
-    ) = (p_sym[i] for i in range(32))  # fixed(10) + aero(22); TAUS/TAUM/KB unused here
-
-    max_defl = config.max_deflection_deg
-    thr = ca.fmax(thr_cmd, 0.0)
-    elev_rad = max_defl["elevator"] * (ca.pi / 180.0) * elev_cmd
-    ail_rad = max_defl["aileron"] * (ca.pi / 180.0) * ail_cmd
-    rud_rad = max_defl["rudder"] * (ca.pi / 180.0) * rud_cmd
-
-    speed = ca.sqrt(u_b**2 + v_b**2 + w_b**2 + 1e-9)
-    speed_safe = ca.fmax(speed, 1e-3)
-    alpha = ca.atan2(w_b, u_b)
-    beta = ca.asin(ca.fmin(ca.fmax(v_b / speed_safe, -0.99), 0.99))
-    qbar = 0.5 * rho * speed_safe**2
-
-    c_a = ca.cos(alpha)
-    s_a = ca.sin(alpha)
-    c_b = ca.cos(beta)
-    s_b = ca.sin(beta)
-
-    CL = CL0 + CLa * alpha
-    CD = CD0 + CDCLS * CL**2
-    CY = CYb * beta
-    lift = qbar * S * CL
-    drag = qbar * S * CD
-    side = qbar * S * CY
-    thrust = KT * m * thr
-
-    # Aerodynamic forces rotate from wind axes; thrust is body-fixed along x
-    # (a propeller does not rotate with the airflow).
-    force_x_b = -drag * c_a * c_b - side * c_a * s_b + lift * s_a + thrust
-    force_y_b = -drag * s_b + side * c_b
-    force_z_b = -drag * s_a * c_b - side * s_a * s_b - lift * c_a
-
-    c_phi = ca.cos(phi)
-    s_phi = ca.sin(phi)
-    c_th = ca.cos(theta)
-    s_th = ca.sin(theta)
-    c_psi = ca.cos(psi)
-    s_psi = ca.sin(psi)
-
-    u_dot = force_x_b / m - g * s_th + r_r * v_b - q_r * w_b
-    v_dot = force_y_b / m + g * s_phi * c_th + p_r * w_b - r_r * u_b
-    w_dot = force_z_b / m + g * c_phi * c_th + q_r * u_b - p_r * v_b
-
-    roll_accel = qbar * (
-        KL0
-        + KLb * beta
-        + KLp * (b_span / (2.0 * speed_safe)) * p_r
-        + KLr * (b_span / (2.0 * speed_safe)) * r_r
-        + KLda * ail_rad
-        + KLdr * rud_rad
-    )
-    pitch_accel = qbar * (KM0 + KMa * alpha + KMq * (cbar / (2.0 * speed_safe)) * q_r + KMe * elev_rad)
-    yaw_accel = qbar * (
-        KN0
-        + KNb * beta
-        + KNp * (b_span / (2.0 * speed_safe)) * p_r
-        + KNr * (b_span / (2.0 * speed_safe)) * r_r
-        + KNda * ail_rad
-        + KNdr * rud_rad
-    )
-
-    p_dot = roll_accel + ((Iyy - Izz) / Ixx) * q_r * r_r + (Ixz / Ixx) * p_r * q_r
-    q_dot = pitch_accel + ((Izz - Ixx) / Iyy) * p_r * r_r + (Ixz / Iyy) * (r_r**2 - p_r**2)
-    r_dot = yaw_accel + ((Ixx - Iyy) / Izz) * p_r * q_r + (Ixz / Izz) * q_r * r_r
-
-    c_th_safe = ca.sign(c_th) * ca.fmax(ca.fabs(c_th), 1e-3)
-    common = q_r * s_phi + r_r * c_phi
-    phi_dot = p_r + (s_th / c_th_safe) * common
-    theta_dot = q_r * c_phi - r_r * s_phi
-    psi_dot = common / c_th_safe
-
-    r00 = c_th * c_psi
-    r01 = s_phi * s_th * c_psi - c_phi * s_psi
-    r02 = c_phi * s_th * c_psi + s_phi * s_psi
-    r10 = c_th * s_psi
-    r11 = s_phi * s_th * s_psi + c_phi * c_psi
-    r12 = c_phi * s_th * s_psi - s_phi * c_psi
-    r20 = -s_th
-    r21 = s_phi * c_th
-    r22 = c_phi * c_th
-
-    xdot = ca.vertcat(
-        r00 * u_b + r01 * v_b + r02 * w_b,
-        r10 * u_b + r11 * v_b + r12 * w_b,
-        r20 * u_b + r21 * v_b + r22 * w_b,
-        u_dot,
-        v_dot,
-        w_dot,
-        phi_dot,
-        theta_dot,
-        psi_dot,
-        p_dot,
-        q_dot,
-        r_dot,
-    )
-    dynamics = ca.Function("sportcub_6dof_greybox_rhs", [x_sym, u_sym, p_sym], [xdot], ["x", "u", "p"], ["xdot"])
-
-    k1 = dynamics(x_sym, u_sym, p_sym)
-    k2 = dynamics(x_sym + 0.5 * dt * k1, u_sym, p_sym)
-    k3 = dynamics(x_sym + 0.5 * dt * k2, u_sym, p_sym)
-    k4 = dynamics(x_sym + dt * k3, u_sym, p_sym)
-    x_next = x_sym + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
-    x_next = ca.vertcat(x_next[:8], ca.atan2(ca.sin(x_next[8]), ca.cos(x_next[8])), x_next[9:])
-    rk4_step = ca.Function("sportcub_6dof_greybox_rk4", [x_sym, u_sym, p_sym], [x_next], ["x", "u", "p"], ["x_next"])
-    return dynamics, rk4_step
 
 
 def main() -> None:
@@ -438,122 +341,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-STATE_NAMES_LAG = STATE_NAMES_EULER + ("delta_e", "delta_a", "delta_r", "thr_f")
-CONTROL_NAMES_LAG = CONTROL_NAMES_OEM + ("t_flight",)
-
-
-def build_casadi_dynamics_lag(config: SportCubGreyboxConfig, dt: float):
-    """Grey-box dynamics with first-order actuator lags and battery decay.
-
-    Sixteen states: the twelve Euler states plus lagged surface deflections
-    (rad) and filtered throttle. Controls gain a fifth channel, the flight
-    time in seconds, entering only the battery thrust multiplier
-    ``(1 + KB * t_flight)``. The aerodynamics consume the lag states instead
-    of the instantaneous commands.
-
-    Generated from ``modelica/SportCubGreyboxLag.mo`` via Rumoca. The hand-written
-    CasADi below is retained only as the parity oracle in check_parity.
-    """
-    from .modelica.dynamics import build_casadi_dynamics_lag as _modelica_lag
-
-    return _modelica_lag(config, dt)
-
-
-def _build_casadi_dynamics_lag_legacy(config: SportCubGreyboxConfig, dt: float):
-    """Hand-written CasADi lag dynamics -- parity oracle only (not a runtime path).
-    See ``build_casadi_dynamics_lag``."""
-
-    n_states = len(STATE_NAMES_LAG)
-    n_params = len(FIXED_PARAMETER_NAMES) + len(SPORTCUB_PARAMETER_NAMES)
-    x_sym = ca.SX.sym("x", n_states)
-    u_sym = ca.SX.sym("u", len(CONTROL_NAMES_LAG))
-    p_sym = ca.SX.sym("p", n_params)
-
-    u_b, v_b, w_b = x_sym[3], x_sym[4], x_sym[5]
-    phi, theta, psi = x_sym[6], x_sym[7], x_sym[8]
-    p_r, q_r, r_r = x_sym[9], x_sym[10], x_sym[11]
-    elev_rad, ail_rad, rud_rad, thr_f = x_sym[12], x_sym[13], x_sym[14], x_sym[15]
-    ail_cmd, elev_cmd, thr_cmd, rud_cmd, t_flight = (u_sym[i] for i in range(5))
-
-    p = {name: p_sym[i] for i, name in enumerate(FIXED_PARAMETER_NAMES + SPORTCUB_PARAMETER_NAMES)}
-    m, S, b_span, cbar, rho, g = p["m"], p["S"], p["b"], p["cbar"], p["rho"], p["g"]
-
-    max_defl = config.max_deflection_deg
-    deg = ca.pi / 180.0
-
-    speed = ca.sqrt(u_b**2 + v_b**2 + w_b**2 + 1e-9)
-    speed_safe = ca.fmax(speed, 1e-3)
-    alpha = ca.atan2(w_b, u_b)
-    beta = ca.asin(ca.fmin(ca.fmax(v_b / speed_safe, -0.99), 0.99))
-    qbar = 0.5 * rho * speed_safe**2
-    c_a, s_a, c_b, s_b = ca.cos(alpha), ca.sin(alpha), ca.cos(beta), ca.sin(beta)
-
-    CL = p["CL0"] + p["CLa"] * alpha
-    CD = p["CD0"] + p["CDCLS"] * CL**2
-    lift = qbar * S * CL
-    drag = qbar * S * CD
-    side = qbar * S * (p["CYb"] * beta)
-    battery = ca.fmax(1.0 + p["KB"] * t_flight, 0.3)
-    thrust = p["KT"] * m * ca.fmax(thr_f, 0.0) * battery
-
-    force_x_b = -drag * c_a * c_b - side * c_a * s_b + lift * s_a + thrust
-    force_y_b = -drag * s_b + side * c_b
-    force_z_b = -drag * s_a * c_b - side * s_a * s_b - lift * c_a
-
-    c_phi, s_phi = ca.cos(phi), ca.sin(phi)
-    c_th, s_th = ca.cos(theta), ca.sin(theta)
-    c_psi, s_psi = ca.cos(psi), ca.sin(psi)
-
-    u_dot = force_x_b / m - g * s_th + r_r * v_b - q_r * w_b
-    v_dot = force_y_b / m + g * s_phi * c_th + p_r * w_b - r_r * u_b
-    w_dot = force_z_b / m + g * c_phi * c_th + q_r * u_b - p_r * v_b
-
-    bV = b_span / (2.0 * speed_safe)
-    cV = cbar / (2.0 * speed_safe)
-    roll_accel = qbar * (p["KL0"] + p["KLb"] * beta + p["KLp"] * bV * p_r + p["KLr"] * bV * r_r + p["KLda"] * ail_rad + p["KLdr"] * rud_rad)
-    pitch_accel = qbar * (p["KM0"] + p["KMa"] * alpha + p["KMq"] * cV * q_r + p["KMe"] * elev_rad)
-    yaw_accel = qbar * (p["KN0"] + p["KNb"] * beta + p["KNp"] * bV * p_r + p["KNr"] * bV * r_r + p["KNda"] * ail_rad + p["KNdr"] * rud_rad)
-
-    Ixx, Iyy, Izz, Ixz = p["Ixx"], p["Iyy"], p["Izz"], p["Ixz"]
-    p_dot = roll_accel + ((Iyy - Izz) / Ixx) * q_r * r_r + (Ixz / Ixx) * p_r * q_r
-    q_dot = pitch_accel + ((Izz - Ixx) / Iyy) * p_r * r_r + (Ixz / Iyy) * (r_r**2 - p_r**2)
-    r_dot = yaw_accel + ((Ixx - Iyy) / Izz) * p_r * q_r + (Ixz / Izz) * q_r * r_r
-
-    c_th_safe = ca.sign(c_th) * ca.fmax(ca.fabs(c_th), 1e-3)
-    common = q_r * s_phi + r_r * c_phi
-    phi_dot = p_r + (s_th / c_th_safe) * common
-    theta_dot = q_r * c_phi - r_r * s_phi
-    psi_dot = common / c_th_safe
-
-    r00 = c_th * c_psi
-    r01 = s_phi * s_th * c_psi - c_phi * s_psi
-    r02 = c_phi * s_th * c_psi + s_phi * s_psi
-    r10 = c_th * s_psi
-    r11 = s_phi * s_th * s_psi + c_phi * c_psi
-    r12 = c_phi * s_th * s_psi - s_phi * c_psi
-
-    elev_dot = (max_defl["elevator"] * deg * elev_cmd - elev_rad) / p["TAUS"]
-    ail_dot = (max_defl["aileron"] * deg * ail_cmd - ail_rad) / p["TAUS"]
-    rud_dot = (max_defl["rudder"] * deg * rud_cmd - rud_rad) / p["TAUS"]
-    thr_dot = (ca.fmin(ca.fmax(thr_cmd, 0.0), 1.0) - thr_f) / p["TAUM"]
-
-    xdot = ca.vertcat(
-        r00 * u_b + r01 * v_b + r02 * w_b,
-        r10 * u_b + r11 * v_b + r12 * w_b,
-        -s_th * u_b + s_phi * c_th * v_b + c_phi * c_th * w_b,
-        u_dot, v_dot, w_dot,
-        phi_dot, theta_dot, psi_dot,
-        p_dot, q_dot, r_dot,
-        elev_dot, ail_dot, rud_dot, thr_dot,
-    )
-    dynamics = ca.Function("sportcub_lag_rhs", [x_sym, u_sym, p_sym], [xdot], ["x", "u", "p"], ["xdot"])
-    k1 = dynamics(x_sym, u_sym, p_sym)
-    k2 = dynamics(x_sym + 0.5 * dt * k1, u_sym, p_sym)
-    k3 = dynamics(x_sym + 0.5 * dt * k2, u_sym, p_sym)
-    k4 = dynamics(x_sym + dt * k3, u_sym, p_sym)
-    x_next = x_sym + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
-    x_next = ca.vertcat(x_next[:8], ca.atan2(ca.sin(x_next[8]), ca.cos(x_next[8])), x_next[9:])
-    rk4_step = ca.Function("sportcub_lag_rk4", [x_sym, u_sym, p_sym], [x_next], ["x", "u", "p"], ["x_next"])
-    return dynamics, rk4_step

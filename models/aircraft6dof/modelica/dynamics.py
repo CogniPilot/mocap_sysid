@@ -1,10 +1,10 @@
-"""Modelica-generated dynamics for the 6DOF benchmark.
+"""Rumoca-backed Modelica dynamics for the 6DOF benchmark.
 
-This is the integration layer between the Rumoca-generated continuous kernels
-(the standalone ``*_casadi_solve.py`` / ``*_jax_solve.py`` modules emitted from
-the solve IR) and the benchmark's existing call sites. The Modelica
-sources in this directory are the single source of truth for the physics; this
-module adds only the fixed-step RK4 discretization and the post-step guards
+This is the integration layer between Rumoca-compiled continuous kernels and
+the benchmark's existing call sites. The Modelica sources in this directory are
+the single source of truth for the physics; generated Python kernels are local
+cache files produced on demand by ``generate.py``. This module adds only the
+fixed-step RK4 discretization and the post-step guards
 (quaternion renormalization / speed & rate clamps for the truth model, psi-wrap
 for the grey-box) -- which are integration details, not continuous dynamics, and
 are intentionally kept out of the ``.mo`` models.
@@ -31,14 +31,16 @@ GENERATED = Path(__file__).resolve().parent / "generated"
 
 
 def _load_generated(model_stem: str, suffix: str):
-    """Import a Rumoca-generated standalone kernel module (``*_casadi_solve.py`` /
-    ``*_jax_solve.py``) emitted from the solve IR.
+    """Import a local Rumoca-generated kernel module.
 
     The module exposes ``rhs(x, u, p) -> xdot`` plus ``STATE_NAMES`` /
     ``INPUT_NAMES`` / ``PARAM_NAMES`` and ``N_Y`` / ``N_U`` / ``N_P``. We wrap the
     latter in a ``meta`` namespace matching the metadata the call sites expect, so
     nothing downstream changes.
     """
+    from .generate import ensure_generated
+
+    ensure_generated(model_stem)
     path = GENERATED / f"{model_stem}_{suffix}.py"
     spec = importlib.util.spec_from_file_location(f"_rumoca_{model_stem}_{suffix}", path)
     mod = importlib.util.module_from_spec(spec)
@@ -166,22 +168,37 @@ def nominal_rk4_step(x, u_cmd, dt, config) -> np.ndarray:
 # --------------------------------------------------------------------------- #
 def _euler_dynamics(model_stem: str, dt: float, rk4_name: str):
     """``(dynamics, rk4_step)`` for an Euler-state grey-box, with the psi (index 8)
-    wrap the reference RK4 applies. Shared by the lag-free and lag variants."""
+    wrap the reference RK4 applies."""
     import casadi as ca
 
-    dynamics, _ = _casadi_kernel(model_stem)
-    x = ca.SX.sym("x", dynamics.size1_in(0))
-    u = ca.SX.sym("u", dynamics.size1_in(1))
-    p = ca.SX.sym("p", dynamics.size1_in(2))
+    dynamics_raw, meta = _casadi_kernel(model_stem)
+    x = ca.SX.sym("x", dynamics_raw.size1_in(0))
+    u = ca.SX.sym("u", dynamics_raw.size1_in(1))
+    # Keep the public grey-box API on fixed(10) + SPORTCUB_PARAMETER_NAMES.
+    # Rumoca may retain internal guard/cache constants in the generated solve
+    # parameter vector; those are not fitted/user parameters, so the wrapper
+    # pads them after the public vector instead of exposing them downstream.
+    user_param_names = tuple(name for name in meta.param_names if not name.startswith("__pre__."))
+    p_user = ca.SX.sym("p", len(user_param_names))
+    pad = dynamics_raw.size1_in(2) - len(user_param_names)
+    p = ca.vertcat(p_user, ca.SX.zeros(pad)) if pad > 0 else p_user
+    rhs = dynamics_raw(x, u, p)
+    dynamics = ca.Function(
+        f"{model_stem}_rhs_public",
+        [x, u, p_user],
+        [rhs],
+        ["x", "u", "p"],
+        ["xdot"],
+    )
 
-    k1 = dynamics(x, u, p)
-    k2 = dynamics(x + 0.5 * dt * k1, u, p)
-    k3 = dynamics(x + 0.5 * dt * k2, u, p)
-    k4 = dynamics(x + dt * k3, u, p)
+    k1 = rhs
+    k2 = dynamics_raw(x + 0.5 * dt * k1, u, p)
+    k3 = dynamics_raw(x + 0.5 * dt * k2, u, p)
+    k4 = dynamics_raw(x + dt * k3, u, p)
     x_next = x + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
     # Wrap psi (state index 8) to (-pi, pi], matching the reference RK4.
     x_next = ca.vertcat(x_next[:8], ca.atan2(ca.sin(x_next[8]), ca.cos(x_next[8])), x_next[9:])
-    rk4_step = ca.Function(rk4_name, [x, u, p], [x_next], ["x", "u", "p"], ["x_next"])
+    rk4_step = ca.Function(rk4_name, [x, u, p_user], [x_next], ["x", "u", "p"], ["x_next"])
     return dynamics, rk4_step
 
 
@@ -195,13 +212,3 @@ def build_casadi_dynamics(config, dt: float):
     same psi (yaw) wrap as the reference.
     """
     return _euler_dynamics("SportCubGreybox", dt, "sportcub_6dof_greybox_rk4")
-
-
-def build_casadi_dynamics_lag(config, dt: float):
-    """Return ``(dynamics, rk4_step)`` for the 16-state lag grey-box.
-
-    Drop-in replacement for ``greybox.build_casadi_dynamics_lag``: state order
-    STATE_NAMES_LAG, control order CONTROL_NAMES_LAG (adds ``t_flight``),
-    parameter vector fixed(10) + SPORTCUB_PARAMETER_NAMES (uses TAUS/TAUM/KB).
-    """
-    return _euler_dynamics("SportCubGreyboxLag", dt, "sportcub_lag_rk4")

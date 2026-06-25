@@ -22,3 +22,6 @@ __pycache__/
 /dev/
 /data/data_20260522/
 *.egg-info/
+
+# Static-site npm dependencies are installed locally from pinned package files.
+/site/node_modules/

@@ -52,6 +52,7 @@ from .greybox_oem_fit import (
     OEM_CONTROL_ORDER,
     euler_states_to_quat,
     fit_greybox,
+    ground_training_chunks,
     greybox_modelica_sources,
     quat_states_to_euler,
 )
@@ -284,7 +285,7 @@ def make_safe_step(safe_weights: np.ndarray, dt: float):
     return safe_step
 
 
-def train_methods(train_path: Path) -> dict[str, object]:
+def train_methods(train_path: Path, flights_data=None, *, greybox_max_nfev: int = 60) -> dict[str, object]:
     segments, dt = suite.load_segments(train_path)
     split = suite.trim_to_input_onset(segments, dt, estimate_bias=True, label="explorer train")
     x = split.x_true
@@ -297,8 +298,6 @@ def train_methods(train_path: Path) -> dict[str, object]:
             nominal_next[trial, index] = nominal_rk4_step(x[trial, index], u[trial, index], split.dt, config)
     residual_target = x[:, 1:, :] - nominal_next
     residual = suite.ridge_fit(suite.design_matrix(x[:, :-1, :], u[:, :-1, :]), residual_target, RIDGE)
-    print(f"grey-box OEM fit on {x.shape[0]} chunks", flush=True)
-    greybox = fit_greybox(x, u, split.dt)
 
     # Generic surrogates, fitted exactly as the benchmark suite fits them
     # (position-free features, smoothed derivatives, increment targets), so
@@ -330,6 +329,19 @@ def train_methods(train_path: Path) -> dict[str, object]:
     phi_rbf = np.concatenate((suite.rbf_features(z_all, centers, length_scale), np.ones((len(z_all), 1))), axis=1)
     residual_flat = residual_target.reshape(-1, x.shape[-1])
     gp_w = np.linalg.solve(phi_rbf.T @ phi_rbf + 5.0 * RIDGE * np.eye(phi_rbf.shape[1]), phi_rbf.T @ residual_flat[:, suite.DYNAMIC_ROWS])
+    ground_chunks, ground_heights = ground_training_chunks(flights_data) if flights_data is not None else ([], {})
+    print(f"grey-box OEM fit on {x.shape[0]} chunks", flush=True)
+    if ground_chunks:
+        print(f"  ground contact uses {len(ground_chunks)} segmented ground windows", flush=True)
+    greybox = fit_greybox(
+        x,
+        u,
+        split.dt,
+        max_nfev=greybox_max_nfev,
+        segment_names=split.segment_names,
+        ground_heights=ground_heights,
+        ground_chunks=ground_chunks,
+    )
     surrogates = {
         "6DOF-GP-RBF": {"kind": "rbf_residual", "weights": gp_w, "centers": centers, "length_scale": length_scale},
         "6DOF-EquationError-LS": {"kind": "derivative", "degree": 1, "weights": eq_w, "mean": eq_m, "scale": eq_s},
@@ -477,13 +489,17 @@ def load_or_fit_safe_controller(args, greybox_fit: dict, safe_weights: np.ndarra
     """The joint simulation-error fit takes ~10 minutes; reuse the committed
     result unless asked to refit (the standalone CLI also refreshes it)."""
     if SAFE_CONTROLLER_CACHE.exists() and not args.refit_controller:
-        print(f"SAFE controller: using cached {SAFE_CONTROLLER_CACHE}")
-        return json.loads(SAFE_CONTROLLER_CACHE.read_text())
+        cached = json.loads(SAFE_CONTROLLER_CACHE.read_text())
+        if cached.get("airframe_parameter_names") == list(greybox_fit["parameter_names"]):
+            print(f"SAFE controller: using cached {SAFE_CONTROLLER_CACHE}")
+            return cached
+        print(f"SAFE controller: ignoring obsolete cache {SAFE_CONTROLLER_CACHE}", flush=True)
     greybox_payload = {
         "parameter_names": greybox_fit["parameter_names"],
         "parameters": greybox_fit["theta"],
         "cr_std": greybox_fit["cr_std"],
         "fixed_parameters": greybox_fit["spec"].fixed_parameters,
+        "default_parameters": greybox_fit["spec"].default_sportcub_parameters(),
         "max_deflection_deg": greybox_fit["spec"].max_deflection_deg,
     }
     controller = fit_safe_controller(args.flights, greybox_payload, safe_weights)
@@ -499,6 +515,7 @@ def main() -> int:
     parser.add_argument("--train", type=Path, default=TRAIN_DEFAULT)
     parser.add_argument("--validation", type=Path, default=VALIDATION_DEFAULT)
     parser.add_argument("--output", type=Path, default=OUTPUT_DEFAULT)
+    parser.add_argument("--greybox-max-nfev", type=int, default=100)
     parser.add_argument("--refit-controller", action="store_true", help="rerun the SAFE controller joint fit instead of reading results/sportcub_safe_controller.json")
     args = parser.parse_args()
     windows_mode = args.dataset == "4_17"
@@ -519,16 +536,24 @@ def main() -> int:
         dt = float(data["sample_period_s"])
     downsample = max(1, int(round(1.0 / (DISPLAY_RATE_HZ * dt))))
     config = Aircraft6DOFConfig()
-    weights = train_methods(args.train)
+    weights = train_methods(args.train, None if windows_mode else data, greybox_max_nfev=args.greybox_max_nfev)
     if not windows_mode:
         safe_weights, safe_membership, safe_scores = train_safe_closed_loop(data)
         safe_step = make_safe_step(safe_weights, dt)
         controller = load_or_fit_safe_controller(args, weights["6DOF-GreyBoxOEM"], safe_weights)
+        if "airframe_parameters" in controller:
+            refined = np.asarray(controller["airframe_parameters"], dtype=float)
+            weights["6DOF-GreyBoxOEM"]["theta"] = refined
+            weights["6DOF-GreyBoxOEM"]["theta_full"] = weights["6DOF-GreyBoxOEM"]["spec"].full_parameter_vector_from_mapping(
+                dict(zip(weights["6DOF-GreyBoxOEM"]["parameter_names"], refined))
+            )
+            print("grey-box OEM parameters refined by SAFE controller windows", flush=True)
         gains = controller["gains"]
         greybox_payload = {
             "parameter_names": weights["6DOF-GreyBoxOEM"]["parameter_names"],
             "parameters": weights["6DOF-GreyBoxOEM"]["theta"],
             "fixed_parameters": weights["6DOF-GreyBoxOEM"]["spec"].fixed_parameters,
+            "default_parameters": weights["6DOF-GreyBoxOEM"]["spec"].default_sportcub_parameters(),
             "max_deflection_deg": weights["6DOF-GreyBoxOEM"]["spec"].max_deflection_deg,
         }
         fixed = greybox_payload["fixed_parameters"]
@@ -725,12 +750,13 @@ def main() -> int:
                 "couplings": weights["6DOF-GreyBoxOEM"]["couplings"],
                 "uncertainty_note": "Cramer-Rao lower bounds from the output-error Jacobian; residual coloring uncorrected (optimistic).",
                 "fixed_parameters": weights["6DOF-GreyBoxOEM"]["spec"].fixed_parameters,
+                "default_parameters": weights["6DOF-GreyBoxOEM"]["spec"].default_sportcub_parameters(),
                 "max_deflection_deg": weights["6DOF-GreyBoxOEM"]["spec"].max_deflection_deg,
                 # Actual Modelica source (single source of truth) + the identified
                 # model with these fitted parameters baked in, for the inspector.
                 "modelica": greybox_modelica_sources(
                     weights["6DOF-GreyBoxOEM"]["theta_full"],
-                    provenance="GreyBoxOEM output-error fit on the manual training chunks",
+                    provenance="GreyBoxOEM fit on manual+ground chunks, then SAFE-window PD closed-loop refinement when available",
                 ),
             },
             "config": {

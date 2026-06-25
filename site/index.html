@@ -50,52 +50,79 @@
         <div id="animation-view" class="playback-view">
           <div class="playback-stage">
             <div id="aircraft-playback" class="aircraft-playback" aria-label="Animated aircraft state playback"></div>
-            <button type="button" id="playback-fullscreen" aria-label="Toggle fullscreen">Fullscreen</button>
             <div class="control-hud" aria-label="Control inputs">
               <div><span>Mode</span><b id="control-mode-value">--</b></div>
-              <div><span>Thrust</span><span class="control-bar thrust"><span id="control-thrust" class="control-fill"></span></span><b id="control-thrust-value">0.00</b></div>
-              <div><span>Aileron</span><span class="control-bar signed"><span id="control-aileron" class="control-fill"></span></span><b id="control-aileron-value">0.00</b></div>
-              <div><span>Elevator</span><span class="control-bar signed"><span id="control-elevator" class="control-fill"></span></span><b id="control-elevator-value">0.00</b></div>
-              <div><span>Rudder</span><span class="control-bar signed"><span id="control-rudder" class="control-fill"></span></span><b id="control-rudder-value">0.00</b></div>
+              <div><span>Thrust</span><button type="button" class="trim-button" data-trim="throttle" data-delta="-0.05" title="Decrease throttle trim">&#9664;</button><span class="control-bar thrust"><span id="control-thrust" class="control-fill"></span><span id="control-thrust-trim" class="trim-marker"></span></span><button type="button" class="trim-button" data-trim="throttle" data-delta="0.05" title="Increase throttle trim">&#9654;</button><b id="control-thrust-value">0.00</b></div>
+              <div><span>Aileron</span><button type="button" class="trim-button" data-trim="roll" data-delta="-0.05" title="Trim left">&#9664;</button><span class="control-bar signed"><span id="control-aileron" class="control-fill"></span><span id="control-aileron-trim" class="trim-marker"></span></span><button type="button" class="trim-button" data-trim="roll" data-delta="0.05" title="Trim right">&#9654;</button><b id="control-aileron-value">0.00</b></div>
+              <div><span>Elevator</span><button type="button" class="trim-button" data-trim="pitch" data-delta="-0.05" title="Trim down">&#9664;</button><span class="control-bar signed"><span id="control-elevator" class="control-fill"></span><span id="control-elevator-trim" class="trim-marker"></span></span><button type="button" class="trim-button" data-trim="pitch" data-delta="0.05" title="Trim up">&#9654;</button><b id="control-elevator-value">0.00</b></div>
+              <div><span>Rudder</span><button type="button" class="trim-button" data-trim="yaw" data-delta="-0.05" title="Trim left">&#9664;</button><span class="control-bar signed"><span id="control-rudder" class="control-fill"></span><span id="control-rudder-trim" class="trim-marker"></span></span><button type="button" class="trim-button" data-trim="yaw" data-delta="0.05" title="Trim right">&#9654;</button><b id="control-rudder-value">0.00</b></div>
             </div>
           </div>
           <div class="playback-controls" aria-label="Playback controls">
-            <button type="button" id="playback-rewind" aria-label="Rewind"><<</button>
-            <button type="button" id="playback-toggle" aria-label="Pause">||</button>
-            <button type="button" id="playback-forward" aria-label="Fast forward">>></button>
-            <button type="button" id="playback-follow" aria-label="Toggle follow camera" aria-pressed="false">Follow</button>
-            <label class="scrub-label">
-              Time
-              <div class="scrub-wrap">
-                <input id="playback-scrub" type="range" min="0" max="1" step="0.001" value="0">
-                <div id="trail-window" aria-hidden="true"></div>
-                <div id="trail-past-handle" title="Drag to set how many seconds of past trail to show"></div>
-                <div id="trail-future-handle" title="Drag to set how many seconds of future trail to show"></div>
+            <div class="playback-group flight-group" aria-label="Flight controls">
+              <label class="camera-label" aria-label="Camera view">
+                <select id="playback-camera">
+                  <option value="first">First person</option>
+                  <option value="chase">Chase yaw</option>
+                  <option value="follow" selected>Follow</option>
+                  <option value="observer">Observer</option>
+                </select>
+              </label>
+            </div>
+            <div class="model-picker" id="playback-model-wrap" hidden>
+              <span class="model-title">Model</span>
+              <details id="playback-model-dd">
+                <summary id="playback-model-summary">GreyBoxOEM</summary>
+                <div id="playback-model-menu" class="model-menu"></div>
+              </details>
+            </div>
+            <div id="playback-flight-status" class="playback-flight-status" role="status" aria-live="polite"></div>
+            <label class="scrub-label" aria-label="Time">
+              <div class="timeline-control">
+                <button type="button" id="playback-toggle" aria-label="Pause" title="Pause">&#10074;&#10074;</button>
+                <div class="scrub-wrap">
+                  <input id="playback-scrub" type="range" min="0" max="1" step="0.001" value="0">
+                  <div id="trail-window" aria-hidden="true"></div>
+                  <div id="trail-past-handle" title="Drag to set how many seconds of past trail to show"></div>
+                  <div id="trail-future-handle" title="Drag to set how many seconds of future trail to show"></div>
+                </div>
+                <button type="button" id="playback-fullscreen" aria-label="Toggle fullscreen" title="Fullscreen">&#9974;</button>
               </div>
               <div id="scrub-legend" class="scrub-legend" hidden></div>
             </label>
             <button type="button" id="playback-predict" title="Set the prediction initial condition at the current time">Predict here</button>
-            <div class="method-label" id="playback-method-wrap" hidden>
-              <span class="method-title">Methods</span>
-              <details id="playback-method-dd">
-                <summary id="playback-method-summary">LinearSS (default)</summary>
-                <div id="playback-method-menu" class="method-menu" title="Check methods to free-run together with Predict here"></div>
-              </details>
+            <div class="playback-group selector-group" aria-label="Playback selectors">
+              <label class="segment-label">
+                Flight
+                <select id="playback-segment"></select>
+              </label>
+              <label class="speed-label" aria-label="Speed">
+                <select id="playback-speed">
+                  <option value="0.25">0.25x</option>
+                  <option value="0.5">0.5x</option>
+                  <option value="1" selected>1x</option>
+                  <option value="2">2x</option>
+                  <option value="4">4x</option>
+                </select>
+              </label>
             </div>
-            <label class="segment-label">
-              Flight
-              <select id="playback-segment"></select>
-            </label>
-            <label class="speed-label">
-              Speed
-              <select id="playback-speed">
-                <option value="0.25">0.25x</option>
-                <option value="0.5">0.5x</option>
-                <option value="1" selected>1x</option>
-                <option value="2">2x</option>
-                <option value="4">4x</option>
-              </select>
-            </label>
+            <button
+              type="button"
+              id="flight-key-help"
+              aria-label="Keyboard flight controls"
+              title="Keyboard flight: W/S throttle, Arrow keys pitch/roll, A/D rudder, C camera, Space toggles SAFE when available, R resets aircraft and trims."
+            >?</button>
+          </div>
+          <div id="modelica-flight-panel" class="modelica-flight-panel" hidden>
+            <div class="modelica-flight-toolbar">
+              <button type="button" id="modelica-compile">Compile</button>
+              <button type="button" id="modelica-reset">Reset</button>
+              <button type="button" id="modelica-replay">Replay</button>
+              <button type="button" id="modelica-clear-replay">Clear inputs</button>
+              <button type="button" id="modelica-close">Close</button>
+              <span id="modelica-flight-status">Rumoca Modelica editor</span>
+            </div>
+            <textarea id="modelica-flight-source" class="modelica-flight-source" spellcheck="false"></textarea>
           </div>
         </div>
         <div id="history-view" class="playback-view" hidden>
@@ -224,6 +251,9 @@
     <script type="importmap">
       {
         "imports": {
+          "@cognipilot/rumoca": "https://cdn.jsdelivr.net/npm/@cognipilot/rumoca@0.9.8/rumoca_bind_wasm.js",
+          "@cognipilot/rumoca/interactive": "https://cdn.jsdelivr.net/npm/@cognipilot/rumoca@0.9.8/rumoca_interactive.js",
+          "@cognipilot/rumoca/modelica-language": "https://cdn.jsdelivr.net/npm/@cognipilot/rumoca@0.9.8/modelica_language.js",
           "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
           "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"
         }

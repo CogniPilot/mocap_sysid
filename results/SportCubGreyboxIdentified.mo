@@ -1,4 +1,6 @@
-model SportCubGreybox
+// Identified model generated from SportCubGreybox.mo.
+// fit: train_nrmse=0.2941, validation_nrmse=0.3067, cost=7981.38, nfev=100, status=ground=skipped; air=Maximum_Iterations_Exceeded
+model SportCubGreyboxIdentified
   "Sport Cub grey-box using the same plant structure as Rumoca's interactive FixedWingPlant.
 
    This is a standalone NED/FRD port of examples/interactive/fixedwing/FixedWingSIL.mo:
@@ -20,10 +22,10 @@ model SportCubGreybox
   parameter Real cbar = 0.09;
   parameter Real rho = 1.225;
   parameter Real g = 9.81;
-  parameter Real Ixx = 6.9e-4;
-  parameter Real Iyy = 6.0e-4;
-  parameter Real Izz = 1.25e-3;
-  parameter Real Ixz = 3.5e-5;
+  parameter Real Ixx = 0.0018855591563213705;
+  parameter Real Iyy = 0.0015461099727885994;
+  parameter Real Izz = 0.0036191016996440827;
+  parameter Real Ixz = 0.0002050714628894117;
 
   // ---- estimated parameters: Rumoca FixedWingPlant coefficient structure ----
   parameter Real wing_incidence = 0.10472 "Wing incidence angle [rad]";
@@ -33,37 +35,36 @@ model SportCubGreybox
   parameter Real ground_c = 7.0 "Gear normal damping per wheel [N*s/m]";
   parameter Real roll_fric = 0.02 "Rolling resistance [N/(m/s)]";
   parameter Real side_fric = 1.2 "Lateral tire grip [N/(m/s)]";
-  parameter Real ground_contact_eps = 1e-4 "Contact transition penetration [m]";
 
-  parameter Real CL0 = 0.5 "Lift at zero AoA";
-  parameter Real CLa = 4.7 "Lift slope [1/rad]";
-  parameter Real CD0 = 0.06 "Parasitic drag";
-  parameter Real k_ind = 0.09 "Induced drag factor";
-  parameter Real CD0_fp = 0.30 "Flat-plate drag";
-  parameter Real Cm0 = 0.0 "Pitch moment at alpha=0";
-  parameter Real Cma = -0.8 "Pitch stiffness [1/rad]";
-  parameter Real Cmq = -12.0 "Pitch damping";
-  parameter Real Cmde = 0.3 "Elevator pitch effectiveness";
+  parameter Real CL0 = 1.330834383129222 "Lift at zero AoA";
+  parameter Real CLa = 5.796183914504367 "Lift slope [1/rad]";
+  parameter Real CD0 = 0.04176753035472612 "Parasitic drag";
+  parameter Real k_ind = 0.027107876434979222 "Induced drag factor";
+  parameter Real CD0_fp = 1.1173970536911972 "Flat-plate drag";
+  parameter Real Cm0 = -0.05926715018485296 "Pitch moment at alpha=0";
+  parameter Real Cma = -0.08417984700267667 "Pitch stiffness [1/rad]";
+  parameter Real Cmq = -55.049041514586506 "Pitch damping";
+  parameter Real Cmde = -0.8170460411941961 "Elevator pitch effectiveness";
 
-  parameter Real CYb = -0.50 "Sideslip side force [1/rad]";
-  parameter Real CYda = 0.004 "Aileron side force";
-  parameter Real CYdr = -0.015 "Rudder side force";
-  parameter Real CYp = -0.15 "Roll-rate side force";
-  parameter Real CYr = 0.20 "Yaw-rate side force";
-  parameter Real CY_fp_coef = 0.50 "Flat-plate side force";
-  parameter Real Clb = -0.25 "Dihedral effect";
-  parameter Real Clp = -0.50 "Roll damping";
-  parameter Real Clr = 0.15 "Yaw-roll coupling";
-  parameter Real Clda = 0.05 "Aileron roll effectiveness";
-  parameter Real Cldr = 0.006 "Rudder roll";
-  parameter Real Cnb = 0.06 "Weathercock stability";
-  parameter Real Cnp = 0.010 "Roll-yaw coupling";
-  parameter Real Cnr = -0.15 "Yaw damping";
-  parameter Real Cndr = 0.015 "Rudder yaw effectiveness";
-  parameter Real Cnda = 0.006 "Aileron adverse yaw";
+  parameter Real CYb = -1.1287553815264646 "Sideslip side force [1/rad]";
+  parameter Real CYda = 0.09541383478659189 "Aileron side force";
+  parameter Real CYdr = 0.025421820460296434 "Rudder side force";
+  parameter Real CYp = -0.6091421882724996 "Roll-rate side force";
+  parameter Real CYr = 0.7768811819544827 "Yaw-rate side force";
+  parameter Real CY_fp_coef = 0.05195019014239133 "Flat-plate side force";
+  parameter Real Clb = -0.0044208606816988905 "Dihedral effect";
+  parameter Real Clp = -0.8941868966843818 "Roll damping";
+  parameter Real Clr = -0.25785349311877626 "Yaw-roll coupling";
+  parameter Real Clda = 0.005542570026855261 "Aileron roll effectiveness";
+  parameter Real Cldr = 0.3017720072422754 "Rudder roll";
+  parameter Real Cnb = 0.023792621000067123 "Weathercock stability";
+  parameter Real Cnp = -0.15202222203851776 "Roll-yaw coupling";
+  parameter Real Cnr = -0.8516129969142281 "Yaw damping";
+  parameter Real Cndr = 1.5156784860258716 "Rudder yaw effectiveness";
+  parameter Real Cnda = -0.05859350087449443 "Aileron adverse yaw";
 
-  parameter Real alpha_stall = 0.349 "Stall angle [rad]";
-  parameter Real blend_width = 0.0873 "Stall blend width [rad]";
+  parameter Real alpha_stall = 0.11323610147506752 "Stall angle [rad]";
+  parameter Real blend_width = 0.05214780102982927 "Stall blend width [rad]";
   parameter Real max_defl_ail = 0.5236 "Aileron travel [rad]";
   parameter Real max_defl_elev = 0.4189 "Elevator travel [rad]";
   parameter Real max_defl_rud = 0.349 "Rudder travel [rad]";
@@ -100,7 +101,7 @@ protected
   Real fx, fy, fz, mx, my, mz;
   Real c_phi, s_phi, c_th, s_th, c_psi, s_psi, c_th_safe, common;
   Real r00, r01, r02, r10, r11, r12, r20, r21, r22;
-  Real wh_h[3], wh_pen[3], wh_contact[3], wh_vbx[3], wh_vby[3], wh_vbz[3], wh_vwd[3], wh_Fn[3];
+  Real wh_h[3], wh_vbx[3], wh_vby[3], wh_vbz[3], wh_vwd[3], wh_Fn[3];
   Real wh_F[3, 3], wh_M[3, 3], F_ground[3], M_ground[3];
   Real hx, hy, hz, tx, ty, tz, detI;
 
@@ -187,15 +188,13 @@ equation
   // --- tricycle landing-gear contact, adapted from Z-up/FLU to NED/FRD ---
   for i in 1:3 loop
     wh_h[i] = pos[3] + r20*wheel_x[i] + r21*wheel_y[i] + r22*wheel_z[i] - ground_d;
-    wh_pen[i] = 0.5*(wh_h[i] + sqrt(wh_h[i]*wh_h[i] + ground_contact_eps*ground_contact_eps));
-    wh_contact[i] = wh_pen[i]/(wh_pen[i] + ground_contact_eps);
     wh_vbx[i] = vel[1] + rates[2]*wheel_z[i] - rates[3]*wheel_y[i];
     wh_vby[i] = vel[2] + rates[3]*wheel_x[i] - rates[1]*wheel_z[i];
     wh_vbz[i] = vel[3] + rates[1]*wheel_y[i] - rates[2]*wheel_x[i];
     wh_vwd[i] = r20*wh_vbx[i] + r21*wh_vby[i] + r22*wh_vbz[i];
-    wh_Fn[i] = max(0, ground_k*wh_pen[i] + ground_c*max(0, wh_vwd[i])*wh_contact[i]);
-    wh_F[1, i] = -wh_Fn[i]*r20 - roll_fric*wh_vbx[i]*wh_contact[i];
-    wh_F[2, i] = -wh_Fn[i]*r21 - side_fric*wh_vby[i]*wh_contact[i];
+    wh_Fn[i] = if wh_h[i] > 0 then max(0, ground_k*wh_h[i] + ground_c*wh_vwd[i]) else 0;
+    wh_F[1, i] = -wh_Fn[i]*r20 + (if wh_h[i] > 0 then -roll_fric*wh_vbx[i] else 0);
+    wh_F[2, i] = -wh_Fn[i]*r21 + (if wh_h[i] > 0 then -side_fric*wh_vby[i] else 0);
     wh_F[3, i] = -wh_Fn[i]*r22;
     wh_M[1, i] = wheel_y[i]*wh_F[3, i] - wheel_z[i]*wh_F[2, i];
     wh_M[2, i] = wheel_z[i]*wh_F[1, i] - wheel_x[i]*wh_F[3, i];
@@ -241,4 +240,4 @@ equation
   der(pos[1]) = r00*vel[1] + r01*vel[2] + r02*vel[3];
   der(pos[2]) = r10*vel[1] + r11*vel[2] + r12*vel[3];
   der(pos[3]) = r20*vel[1] + r21*vel[2] + r22*vel[3];
-end SportCubGreybox;
+end SportCubGreyboxIdentified;

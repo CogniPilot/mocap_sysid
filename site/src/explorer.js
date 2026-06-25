@@ -14,7 +14,7 @@ const DATA_URLS = {
 };
 const DEFAULT_DATASET = "sportcub_mocap_5_22_26";
 const LABEL_COLORS = { ground: "#8d6e63", ground_effect: "#26a69a", stabilized: "#5c7cfa", manual: "#f08c00" };
-const METHOD_COLORS = { "6DOF-NominalGreyBox": "#d62728", "6DOF-LinearSS": "#2ca02c", "6DOF-RidgeResidual": "#9467bd", "6DOF-GreyBoxOEM": "#e8a838", "6DOF-EquationError-LS": "#17becf", "6DOF-SINDy": "#e377c2", "6DOF-Koopman-EDMD": "#bcbd22", "6DOF-Symbolic-Stepwise": "#8c564b", "6DOF-Subspace-Hankel": "#1f77b4", "6DOF-GP-RBF": "#f7b6d2" };
+const METHOD_COLORS = { "6DOF-NominalGreyBox": "#d62728", "6DOF-LinearSS": "#2ca02c", "6DOF-RidgeResidual": "#9467bd", "6DOF-GreyBoxOEM": "#e8a838", "Modelica:RumocaFixedWing": "#7dd3fc", "6DOF-EquationError-LS": "#17becf", "6DOF-SINDy": "#e377c2", "6DOF-Koopman-EDMD": "#bcbd22", "6DOF-Symbolic-Stepwise": "#8c564b", "6DOF-Subspace-Hankel": "#1f77b4", "6DOF-GP-RBF": "#f7b6d2" };
 const MIN_SPEED = 2.5;
 const MAX_SPEED = 12.0;
 
@@ -147,67 +147,128 @@ function quatFromEuler(roll, pitch, yaw) {
   ]);
 }
 
-// Sport Cub grey-box OEM dynamics ported from models/aircraft6dof/greybox.py
-// (build_casadi_dynamics). Twelve Euler states (pos NED, body uvw, roll/pitch/
-// yaw, body rates); u is the stick vector in (throttle, elevator, aileron,
-// rudder) order; gb carries the fitted+fixed parameters by name.
+// Sport Cub grey-box OEM dynamics ported from modelica/SportCubGreybox.mo.
+// Twelve Euler states (pos NED, body FRD uvw, roll/pitch/yaw, body FRD rates);
+// u is the benchmark stick vector in (throttle, elevator, aileron, rudder)
+// order; gb carries the fitted+fixed parameters by name.
 function greyboxRhs(s, u, gb) {
   const p = gb.p;
   const [uB, vB, wB] = [s[3], s[4], s[5]];
   const [phi, theta, psi] = [s[6], s[7], s[8]];
   const [pR, qR, rR] = [s[9], s[10], s[11]];
-  const thr = Math.max(u[0], 0);
-  const elevRad = gb.maxDefl.elevator * (Math.PI / 180) * u[1];
-  const ailRad = gb.maxDefl.aileron * (Math.PI / 180) * u[2];
-  const rudRad = gb.maxDefl.rudder * (Math.PI / 180) * u[3];
-
-  const speed = Math.max(Math.sqrt(uB * uB + vB * vB + wB * wB + 1e-9), 1e-3);
-  const alpha = Math.atan2(wB, uB);
-  const beta = Math.asin(clamp(vB / speed, -0.99, 0.99));
-  const qbar = 0.5 * p.rho * speed * speed;
-  const cA = Math.cos(alpha), sA = Math.sin(alpha);
-  const cB = Math.cos(beta), sB = Math.sin(beta);
-
-  const CL = p.CL0 + p.CLa * alpha;
-  const CD = p.CD0 + p.CDCLS * CL * CL;
-  const lift = qbar * p.S * CL;
-  const drag = qbar * p.S * CD;
-  const side = qbar * p.S * (p.CYb * beta);
-  const thrust = p.KT * p.m * thr;
-
-  // Aerodynamic forces rotate from wind axes; thrust is body-fixed along x.
-  const fx = -drag * cA * cB - side * cA * sB + lift * sA + thrust;
-  const fy = -drag * sB + side * cB;
-  const fz = -drag * sA * cB - side * sA * sB - lift * cA;
+  const eps = 1e-6;
 
   const cPhi = Math.cos(phi), sPhi = Math.sin(phi);
   const cTh = Math.cos(theta), sTh = Math.sin(theta);
   const cPsi = Math.cos(psi), sPsi = Math.sin(psi);
+  const r00 = cTh * cPsi;
+  const r01 = sPhi * sTh * cPsi - cPhi * sPsi;
+  const r02 = cPhi * sTh * cPsi + sPhi * sPsi;
+  const r10 = cTh * sPsi;
+  const r11 = sPhi * sTh * sPsi + cPhi * cPsi;
+  const r12 = cPhi * sTh * sPsi - sPhi * cPsi;
+  const r20 = -sTh;
+  const r21 = sPhi * cTh;
+  const r22 = cPhi * cTh;
+
+  const vt = Math.sqrt(uB * uB + vB * vB + wB * wB) + eps;
+  const vxz = Math.sqrt(uB * uB + wB * wB) + eps;
+  const alpha = Math.atan2(wB, uB) + p.wing_incidence;
+  const beta = Math.atan2(vB, vxz);
+  const qbar = 0.5 * p.rho * vt * vt;
+  const sigma = (1 + Math.tanh((alpha - p.alpha_stall) / p.blend_width)) / 2;
+
+  const wx = [uB / vt, vB / vt, wB / vt];
+  const ref = Math.abs(wx[2]) < Math.abs(wx[0]) ? [0, 0, 1] : [1, 0, 0];
+  const rdot = ref[0] * wx[0] + ref[2] * wx[2];
+  const wzt = [ref[0] - rdot * wx[0], -rdot * wx[1], ref[2] - rdot * wx[2]];
+  const nz = Math.hypot(...wzt) + eps;
+  const wz = [wzt[0] / nz, wzt[1] / nz, wzt[2] / nz];
+  const wy = [wz[1] * wx[2] - wz[2] * wx[1], wz[2] * wx[0] - wz[0] * wx[2], wz[0] * wx[1] - wz[1] * wx[0]];
+
+  const thr = clamp(u[0], 0, 1);
+  const elevRad = p.max_defl_elev * clamp(u[1], -1, 1);
+  const ailRad = p.max_defl_ail * clamp(u[2], -1, 1);
+  const rudRad = -p.max_defl_rud * clamp(u[3], -1, 1);
+
+  const clLin = p.CL0 + p.CLa * alpha;
+  const clFp = 2 * Math.sin(alpha) * Math.cos(alpha);
+  const cl = (1 - sigma) * clLin + sigma * clFp;
+  const cdLin = p.CD0 + p.k_ind * clLin * clLin;
+  const cdFp = p.CD0_fp + 2 * Math.sin(alpha) * Math.sin(alpha);
+  const cd = (1 - sigma) * cdLin + sigma * cdFp;
+  const cyLin = p.CYb * beta + p.CYda * ailRad + p.CYdr * rudRad + p.CYp * (p.b / (2 * vt)) * pR + p.CYr * (p.b / (2 * vt)) * rR;
+  const cyFp = p.CY_fp_coef * Math.sin(beta) * Math.cos(alpha);
+  const cy = (1 - sigma) * cyLin + sigma * cyFp;
+  const clAero = p.Clda * ailRad + p.Cldr * rudRad + p.Clb * beta + p.Clp * (p.b / (2 * vt)) * pR + p.Clr * (p.b / (2 * vt)) * rR;
+  const cmAero = p.Cm0 + p.Cma * alpha + p.Cmde * elevRad + p.Cmq * (p.cbar / (2 * vt)) * qR;
+  const cnAero = p.Cnb * beta + p.Cndr * rudRad + p.Cnda * ailRad + p.Cnp * (p.b / (2 * vt)) * pR + p.Cnr * (p.b / (2 * vt)) * rR;
+
+  const fa = [
+    qbar * p.S * (wx[0] * (-cd) + wy[0] * cy + wz[0] * (-cl)),
+    qbar * p.S * (wx[1] * (-cd) + wy[1] * cy + wz[1] * (-cl)),
+    qbar * p.S * (wx[2] * (-cd) + wy[2] * cy + wz[2] * (-cl)),
+  ];
+  const ma = [qbar * p.S * p.b * clAero, qbar * p.S * p.cbar * cmAero, qbar * p.S * p.b * cnAero];
+
+  const wheelX = [0.10, -0.08, -0.08];
+  const wheelY = [0.0, 0.10, -0.10];
+  const wheelZ = [0.055, 0.055, 0.055];
+  const fg = [0, 0, 0];
+  const mg = [0, 0, 0];
+  for (let i = 0; i < 3; i++) {
+    const whH = s[2] + r20 * wheelX[i] + r21 * wheelY[i] + r22 * wheelZ[i];
+    const whVbx = uB + qR * wheelZ[i] - rR * wheelY[i];
+    const whVby = vB + rR * wheelX[i] - pR * wheelZ[i];
+    const whVbz = wB + pR * wheelY[i] - qR * wheelX[i];
+    const whVwd = r20 * whVbx + r21 * whVby + r22 * whVbz;
+    const contactEps = p.ground_contact_eps ?? 1e-4;
+    const whPen = 0.5 * (whH + Math.sqrt(whH * whH + contactEps * contactEps));
+    const whContact = whPen / (whPen + contactEps);
+    const fn = Math.max(0, p.ground_k * whPen + p.ground_c * Math.max(0, whVwd) * whContact);
+    const wf = [
+      -fn * r20 - p.roll_fric * whVbx * whContact,
+      -fn * r21 - p.side_fric * whVby * whContact,
+      -fn * r22,
+    ];
+    fg[0] += wf[0]; fg[1] += wf[1]; fg[2] += wf[2];
+    mg[0] += wheelY[i] * wf[2] - wheelZ[i] * wf[1];
+    mg[1] += wheelZ[i] * wf[0] - wheelX[i] * wf[2];
+    mg[2] += wheelX[i] * wf[1] - wheelY[i] * wf[0];
+  }
+
+  const fx = fa[0] + p.thr_max * thr + fg[0];
+  const fy = fa[1] + fg[1];
+  const fz = fa[2] + fg[2];
+  const mx = ma[0] + mg[0];
+  const my = ma[1] + mg[1];
+  const mz = ma[2] + mg[2];
 
   const uDot = fx / p.m - p.g * sTh + rR * vB - qR * wB;
   const vDot = fy / p.m + p.g * sPhi * cTh + pR * wB - rR * uB;
   const wDot = fz / p.m + p.g * cPhi * cTh + qR * uB - pR * vB;
 
-  const bV = p.b / (2 * speed);
-  const cV = p.cbar / (2 * speed);
-  const rollAccel = qbar * (p.KL0 + p.KLb * beta + p.KLp * bV * pR + p.KLr * bV * rR + p.KLda * ailRad + p.KLdr * rudRad);
-  const pitchAccel = qbar * (p.KM0 + p.KMa * alpha + p.KMq * cV * qR + p.KMe * elevRad);
-  const yawAccel = qbar * (p.KN0 + p.KNb * beta + p.KNp * bV * pR + p.KNr * bV * rR + p.KNda * ailRad + p.KNdr * rudRad);
+  const hx = p.Ixx * pR - p.Ixz * rR;
+  const hy = p.Iyy * qR;
+  const hz = p.Izz * rR - p.Ixz * pR;
+  const tx = mx - (qR * hz - rR * hy);
+  const ty = my - (rR * hx - pR * hz);
+  const tz = mz - (pR * hy - qR * hx);
+  const detI = p.Ixx * p.Izz - p.Ixz * p.Ixz;
+  const pDot = (p.Izz * tx + p.Ixz * tz) / detI;
+  const qDot = ty / p.Iyy;
+  const rDot = (p.Ixz * tx + p.Ixx * tz) / detI;
 
-  const pDot = rollAccel + ((p.Iyy - p.Izz) / p.Ixx) * qR * rR + (p.Ixz / p.Ixx) * pR * qR;
-  const qDot = pitchAccel + ((p.Izz - p.Ixx) / p.Iyy) * pR * rR + (p.Ixz / p.Iyy) * (rR * rR - pR * pR);
-  const rDot = yawAccel + ((p.Ixx - p.Iyy) / p.Izz) * pR * qR + (p.Ixz / p.Izz) * qR * rR;
-
-  const cThSafe = Math.sign(cTh || 1) * Math.max(Math.abs(cTh), 1e-3);
+  const cThSafe = (cTh >= 0 ? 1 : -1) * Math.max(Math.abs(cTh), 1e-3);
   const common = qR * sPhi + rR * cPhi;
   const phiDot = pR + (sTh / cThSafe) * common;
   const thetaDot = qR * cPhi - rR * sPhi;
   const psiDot = common / cThSafe;
 
   return [
-    cTh * cPsi * uB + (sPhi * sTh * cPsi - cPhi * sPsi) * vB + (cPhi * sTh * cPsi + sPhi * sPsi) * wB,
-    cTh * sPsi * uB + (sPhi * sTh * sPsi + cPhi * cPsi) * vB + (cPhi * sTh * sPsi - sPhi * cPsi) * wB,
-    -sTh * uB + sPhi * cTh * vB + cPhi * cTh * wB,
+    r00 * uB + r01 * vB + r02 * wB,
+    r10 * uB + r11 * vB + r12 * wB,
+    r20 * uB + r21 * vB + r22 * wB,
     uDot, vDot, wDot,
     phiDot, thetaDot, psiDot,
     pDot, qDot, rDot,
@@ -215,9 +276,9 @@ function greyboxRhs(s, u, gb) {
 }
 
 export function makeGreyboxStepper(greybox, dt) {
-  const p = { ...greybox.fixed_parameters };
+  const p = { ...greybox.fixed_parameters, ...(greybox.default_parameters || {}) };
   greybox.parameter_names.forEach((name, i) => { p[name] = greybox.parameters[i]; });
-  const gb = { p, maxDefl: greybox.max_deflection_deg };
+  const gb = { p };
   return (x, u) => {
     const e = eulerFromQuat([x[6], x[7], x[8], x[9]]);
     let s = [x[0], x[1], x[2], x[3], x[4], x[5], e[0], e[1], e[2], x[10], x[11], x[12]];
@@ -465,7 +526,7 @@ export function makeStepper(method, models, dt) {
   };
 }
 
-function safeController(gains) {
+export function safeController(gains) {
   // SAFE self-level: the stick commands attitude through the envelope clip
   // ([Kp, cmd_scale, envelope_limit, Kd, offset] per attitude axis), the loop
   // closes on attitude error with rate damping, and surfaces saturate.
@@ -483,6 +544,28 @@ function safeController(gains) {
       clamp(gr[0] * stick[3] + gr[1] * x[12] + gr[2], -0.65, 0.65),
     ];
   };
+}
+
+export function makeKeyboardFlightSimulation(method, timeS) {
+  if (!ex.data?.models) return null;
+  const f = flight();
+  const models = ex.data.models;
+  const dt = f.dt_full || 1 / 240;
+  const startS = firstFlyableTime(f, timeS ?? ex.anchorTimeS ?? 0);
+  const x0 = estimateInitialState(f, startS ?? 0);
+  let step;
+  if (method === "SAFE closed loop") {
+    if (!models.safe_invariant_weights) return null;
+    step = makeSafeStepper(models.safe_invariant_weights, dt);
+  } else if (method === "SAFE controller + GreyBox") {
+    if (!models.safe_gains || !models.greybox) return null;
+    const airframeStep = makeStepper("6DOF-GreyBoxOEM", models, dt);
+    const controller = safeController(models.safe_gains);
+    step = (x, stick) => airframeStep(x, controller(stick, x));
+  } else {
+    step = makeStepper(method, models, dt);
+  }
+  return { x: x0, dt, startS: startS ?? 0, step };
 }
 
 function estimateInitialState(flight, timeS) {
@@ -602,11 +685,10 @@ function flight() {
 }
 
 function predictionMethods() {
-  // Free-run the leaderboard-selected methods the browser has parameters
-  // for; with no usable selection, fall back to LinearSS so Predict here
-  // always shows something.
+  // Temporarily focus the browser free-run on the Rumoca/CasADi greybox path.
   const usable = Array.from(ex.selectedMethods).filter((m) => ex.data.methods.includes(m));
-  return usable.length ? usable : ["6DOF-LinearSS"];
+  if (usable.length) return usable;
+  return ex.selectedMethods.size ? [] : ["6DOF-GreyBoxOEM"];
 }
 
 function recomputePredictions() {
@@ -725,7 +807,7 @@ function moDownloadLink(filename, text) {
 // the recorded pilot sticks, so inputs/outputs are described in those terms.
 const METHOD_INFO = {
   "GreyBoxOEM": {
-    what: "Physical lumped-parameter grey-box airframe; its ~22 aerodynamic coefficients are fitted by output-error (multiple shooting) against the real flights.",
+    what: "Physical lumped-parameter grey-box airframe using the Rumoca fixed-wing plant structure; its aero, thrust, ground-contact, and control-surface coefficients are fitted by output-error against the real flights.",
     in: "initial flight state + recorded pilot commands (throttle, elevator, aileron, rudder)",
     out: "open-loop predicted trajectory — position, attitude, body velocity & rates",
   },
@@ -822,7 +904,14 @@ function renderModelInspector() {
   if (m.greybox) {
     catalog.push(["GreyBoxOEM", () => {
       const gb = m.greybox;
-      const groups = [["lift/drag/side", 0, 6], ["roll", 6, 12], ["pitch", 12, 16], ["yaw", 16, 22]];
+      const groups = [
+        ["setup / ground", 0, 6],
+        ["lift / drag / pitch", 6, 15],
+        ["side force", 15, 21],
+        ["roll", 21, 27],
+        ["yaw", 27, 32],
+        ["stall / surfaces", 32, gb.parameter_names.length],
+      ];
       const tables = groups.map(([label, a, b]) => {
         const rows = gb.parameter_names.slice(a, b).map((n, i) => {
           const v = gb.parameters[a + i];
@@ -836,10 +925,9 @@ function renderModelInspector() {
       }).join("");
       const couplings = (gb.couplings || []).map((c) => `${c.a}\u2194${c.b} (r=${c.r.toFixed(2)})`).join(", ");
       const fixed = Object.entries(gb.fixed_parameters).map(([k, v]) => `${k}=${v}`).join(", ");
-      return `<p class="model-note">22 physical aerodynamic coefficients identified by segment-wise output error on the manual training chunks; the same parameters integrate in the browser.</p>
+      return `<p class="model-note">Rumoca fixed-wing plant coefficients identified by segment-wise output error on the manual training chunks; the same parameters integrate in the browser and compile as Modelica.</p>
         <div class="model-columns">${tables}</div>
         <p class="model-note">fixed: ${fixed}</p>
-        <p class="model-note">surface throws: ${Object.entries(gb.max_deflection_deg).map(([k, v]) => `${k} ${v}\u00b0`).join(", ")}</p>
         ${couplings ? `<p class="model-note">strongly coupled pairs (|r|&gt;0.9): ${couplings}</p>` : ""}
         ${gb.uncertainty_note ? `<p class="model-note">${gb.uncertainty_note}</p>` : ""}
         ${modelicaSection(gb.modelica)}`;
@@ -1029,8 +1117,9 @@ function renderAll() {
   if (ex.anchorTimeS == null) {
     status.textContent = "Scrub the colored timeline and press Predict here to set the prediction initial condition.";
   } else {
-    const used = Object.keys(ex.predictions).map((m) => m.replace("6DOF-", "")).join(", ");
-    const fallback = ex.selectedMethods.size ? "" : " (no browser-runnable method selected in the leaderboard; using LinearSS)";
+    const usedKeys = Object.keys(ex.predictions).length ? Object.keys(ex.predictions) : Array.from(ex.selectedMethods);
+    const used = usedKeys.map((m) => m.replace("6DOF-", "").replace("Modelica:", "")).join(", ");
+    const fallback = ex.selectedMethods.size ? "" : " (using GreyBoxOEM)";
     const note = ex.anchorNote ? ` [${ex.anchorNote}]` : "";
     const dead = flight().autonomous
       ? " Warning: this autonomous flight was flown by an offboard autopilot whose lateral commands are not in the recorded sticks, so free runs cannot anticipate its turns."
@@ -1039,7 +1128,7 @@ function renderAll() {
   }
 }
 
-const METHOD_COLORS_HEX = { "6DOF-NominalGreyBox": 0xd62728, "6DOF-LinearSS": 0x2ca02c, "6DOF-RidgeResidual": 0x9467bd, "6DOF-GreyBoxOEM": 0xe8a838, "6DOF-EquationError-LS": 0x17becf, "6DOF-SINDy": 0xe377c2, "6DOF-Koopman-EDMD": 0xbcbd22, "6DOF-Symbolic-Stepwise": 0x8c564b, "6DOF-Subspace-Hankel": 0x1f77b4, "6DOF-GP-RBF": 0xf7b6d2 };
+const METHOD_COLORS_HEX = { "6DOF-NominalGreyBox": 0xd62728, "6DOF-LinearSS": 0x2ca02c, "6DOF-RidgeResidual": 0x9467bd, "6DOF-GreyBoxOEM": 0xe8a838, "Modelica:RumocaFixedWing": 0x7dd3fc, "6DOF-EquationError-LS": 0x17becf, "6DOF-SINDy": 0xe377c2, "6DOF-Koopman-EDMD": 0xbcbd22, "6DOF-Symbolic-Stepwise": 0x8c564b, "6DOF-Subspace-Hankel": 0x1f77b4, "6DOF-GP-RBF": 0xf7b6d2 };
 
 function publishOverlay(timeS) {
   // Publish the segmentation-colored full-flight track and the free-run
@@ -1055,6 +1144,7 @@ function publishOverlay(timeS) {
     labels: f.labels,
     tracked: f.tracked || f.labels.map(() => 1),
     predictions: Object.entries(ex.predictions).map(([method, pred]) => ({
+      method,
       color: METHOD_COLORS_HEX[method] ?? 0x444444,
       points: pred.posEnu,
       times: pred.times,
@@ -1072,8 +1162,15 @@ function publishOverlay(timeS) {
         overlay,
         // Browser-runnable methods + colors, so the playback can offer a
         // color-coded picker matching the prediction lines.
-        methods: ex.data.methods,
+        methods: ex.data.methods.filter((method) => method === "6DOF-GreyBoxOEM"),
         methodColors: METHOD_COLORS,
+        models: ex.data.models,
+        predictionFlight: {
+          time: f.time,
+          dtFull: f.dt_full,
+          state: f.state,
+          stick: f.stick_full,
+        },
         // Carry the full-flight track with the event so registration can
         // never be lost to module load order.
         track: ex.playbackTrack,
@@ -1244,8 +1341,8 @@ export async function initExplorer() {
     setAnchor(event.detail.timeS);
   });
   window.addEventListener("methods-changed", (event) => {
-    const available = new Set(ex.data.methods);
-    ex.selectedMethods = new Set((event.detail.methods || []).filter((m) => available.has(m)));
+    const available = new Set(ex.data.methods.filter((method) => method === "6DOF-GreyBoxOEM"));
+    ex.selectedMethods = new Set((event.detail.methods || []).filter((m) => available.has(m) || String(m).startsWith("Modelica:")));
     if (!ex.active) return;
     recomputePredictions();
     renderAll();

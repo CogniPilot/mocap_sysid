@@ -1724,7 +1724,7 @@ def run_methods(
                 int(greybox["theta"].size),
                 pred,
                 validation,
-                "22 aerodynamic coefficients fitted within physical bounds; the same parameters drive the browser free-runs.",
+                "Rumoca fixed-wing plant coefficients fitted within physical bounds; the same parameters drive the browser free-runs.",
             )
         )
         try:

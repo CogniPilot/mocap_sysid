@@ -15,12 +15,11 @@ stick passthrough plus yaw-rate damping.
 Identification is staged against the *fitted* grey-box airframe (never the
 nominal model -- its control-effectiveness rows are wrong for this airframe):
 
-1. Effective surfaces by inverse dynamics through the fitted moment model.
-   The pitch inversion is scalar in KMe; the lateral inversion is the coupled
-   2x2 solve in (KLda, KLdr; KNda, KNdr). The fitted airframe carries most
-   roll authority in the dihedral/rudder path (KLdr >> KLda), which makes the
-   recovered aileron channel weakly identified -- the reason this stage only
-   initializes the fit.
+1. Effective surfaces by local inverse dynamics through the Rumoca-generated
+   airframe RHS: CasADi differentiates der(p,q,r) with respect to normalized
+   elevator/aileron/rudder commands, and a least-squares solve recovers the
+   surface command that best explains the measured angular acceleration. This
+   stage only initializes the fit.
 2. Staged Huber fit of the per-axis law on the recovered surfaces: a grid
    over the nonlinear (c, limit) wraps a robust linear solve of (Kp, Kd, b).
 3. Joint closed-loop simulation-error refinement at the validation horizon:
@@ -50,6 +49,13 @@ import numpy as np
 from scipy.optimize import least_squares
 
 from benchmark.paths import RESULTS
+from .greybox import (
+    FIXED_PARAMETER_NAMES,
+    GREYBOX_ESTIMATED_PARAMETER_NAMES,
+    SPORTCUB_PARAMETER_NAMES,
+    sportcub_greybox_spec,
+)
+from .modelica import dynamics as modelica_dynamics
 from .segmentation import (
     euler_from_quat_array,
     is_autonomous,
@@ -95,116 +101,107 @@ def huber_fit(phi: np.ndarray, target: np.ndarray) -> np.ndarray:
 
 
 class GreyboxAirframe:
-    """Vectorized Euler-state grey-box dynamics for a parameter dict."""
+    """Generated SportCubGreybox wrapper for controller fitting.
+
+    All plant dynamics come from Rumoca-generated CasADi functions. This class
+    only adapts benchmark control order (thr, elev, ail, rud) to the Modelica
+    order (aileron, elevator, throttle, rudder) and batches scalar CasADi calls.
+    """
 
     def __init__(self, greybox: dict):
         self.names = list(greybox["parameter_names"])
+        if tuple(self.names) != GREYBOX_ESTIMATED_PARAMETER_NAMES:
+            raise ValueError(
+                "greybox payload uses an obsolete parameter set; rerun the fixed-wing "
+                "greybox fit/export before fitting SAFE"
+            )
         self.theta = np.asarray(greybox["parameters"], dtype=float)
         self.cr_std = np.asarray(greybox.get("cr_std", np.ones_like(self.theta)), dtype=float)
-        self.fixed = dict(greybox["fixed_parameters"])
-        self.throw = {k: np.deg2rad(v) for k, v in greybox["max_deflection_deg"].items()}
-        self.idx = {n: i for i, n in enumerate(self.names)}
+        fallback_std = np.maximum(0.10 * np.maximum(np.abs(self.theta), 1.0), 1e-4)
+        self.cr_std = np.where(np.isfinite(self.cr_std) & (self.cr_std > 0), self.cr_std, fallback_std)
+        self.spec = sportcub_greybox_spec()
+        self._rhs, _ = modelica_dynamics.build_casadi_dynamics(self.spec, 0.01)
+        self._rk4_by_dt = {}
+        self._rate_control = None
+
+    def _params(self, theta: np.ndarray | None = None) -> np.ndarray:
+        theta_vec = self.theta if theta is None else np.asarray(theta, dtype=float)
+        return self.spec.full_parameter_vector_from_mapping(dict(zip(self.names, theta_vec)))
+
+    @staticmethod
+    def _to_modelica_controls(u_cmd: np.ndarray) -> np.ndarray:
+        u = np.asarray(u_cmd, dtype=float)
+        return np.column_stack([u[:, 2], u[:, 1], u[:, 0], u[:, 3]])
 
     def rhs(self, x: np.ndarray, u_cmd: np.ndarray, theta: np.ndarray | None = None) -> np.ndarray:
-        """Batched rhs: x (n,12) = [pos3, uvw3, euler3, pqr3], u_cmd (n,4) in
-        u_cmd order (thr, elev, ail, rud). Matches build_casadi_dynamics."""
-        P = self.theta if theta is None else theta
-        I = self.idx
-        F = self.fixed
-        u_b, v_b, w_b = x[:, 3], x[:, 4], x[:, 5]
-        phi, theta_e, psi = x[:, 6], x[:, 7], x[:, 8]
-        p_r, q_r, r_r = x[:, 9], x[:, 10], x[:, 11]
-        thr = np.maximum(u_cmd[:, 0], 0.0)
-        de = self.throw["elevator"] * u_cmd[:, 1]
-        da = self.throw["aileron"] * u_cmd[:, 2]
-        dr = self.throw["rudder"] * u_cmd[:, 3]
-        speed = np.maximum(np.sqrt(u_b**2 + v_b**2 + w_b**2 + 1e-9), 1e-3)
-        alpha = np.arctan2(w_b, u_b)
-        beta = np.arcsin(np.clip(v_b / speed, -0.99, 0.99))
-        qbar = 0.5 * F["rho"] * speed**2
-        CL = P[I["CL0"]] + P[I["CLa"]] * alpha
-        CD = P[I["CD0"]] + P[I["CDCLS"]] * CL**2
-        CY = P[I["CYb"]] * beta
-        lift, drag, side = qbar * F["S"] * CL, qbar * F["S"] * CD, qbar * F["S"] * CY
-        thrust = P[I["KT"]] * F["m"] * thr
-        ca_, sa = np.cos(alpha), np.sin(alpha)
-        cb, sb = np.cos(beta), np.sin(beta)
-        fx = -drag * ca_ * cb - side * ca_ * sb + lift * sa + thrust
-        fy = -drag * sb + side * cb
-        fz = -drag * sa * cb - side * sa * sb - lift * ca_
-        cphi, sphi = np.cos(phi), np.sin(phi)
-        cth, sth = np.cos(theta_e), np.sin(theta_e)
-        cpsi, spsi = np.cos(psi), np.sin(psi)
-        g, m = F["g"], F["m"]
-        ud = fx / m - g * sth + r_r * v_b - q_r * w_b
-        vd = fy / m + g * sphi * cth + p_r * w_b - r_r * u_b
-        wd = fz / m + g * cphi * cth + q_r * u_b - p_r * v_b
-        bV = F["b"] / (2 * speed)
-        cV = F["cbar"] / (2 * speed)
-        roll_acc = qbar * (P[I["KL0"]] + P[I["KLb"]] * beta + P[I["KLp"]] * bV * p_r + P[I["KLr"]] * bV * r_r + P[I["KLda"]] * da + P[I["KLdr"]] * dr)
-        pitch_acc = qbar * (P[I["KM0"]] + P[I["KMa"]] * alpha + P[I["KMq"]] * cV * q_r + P[I["KMe"]] * de)
-        yaw_acc = qbar * (P[I["KN0"]] + P[I["KNb"]] * beta + P[I["KNp"]] * bV * p_r + P[I["KNr"]] * bV * r_r + P[I["KNda"]] * da + P[I["KNdr"]] * dr)
-        Ixx, Iyy, Izz, Ixz = F["Ixx"], F["Iyy"], F["Izz"], F["Ixz"]
-        pd_ = roll_acc + ((Iyy - Izz) / Ixx) * q_r * r_r + (Ixz / Ixx) * p_r * q_r
-        qd = pitch_acc + ((Izz - Ixx) / Iyy) * p_r * r_r + (Ixz / Iyy) * (r_r**2 - p_r**2)
-        rd = yaw_acc + ((Ixx - Iyy) / Izz) * p_r * q_r + (Ixz / Izz) * q_r * r_r
-        cth_safe = np.where(cth >= 0, np.maximum(cth, 1e-3), np.minimum(cth, -1e-3))
-        common = q_r * sphi + r_r * cphi
-        phid = p_r + (sth / cth_safe) * common
-        thetad = q_r * cphi - r_r * sphi
-        psid = common / cth_safe
-        pn = cth * cpsi * u_b + (sphi * sth * cpsi - cphi * spsi) * v_b + (cphi * sth * cpsi + sphi * spsi) * w_b
-        pe = cth * spsi * u_b + (sphi * sth * spsi + cphi * cpsi) * v_b + (cphi * sth * spsi - sphi * cpsi) * w_b
-        pdn = -sth * u_b + sphi * cth * v_b + cphi * cth * w_b
-        return np.stack([pn, pe, pdn, ud, vd, wd, phid, thetad, psid, pd_, qd, rd], axis=1)
+        """Batched RHS in benchmark control order (thr, elev, ail, rud)."""
+        x = np.asarray(x, dtype=float)
+        u_mo = self._to_modelica_controls(u_cmd)
+        p = self._params(theta)
+        return np.vstack([
+            np.asarray(self._rhs(xi, ui, p)).ravel()
+            for xi, ui in zip(x, u_mo)
+        ])
 
     def rk4(self, x: np.ndarray, u_cmd: np.ndarray, dt: float, theta: np.ndarray | None = None) -> np.ndarray:
-        k1 = self.rhs(x, u_cmd, theta)
-        k2 = self.rhs(x + 0.5 * dt * k1, u_cmd, theta)
-        k3 = self.rhs(x + 0.5 * dt * k2, u_cmd, theta)
-        k4 = self.rhs(x + dt * k3, u_cmd, theta)
-        return x + (dt / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
+        if dt not in self._rk4_by_dt:
+            _, self._rk4_by_dt[dt] = modelica_dynamics.build_casadi_dynamics(self.spec, float(dt))
+        rk4 = self._rk4_by_dt[dt]
+        x = np.asarray(x, dtype=float)
+        u_mo = self._to_modelica_controls(u_cmd)
+        p = self._params(theta)
+        return np.vstack([
+            np.asarray(rk4(xi, ui, p)).ravel()
+            for xi, ui in zip(x, u_mo)
+        ])
+
+    def rate_control_linearization(self, x: np.ndarray, u_cmd: np.ndarray, theta: np.ndarray | None = None):
+        """Return generated `der(p,q,r)` and its Jacobian wrt normalized surfaces."""
+        if self._rate_control is None:
+            import casadi as ca
+
+            x_sym = ca.SX.sym("x", 12)
+            u_cmd_sym = ca.SX.sym("u_cmd", 4)
+            p_sym = ca.SX.sym("p", len(FIXED_PARAMETER_NAMES) + len(SPORTCUB_PARAMETER_NAMES))
+            u_mo = ca.vertcat(u_cmd_sym[2], u_cmd_sym[1], u_cmd_sym[0], u_cmd_sym[3])
+            rate_rhs = self._rhs(x_sym, u_mo, p_sym)[9:12]
+            surf = ca.vertcat(u_cmd_sym[1], u_cmd_sym[2], u_cmd_sym[3])
+            self._rate_control = ca.Function(
+                "sportcub_rate_control",
+                [x_sym, u_cmd_sym, p_sym],
+                [rate_rhs, ca.jacobian(rate_rhs, surf)],
+            )
+        p = self._params(theta)
+        values = [
+            self._rate_control(xi, ui, p)
+            for xi, ui in zip(np.asarray(x, dtype=float), np.asarray(u_cmd, dtype=float))
+        ]
+        rates = np.vstack([np.asarray(v[0]).ravel() for v in values])
+        jac = np.stack([np.asarray(v[1], dtype=float) for v in values])
+        return rates, jac
 
 
 def effective_surfaces(airframe: GreyboxAirframe, x: np.ndarray, dt: float) -> tuple[np.ndarray, np.ndarray]:
     """Per-sample effective (elev, ail, rud) commands by inverse dynamics.
 
-    The observed angular accelerations minus inertia coupling give the
-    aerodynamic moments; subtracting the fitted surface-free model and
-    inverting the surface-effectiveness block yields the deflections the
-    airframe must have seen. Pitch is scalar in KMe; roll/yaw is the coupled
-    2x2 solve. Low-airspeed samples are masked (the inversion degenerates
-    with dynamic pressure).
+    Uses the Rumoca-generated RHS and its CasADi Jacobian wrt normalized
+    surface commands. Low-airspeed samples are masked because the local
+    control-effectiveness solve degenerates with dynamic pressure.
     """
-    P, I, F = airframe.theta, airframe.idx, airframe.fixed
     rates = smooth_columns(x[:, 10:13], 9)
     rates_dot = np.gradient(rates, dt, axis=0, edge_order=2)
-    u_b, v_b, w_b = x[:, 3], x[:, 4], x[:, 5]
-    speed = np.sqrt(u_b**2 + v_b**2 + w_b**2)
+    speed = np.linalg.norm(x[:, 3:6], axis=1)
     valid = speed >= MIN_AIRSPEED_MPS
-    speed_s = np.maximum(speed, 1e-3)
-    alpha = np.arctan2(w_b, u_b)
-    beta = np.arcsin(np.clip(v_b / speed_s, -0.99, 0.99))
-    qbar = 0.5 * F["rho"] * speed_s**2
-    bV = F["b"] / (2 * speed_s)
-    cV = F["cbar"] / (2 * speed_s)
-    p_r, q_r, r_r = rates.T
-    Ixx, Iyy, Izz, Ixz = F["Ixx"], F["Iyy"], F["Izz"], F["Ixz"]
-    pd_a = rates_dot[:, 0] - ((Iyy - Izz) / Ixx) * q_r * r_r - (Ixz / Ixx) * p_r * q_r
-    qd_a = rates_dot[:, 1] - ((Izz - Ixx) / Iyy) * p_r * r_r - (Ixz / Iyy) * (r_r**2 - p_r**2)
-    rd_a = rates_dot[:, 2] - ((Ixx - Iyy) / Izz) * p_r * q_r - (Ixz / Izz) * q_r * r_r
-    l0 = qbar * (P[I["KL0"]] + P[I["KLb"]] * beta + P[I["KLp"]] * bV * p_r + P[I["KLr"]] * bV * r_r)
-    m0 = qbar * (P[I["KM0"]] + P[I["KMa"]] * alpha + P[I["KMq"]] * cV * q_r)
-    n0 = qbar * (P[I["KN0"]] + P[I["KNb"]] * beta + P[I["KNp"]] * bV * p_r + P[I["KNr"]] * bV * r_r)
-    de = (qd_a - m0) / (qbar * P[I["KMe"]])
-    lat_m = np.array([[P[I["KLda"]], P[I["KLdr"]]], [P[I["KNda"]], P[I["KNdr"]]]])
-    lat_inv = np.linalg.inv(lat_m)
-    lat = (lat_inv @ np.stack([(pd_a - l0) / qbar, (rd_a - n0) / qbar])).T
-    out = np.column_stack([
-        de / airframe.throw["elevator"],
-        lat[:, 0] / airframe.throw["aileron"],
-        lat[:, 1] / airframe.throw["rudder"],
+    s12 = np.column_stack([x[:, 0:6], euler_from_quat_array(x[:, 6:10]), x[:, 10:13]])
+    u0 = np.column_stack([
+        np.full(len(x), 0.5),
+        np.zeros((len(x), 3)),
     ])
+    rate0, control_jac = airframe.rate_control_linearization(s12, u0)
+    residual = rates_dot - rate0
+    out = np.empty((len(x), 3))
+    for i, (jac_i, res_i) in enumerate(zip(control_jac, residual)):
+        out[i] = np.linalg.lstsq(jac_i, res_i, rcond=None)[0]
     return out, valid
 
 
@@ -501,6 +498,8 @@ def fit_safe_controller(
         },
         "surface_lag_s": {k: round(float(t), 4) for k, t in zip(("elevator", "aileron", "rudder"), taus)},
         "airframe_corrections": corrections,
+        "airframe_parameter_names": list(airframe.names),
+        "airframe_parameters": np.round(theta_air, 8).tolist(),
         "scores": {
             "composed_pos_err_5s_m": round(float(np.mean(errors)), 3),
             "staged_init_pos_err_5s_m": round(init_err, 3),

@@ -1,6 +1,8 @@
 # Benchmark Site
 
 This directory is a static GitHub Pages application for browsing benchmark results.
+Browser dependencies that are not vendored are pinned in `package.json` and
+`package-lock.json`; do not commit `node_modules/`.
 
 Run locally from the repository root:
 

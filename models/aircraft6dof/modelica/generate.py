@@ -1,11 +1,11 @@
-"""Regenerate cached Rumoca solve-IR artifacts from the Modelica sources.
+"""Regenerate cached Rumoca artifacts from the Modelica sources.
 
-Run this whenever a ``.mo`` model in this directory changes. It invokes the
-Rumoca compiler (``rumoca`` on PATH, or ``$RUMOCA``) and writes, into
-``generated/``: the ``solve``-IR JSON dump (for inspection) and the standalone
-explicit-ODE kernels ``<Model>_casadi_solve.py`` / ``<Model>_jax_solve.py``
-(``xdot = rhs(x, u, p)``) that the runtime imports. The committed kernels are
-self-contained, so the benchmark itself never needs Rumoca installed.
+Run this whenever a ``.mo`` model in this directory changes, or let
+``dynamics.py`` call ``ensure_generated`` on demand. It uses the ``rumoca``
+Python package when available, with ``$RUMOCA`` / ``rumoca`` CLI fallback for
+developer checkouts. The generated files are local cache artifacts and are not
+committed; the committed source of truth is the Modelica source plus the pinned
+Rumoca dependency.
 
 Usage::
 
@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -27,54 +28,108 @@ GENERATED = HERE / "generated"
 MODELS = {
     "Aircraft6DOF": "Aircraft6DOF",
     "SportCubGreybox": "SportCubGreybox",
-    "SportCubGreyboxLag": "SportCubGreyboxLag",
     "SafeController": "SafeController",
     "GroundRoll": "GroundRoll",
 }
 
 
-def _rumoca() -> str:
+def _rumoca_binary() -> str:
     exe = os.environ.get("RUMOCA") or shutil.which("rumoca")
     if not exe:
         raise SystemExit(
-            "rumoca not found. Install it or set $RUMOCA to the binary path."
+            "rumoca not found. Install the Python package (`pip install -e .`) "
+            "or set $RUMOCA to the compiler binary path."
         )
     return exe
 
 
-def generate(model_stem: str, model_class: str, rumoca: str) -> Path:
+def _python_rumoca():
+    try:
+        import rumoca
+    except ImportError:
+        return None
+    return rumoca
+
+
+def _compile_with_python(mo: Path, model_class: str, target: str | None) -> str:
+    rumoca = _python_rumoca()
+    if rumoca is None:
+        raise ImportError("rumoca Python package is not installed")
+    if target is None:
+        return rumoca.compile_file_to_json(str(mo), model_name=model_class)
+    return rumoca.render_target_file(str(mo), target=target, model_name=model_class)
+
+
+def _compile_with_binary(mo: Path, model_class: str, target: str | None, rumoca: str) -> str:
+    if target is None:
+        cmd = [rumoca, "compile", str(mo), "--model", model_class, "--emit", "solve-json"]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise SystemExit(f"rumoca solve-json failed for {mo.stem}:\n{proc.stderr}")
+        return proc.stdout
+    else:
+        with tempfile.TemporaryDirectory(prefix="rumoca-codegen-") as tmp:
+            cmd = [rumoca, "compile", str(mo), "--model", model_class, "--target", target, "--output", tmp]
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            if proc.returncode != 0:
+                raise SystemExit(f"rumoca {target} failed for {mo.stem}:\n{proc.stderr}")
+            filename = f"{mo.stem}_{target.replace('-', '_')}.py"
+            return (Path(tmp) / filename).read_text()
+
+
+def _compile(mo: Path, model_class: str, target: str | None, rumoca: str | None) -> str:
+    if rumoca is None:
+        try:
+            return _compile_with_python(mo, model_class, target)
+        except ImportError:
+            rumoca = _rumoca_binary()
+    return _compile_with_binary(mo, model_class, target, rumoca)
+
+
+def generated_paths(model_stem: str) -> list[Path]:
+    return [
+        GENERATED / f"{model_stem}_casadi_solve.py",
+        GENERATED / f"{model_stem}_jax_solve.py",
+    ]
+
+
+def is_stale(model_stem: str) -> bool:
+    mo = HERE / f"{model_stem}.mo"
+    paths = generated_paths(model_stem)
+    if not mo.exists() or any(not p.exists() for p in paths):
+        return True
+    source_mtime = mo.stat().st_mtime
+    return any(p.stat().st_mtime < source_mtime for p in paths)
+
+
+def generate(model_stem: str, model_class: str, rumoca: str | None = None) -> Path:
     mo = HERE / f"{model_stem}.mo"
     if not mo.exists():
         raise SystemExit(f"missing Modelica source: {mo}")
     GENERATED.mkdir(exist_ok=True)
 
-    # Solve-IR JSON dump (canonical IR; for inspection / debugging only -- nothing
-    # imports it, so it is git-ignored and just regenerated here on demand).
+    # Solve-IR JSON dump (canonical IR; for inspection / debugging only).
     out = GENERATED / f"{model_stem}.solve.json"
-    proc = subprocess.run(
-        [rumoca, "compile", str(mo), "--model", model_class, "--emit", "solve-json"],
-        capture_output=True, text=True,
-    )
-    if proc.returncode != 0:
-        raise SystemExit(f"rumoca failed for {model_stem}:\n{proc.stderr}")
-    out.write_text(proc.stdout)
+    out.write_text(_compile(mo, model_class, None, rumoca))
 
     # Standalone explicit-ODE kernels  xdot = rhs(x, u, p)  for CasADi and JAX,
-    # rendered directly from the solve IR. These are what the runtime imports
-    # (dynamics.py / check_parity.py); no interpreter is needed anymore.
+    # rendered directly from Rumoca. These are local runtime cache files.
     for target in ("casadi-solve", "jax-solve"):
-        proc = subprocess.run(
-            [rumoca, "compile", str(mo), "--model", model_class,
-             "--target", target, "--output", str(GENERATED)],
-            capture_output=True, text=True,
-        )
-        if proc.returncode != 0:
-            raise SystemExit(f"rumoca {target} failed for {model_stem}:\n{proc.stderr}")
+        text = _compile(mo, model_class, target, rumoca)
+        filename = f"{model_stem}_{target.replace('-', '_')}.py"
+        (GENERATED / filename).write_text(text)
     return out
 
 
+def ensure_generated(model_stem: str) -> None:
+    if model_stem not in MODELS:
+        raise SystemExit(f"unknown model '{model_stem}'; choices: {list(MODELS)}")
+    if is_stale(model_stem):
+        generate(model_stem, MODELS[model_stem])
+
+
 def main(argv: list[str]) -> int:
-    rumoca = _rumoca()
+    rumoca = os.environ.get("RUMOCA")
     targets = argv or list(MODELS)
     for stem in targets:
         if stem not in MODELS:

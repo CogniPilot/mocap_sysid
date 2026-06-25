@@ -1,9 +1,9 @@
-"""Lock the Modelica-generated dynamics to the reference implementations.
+"""Lock the Rumoca-backed Modelica dynamics to the benchmark contracts.
 
 The Modelica sources are the single source of truth for the 6DOF physics. This
-check fails if a generated kernel ever drifts from its hand-written reference,
-so ``model.py`` / the legacy CasADi grey-box and the ``.mo`` models cannot
-silently diverge. Run directly or from CI::
+check fails if the generated cache drifts from the synthetic truth oracle, or if
+the SportCub grey-box public wrapper stops matching the Modelica parameter and
+state contract. Run directly or from CI::
 
     python -m models.aircraft6dof.modelica.check_parity
 
@@ -77,42 +77,32 @@ def _random_aero(rng, cfg):
 
 
 def check_greybox(n: int = 500) -> float:
+    """Validate the public SportCub grey-box wrapper against the generated RHS."""
     cfg = gb.SportCubGreyboxConfig()
     dt = 0.02
-    _, rk4_ref = gb._build_casadi_dynamics_legacy(cfg, dt)
-    _, rk4_mod = md.build_casadi_dynamics(cfg, dt)
+    rhs_raw, meta = md._casadi_kernel("SportCubGreybox")
+    rhs_public, rk4_public = md.build_casadi_dynamics(cfg, dt)
+    expected_names = gb.FIXED_PARAMETER_NAMES + gb.SPORTCUB_PARAMETER_NAMES
+    public_names = tuple(name for name in meta.param_names if not name.startswith("__pre__."))
+    if public_names != expected_names:
+        raise AssertionError(f"SportCubGreybox parameter order drifted: {public_names}")
     rng = np.random.default_rng(1)
     worst = 0.0
     for _ in range(n):
         p = _random_aero(rng, cfg)
+        p_raw = np.concatenate((p, np.zeros(rhs_raw.size1_in(2) - p.size)))
         spd = rng.uniform(5, 25)
         x = np.array([*rng.uniform(-20, 20, 3), spd, rng.uniform(-3, 3), rng.uniform(-4, 4),
                       rng.uniform(-.5, .5), rng.uniform(-.5, .5), rng.uniform(-np.pi, np.pi),
                       rng.uniform(-2, 2), rng.uniform(-2, 2), rng.uniform(-2, 2)])
         u = np.array([rng.uniform(-1, 1), rng.uniform(-1, 1), rng.uniform(0, 1), rng.uniform(-1, 1)])
-        ref = np.array(rk4_ref(x, u, p)).flatten()
-        got = np.array(rk4_mod(x, u, p)).flatten()
-        worst = max(worst, float(np.max(np.abs(ref - got))))
-    return worst
-
-
-def check_greybox_lag(n: int = 500) -> float:
-    cfg = gb.SportCubGreyboxConfig()
-    dt = 0.02
-    _, rk4_ref = gb._build_casadi_dynamics_lag_legacy(cfg, dt)
-    _, rk4_mod = md.build_casadi_dynamics_lag(cfg, dt)
-    rng = np.random.default_rng(2)
-    worst = 0.0
-    for _ in range(n):
-        p = _random_aero(rng, cfg)
-        spd = rng.uniform(5, 25)
-        x = np.array([*rng.uniform(-20, 20, 3), spd, rng.uniform(-3, 3), rng.uniform(-4, 4),
-                      rng.uniform(-.5, .5), rng.uniform(-.5, .5), rng.uniform(-np.pi, np.pi),
-                      rng.uniform(-2, 2), rng.uniform(-2, 2), rng.uniform(-2, 2),
-                      rng.uniform(-.4, .4), rng.uniform(-.4, .4), rng.uniform(-.5, .5), rng.uniform(0, 1)])
-        u = np.array([rng.uniform(-1, 1), rng.uniform(-1, 1), rng.uniform(0, 1), rng.uniform(-1, 1), rng.uniform(0, 600)])
-        ref = np.array(rk4_ref(x, u, p)).flatten()
-        got = np.array(rk4_mod(x, u, p)).flatten()
+        ref = np.array(rhs_raw(x, u, p_raw)).flatten()
+        got = np.array(rhs_public(x, u, p)).flatten()
+        step = np.array(rk4_public(x, u, p)).flatten()
+        if ref.shape != (12,) or got.shape != (12,) or step.shape != (12,):
+            raise AssertionError("SportCubGreybox wrapper returned an unexpected state shape")
+        if not (np.all(np.isfinite(ref)) and np.all(np.isfinite(got)) and np.all(np.isfinite(step))):
+            raise AssertionError("SportCubGreybox wrapper produced non-finite values")
         worst = max(worst, float(np.max(np.abs(ref - got))))
     return worst
 
@@ -232,8 +222,7 @@ def main() -> int:
     checks = {
         "truth rhs    (Aircraft6DOF.mo vs model.py)": check_truth_rhs(),
         "truth rk4    (trajectory vs model.py)": check_truth_rk4(),
-        "greybox rk4  (SportCubGreybox.mo vs legacy CasADi)": check_greybox(),
-        "greybox-lag rk4 (SportCubGreyboxLag.mo vs legacy CasADi)": check_greybox_lag(),
+        "greybox rhs  (SportCubGreybox.mo public wrapper)": check_greybox(),
         "base-model wiring (nominal_base vs model.py; greybox_base distinct)": check_base_models(),
         "safe-controller (SafeController.mo vs pd_command + lag)": check_safe_controller(),
         "ground-roll (GroundRoll.mo vs planar equations)": check_ground(),

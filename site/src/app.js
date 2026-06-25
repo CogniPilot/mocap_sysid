@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { buildModelicaFlightCatalog, createModelicaFlightRunner, loadExternalFlightModelEntries, modelicaDiagnostics } from "./rumoca_flight.js";
 
 const DATA_DIR = "./public/data";
 const AIRCRAFT_MODEL_SCALE = 0.6 / 2.2;
@@ -18,9 +19,44 @@ const state = {
   playbackScrubbing: false,
   playbackSegmentIndex: 0,
   playbackView: "animation",
-  playbackFollow: true,
+  playbackCameraMode: "follow",
+  flightSim: {
+    active: false,
+    model: "SafeControllerGreyBox",
+    catalog: [],
+    source: "",
+    sourceModel: "",
+    runner: null,
+    pending: false,
+    editorOpen: false,
+    armed: false,
+    safeEnabled: false,
+    keys: new Set(),
+    throttle: 0,
+    throttleInput: 0,
+    roll: 0,
+    pitch: 0,
+    yaw: 0,
+    trim: {
+      throttle: 0,
+      pitch: 0,
+      roll: 0,
+      yaw: 0,
+    },
+    x: null,
+    step: null,
+    dt: 1 / 240,
+    accumulator: 0,
+    lastStartS: 0,
+    elapsedS: 0,
+    inputLog: [],
+    replaying: false,
+    replayIndex: 0,
+  },
+  externalFlightModels: [],
   selectedMethods: new Set(),
   explorerOverlay: null,
+  modelicaPredictionSignature: "",
   playbackTrackOverride: null,
   trailPastS: 10,
   trailFutureS: 0,
@@ -32,6 +68,10 @@ const state = {
 const ENU_TO_THREE_QUAT = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
 const MESH_TO_BODY_FRD_QUAT = ENU_TO_THREE_QUAT.clone();
 const fmt = new Intl.NumberFormat("en-US", { maximumSignificantDigits: 3 });
+const ENABLED_METHOD_KEYS = new Set(["6DOF-GreyBoxOEM"]);
+const CAMERA_MODES = ["first", "chase", "follow", "observer"];
+const MODELICA_METHOD_PREFIX = "Modelica:";
+const MODELICA_METHOD_COLORS = { "Modelica:RumocaFixedWing": 0x7dd3fc };
 
 function finiteNumber(value) {
   return typeof value === "number" && Number.isFinite(value);
@@ -47,6 +87,14 @@ function clamp(value, min, max) {
 
 function cleanMethodName(method) {
   return String(method || "").replace(" (mocap)", "").replace(" (direct)", "");
+}
+
+function methodEnabled(method) {
+  return ENABLED_METHOD_KEYS.has(methodKey(method));
+}
+
+function isModelicaPredictionMethod(method) {
+  return String(method || "").startsWith(MODELICA_METHOD_PREFIX);
 }
 
 async function loadJson(name) {
@@ -78,6 +126,7 @@ function datasetsForModel() {
 function selectedRows() {
   return allRows()
     .filter((row) => row.scenario === state.scenario)
+    .filter((row) => methodEnabled(row.method))
     .filter((row) => finiteNumber(row.validation_score))
     .sort((a, b) => a.validation_score - b.validation_score);
 }
@@ -119,6 +168,7 @@ function traceSegmentForMethod(key) {
 }
 
 function methodHasTrace(key) {
+  if (isModelicaPredictionMethod(key)) return Boolean(state.playbackTrackOverride);
   if (state.playbackTrackOverride && state.explorerOverlay) {
     return traceSegmentsForFlight(key).length > 0;
   }
@@ -214,6 +264,7 @@ function renderScenarioSelect() {
 }
 
 function bindControls() {
+  bindFlightKeyboard();
   // The explorer registers full flights as a first-class playback track so
   // the 3D viewer animates the entire record, not just benchmark windows.
   window.addEventListener("explorer-flights-ready", (event) => {
@@ -228,7 +279,8 @@ function bindControls() {
     state.explorerOverlay = event.detail.overlay || null;
     if (event.detail.methods) state.browserMethods = event.detail.methods;
     if (event.detail.methodColors) state.browserMethodColors = event.detail.methodColors;
-    renderPlaybackMethodPicker();
+    if (event.detail.models) state.browserModels = event.detail.models;
+    renderFlightSimControls();
     document.querySelector("#playback-predict")?.classList.toggle("active", Boolean(event.detail.overlay?.anchored));
     if (event.detail.track) {
       state.playback = state.playback.filter((track) => track.id !== event.detail.track.id);
@@ -252,6 +304,7 @@ function bindControls() {
     state.playbackLastMs = null;
     // Acknowledge so the explorer stops re-announcing.
     window.dispatchEvent(new CustomEvent("playback-ack"));
+    addModelicaPredictions(event.detail);
   });
 
   document.querySelector("#scenario-select").addEventListener("change", (event) => {
@@ -277,15 +330,78 @@ function bindControls() {
     state.playbackPlaying = !state.playbackPlaying;
     renderPlaybackControls(selectedPlayback());
   });
-  document.querySelector("#playback-rewind").addEventListener("click", () => {
-    seekPlayback(state.playbackTimeS - 2.0);
-  });
-  document.querySelector("#playback-forward").addEventListener("click", () => {
-    seekPlayback(state.playbackTimeS + 2.0);
-  });
-  document.querySelector("#playback-follow").addEventListener("click", () => {
-    state.playbackFollow = !state.playbackFollow;
+  document.querySelector("#playback-camera").addEventListener("change", (event) => {
+    setPlaybackCameraMode(event.target.value || "follow");
+    event.target.blur();
     renderPlaybackControls(selectedPlayback());
+  });
+  document.querySelector(".control-hud").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-trim]");
+    if (!button) return;
+    const key = button.dataset.trim;
+    const delta = Number.parseFloat(button.dataset.delta || "0");
+    const trim = state.flightSim.trim;
+    if (!(key in trim) || !Number.isFinite(delta)) return;
+    trim[key] = key === "throttle"
+      ? clamp(trim[key] + delta, 0, 1)
+      : clamp(trim[key] + delta, -1, 1);
+    button.blur();
+    setFlightStatus(`${key[0].toUpperCase()}${key.slice(1)} trim ${trim[key].toFixed(2)}.`);
+    renderPlaybackControls(selectedPlayback());
+  });
+  document.querySelector("#playback-model-menu").addEventListener("change", (event) => {
+    const input = event.target;
+    const model = input?.dataset?.model;
+    const role = input?.dataset?.role;
+    if (!model || !role) return;
+    if (role === "fly") {
+      state.flightSim.model = model;
+      syncFlightEditorSource(true);
+      if (input.checked) {
+        setPlaybackCameraMode("chase");
+        startFlightSim();
+      } else {
+        stopFlightSim();
+      }
+    } else if (role === "predict") {
+      const method = predictionMethodForModel(model);
+      if (method) {
+        if (input.checked) state.selectedMethods.add(method);
+        else state.selectedMethods.delete(method);
+        if (!Array.from(state.selectedMethods).some((m) => methodEnabled(m))) state.selectedMethods.add(method);
+        window.dispatchEvent(new CustomEvent("methods-changed", { detail: { methods: Array.from(state.selectedMethods) } }));
+      }
+    }
+    renderFlightSimControls();
+    renderPlaybackControls(selectedPlayback());
+  });
+  document.querySelector("#playback-model-menu").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-role='edit']");
+    if (!button) return;
+    state.flightSim.model = button.dataset.model;
+    state.flightSim.editorOpen = true;
+    syncFlightEditorSource(true);
+    renderFlightSimControls();
+  });
+  document.querySelector("#modelica-compile").addEventListener("click", () => {
+    startFlightSim({ keepInputLog: true });
+  });
+  document.querySelector("#modelica-reset").addEventListener("click", () => {
+    resetFlightSim();
+  });
+  document.querySelector("#modelica-replay").addEventListener("click", () => {
+    startReplayInputs();
+  });
+  document.querySelector("#modelica-clear-replay").addEventListener("click", () => {
+    state.flightSim.inputLog = [];
+    state.flightSim.replaying = false;
+    state.flightSim.replayIndex = 0;
+    setFlightStatus("Input log cleared.");
+    renderFlightSimControls();
+  });
+  document.querySelector("#modelica-close").addEventListener("click", () => {
+    state.flightSim.editorOpen = false;
+    renderFlightSimControls();
   });
   document.querySelector("#playback-scrub").addEventListener("mousemove", (event) => {
     const segment = activeSegment(selectedPlayback());
@@ -346,17 +462,8 @@ function bindControls() {
     window.dispatchEvent(new CustomEvent("explorer-anchor-request", { detail: { timeS: state.playbackTimeS } }));
   });
   document.addEventListener("pointerdown", (event) => {
-    const dd = document.querySelector("#playback-method-dd");
+    const dd = document.querySelector("#playback-model-dd");
     if (dd?.open && !dd.contains(event.target)) dd.open = false;
-  });
-  document.querySelector("#playback-method-menu").addEventListener("change", (event) => {
-    const method = event.target?.dataset?.method;
-    if (!method) return;
-    const key = methodKey(method);
-    if (event.target.checked) state.selectedMethods.add(key);
-    else state.selectedMethods.delete(key);
-    window.dispatchEvent(new CustomEvent("methods-changed", { detail: { methods: Array.from(state.selectedMethods) } }));
-    render();
   });
   document.querySelector("#playback-fullscreen").addEventListener("click", () => {
     // Fullscreen the whole animation view so the playback controls (time
@@ -367,7 +474,11 @@ function bindControls() {
   });
   document.addEventListener("fullscreenchange", () => {
     const button = document.querySelector("#playback-fullscreen");
-    if (button) button.textContent = document.fullscreenElement ? "Exit fullscreen" : "Fullscreen";
+    if (button) {
+      button.innerHTML = document.fullscreenElement ? "&#10005;" : "&#9974;";
+      button.setAttribute("aria-label", document.fullscreenElement ? "Exit fullscreen" : "Fullscreen");
+      button.title = document.fullscreenElement ? "Exit fullscreen" : "Fullscreen";
+    }
     resizePlayback();
   });
 
@@ -389,11 +500,88 @@ function bindControls() {
     const track = selectedPlayback();
     const duration = playbackDuration(track);
     state.playbackScrubbing = true;
+    if (state.flightSim.active) stopFlightSim();
     seekPlayback(Number.parseFloat(event.target.value) * duration);
   });
   document.querySelector("#playback-scrub").addEventListener("change", () => {
     state.playbackScrubbing = false;
   });
+}
+
+function isTypingTarget(target) {
+  const tag = target?.tagName?.toLowerCase();
+  if (tag === "textarea" || tag === "select" || target?.isContentEditable) return true;
+  if (tag !== "input") return false;
+  return ["text", "search", "url", "tel", "email", "password", "number"].includes((target.type || "text").toLowerCase());
+}
+
+function setPlaybackCameraMode(mode) {
+  state.playbackCameraMode = CAMERA_MODES.includes(mode) ? mode : "follow";
+  if (state.playbackCameraMode !== "first" && state.playbackScene) {
+    state.playbackScene.camera.up.set(0, 1, 0);
+    updatePlaybackCamera(state.playbackScene);
+  }
+}
+
+function cyclePlaybackCameraMode() {
+  const index = CAMERA_MODES.indexOf(state.playbackCameraMode);
+  setPlaybackCameraMode(CAMERA_MODES[(Math.max(index, 0) + 1) % CAMERA_MODES.length]);
+  setFlightStatus(`Camera: ${document.querySelector(`#playback-camera option[value="${state.playbackCameraMode}"]`)?.textContent || state.playbackCameraMode}`);
+  renderPlaybackControls(selectedPlayback());
+}
+
+function bindFlightKeyboard() {
+  document.addEventListener("keydown", (event) => {
+    if (!state.flightSim.active || isTypingTarget(event.target)) return;
+    const key = event.code === "Space" ? " " : (event.key.length === 1 ? event.key.toLowerCase() : event.key);
+    if (!["w", "s", "a", "d", "r", "c", " ", "Space", "Spacebar", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key)) return;
+    event.preventDefault();
+    if (key === "r") {
+      resetFlightSim();
+      return;
+    }
+    if (key === "c") {
+      if (!event.repeat) cyclePlaybackCameraMode();
+      return;
+    }
+    if (key === " " || key === "Space") {
+      if (!event.repeat) toggleFlightSafeMode();
+      return;
+    }
+    state.flightSim.keys.add(key);
+  });
+  document.addEventListener("keyup", (event) => {
+    const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+    state.flightSim.keys.delete(key);
+  });
+}
+
+function toggleFlightSafeMode() {
+  const sim = state.flightSim;
+  if (sim.runner && !sim.runner.supportsSafeToggle) {
+    sim.safeEnabled = false;
+    setFlightStatus(`${sim.runner.modelName} has no enable_safe input.`, true);
+    renderFlightSimControls();
+    return;
+  }
+  sim.safeEnabled = !sim.safeEnabled;
+  setFlightStatus(`SAFE ${sim.safeEnabled ? "enabled" : "disabled"}.`);
+  renderFlightSimControls();
+}
+
+function predictionMethodForModel(model) {
+  if (model === "GreyBoxOEM" || model === "SafeControllerGreyBox") return "6DOF-GreyBoxOEM";
+  if (model === "RumocaFixedWing") return "Modelica:RumocaFixedWing";
+  return null;
+}
+
+function modelForModelicaPrediction(method) {
+  return String(method || "").slice(MODELICA_METHOD_PREFIX.length);
+}
+
+function modelLabelForMethod(method) {
+  if (methodKey(method) === "6DOF-GreyBoxOEM") return "GreyBoxOEM";
+  return String(method || "").replace("6DOF-", "");
 }
 
 function renderMeta() {
@@ -419,7 +607,10 @@ function renderPlaybackTabs() {
 function renderSummary(rows) {
   const best = rows[0];
   const datasets = datasetsForModel();
-  const methods = new Set(allRows().filter((row) => row.model_family === state.modelFamily).map((row) => cleanMethodName(row.method)));
+  const methods = new Set(allRows()
+    .filter((row) => row.model_family === state.modelFamily)
+    .filter((row) => methodEnabled(row.method))
+    .map((row) => cleanMethodName(row.method)));
   document.querySelector("#best-method").textContent = best ? cleanMethodName(best.method) : "--";
   document.querySelector("#best-score").textContent = best ? formatNumber(best.validation_score) : "--";
   document.querySelector("#method-count").textContent = String(methods.size);
@@ -789,46 +980,482 @@ function notifyExplorerContext() {
   }));
 }
 
-function renderPlaybackMethodPicker() {
-  // Quick picker of browser-runnable prediction methods in the playback
-  // controls, so a method can be chosen in fullscreen without the
-  // leaderboard. It mirrors the leaderboard selection both ways.
-  const wrap = document.querySelector("#playback-method-wrap");
-  const menu = document.querySelector("#playback-method-menu");
-  const summary = document.querySelector("#playback-method-summary");
-  if (!wrap || !menu || !summary) return;
-  const methods = state.browserMethods || [];
-  const showing = Boolean(state.playbackTrackOverride) && methods.length > 0;
-  wrap.hidden = !showing;
-  if (!showing) return;
-  const checked = methods.filter((m) => state.selectedMethods.has(methodKey(m)));
-  const signature = `${methods.join("|")}#${checked.join("|")}`;
-  if (menu.dataset.signature === signature) return;
-  menu.dataset.signature = signature;
-  menu.innerHTML = "";
-  for (const method of methods) {
-    const row = document.createElement("label");
-    row.className = "method-menu-row";
-    const box = document.createElement("input");
-    box.type = "checkbox";
-    box.dataset.method = method;
-    box.checked = state.selectedMethods.has(methodKey(method));
-    const swatch = document.createElement("i");
-    swatch.className = "method-swatch";
-    const color = (state.browserMethodColors || {})[method];
-    if (color) swatch.style.background = color;
-    const name = document.createElement("span");
-    name.textContent = method.replace("6DOF-", "");
-    if (color) name.style.color = color;
-    row.append(box, swatch, name);
-    menu.append(row);
+function flightSimChoices() {
+  state.flightSim.catalog = buildModelicaFlightCatalog(state.browserModels, state.externalFlightModels);
+  return state.flightSim.catalog.map((entry) => entry.label);
+}
+
+function selectedFlightModelicaEntry() {
+  return state.flightSim.catalog.find((entry) => entry.label === state.flightSim.model) || state.flightSim.catalog[0] || null;
+}
+
+function setFlightStatus(message, isError = false) {
+  const text = message || "";
+  for (const node of [
+    document.querySelector("#modelica-flight-status"),
+    document.querySelector("#playback-flight-status"),
+  ]) {
+    if (!node) continue;
+    node.textContent = text;
+    node.title = text;
+    node.classList.toggle("error", Boolean(isError));
+    node.hidden = !text;
   }
-  // With nothing checked the explorer falls back to LinearSS.
-  summary.textContent = checked.length === 1
-    ? checked[0].replace("6DOF-", "")
-    : checked.length
-      ? `${checked.length} methods`
-      : "LinearSS (default)";
+}
+
+function formatRumocaDiagnostic(diagnostic) {
+  const parts = [];
+  const range = diagnostic.range || diagnostic.span || diagnostic.location;
+  const start = range?.start || range;
+  if (Number.isFinite(start?.line)) parts.push(`line ${start.line + 1}`);
+  const message = diagnostic.message || diagnostic.text || diagnostic.detail || String(diagnostic);
+  if (message) parts.push(message);
+  return parts.join(": ");
+}
+
+function compileErrorMessage(error, diagnostics = []) {
+  const errors = diagnostics.filter((d) => String(d.severity || "").toLowerCase() === "error" || d.severity === 1);
+  const diagnosticText = errors.map(formatRumocaDiagnostic).filter(Boolean).slice(0, 3).join(" | ");
+  const thrown = error?.message || String(error || "");
+  return [diagnosticText, thrown].filter(Boolean).join(" | ") || "Model compile failed.";
+}
+
+function syncFlightEditorSource(force = false) {
+  const editor = document.querySelector("#modelica-flight-source");
+  const entry = selectedFlightModelicaEntry();
+  if (!editor || !entry) return;
+  const sourceKey = `${entry.label}:${entry.modelName}:${entry.source.length}:${entry.source.includes("enable_safe")}`;
+  if (force || state.flightSim.sourceModel !== sourceKey) {
+    state.flightSim.source = entry.source;
+    state.flightSim.sourceModel = sourceKey;
+    editor.value = entry.source;
+  } else if (!state.flightSim.source) {
+    state.flightSim.source = editor.value || entry.source;
+    editor.value = state.flightSim.source;
+  }
+}
+
+function renderFlightSimControls() {
+  const wrap = document.querySelector("#playback-model-wrap");
+  const menu = document.querySelector("#playback-model-menu");
+  const summary = document.querySelector("#playback-model-summary");
+  const panel = document.querySelector("#modelica-flight-panel");
+  const replay = document.querySelector("#modelica-replay");
+  if (!wrap || !menu || !summary || !panel) return;
+  const choices = flightSimChoices();
+  const showing = Boolean(state.playbackTrackOverride && choices.length);
+  wrap.hidden = !showing;
+  if (!showing) {
+    stopFlightSim();
+    panel.hidden = true;
+    return;
+  }
+  if (!choices.includes(state.flightSim.model)) state.flightSim.model = choices[0];
+  const predictMethods = choices.map(predictionMethodForModel).filter(Boolean);
+  if (!Array.from(state.selectedMethods).some((method) => predictMethods.includes(method))) {
+    const firstMethod = predictionMethodForModel(state.flightSim.model) || predictMethods[0];
+    if (firstMethod) state.selectedMethods.add(firstMethod);
+  }
+  const selectedPredict = predictMethods.filter((method) => state.selectedMethods.has(method));
+  const activeFlyModel = (state.flightSim.active || state.flightSim.pending) ? state.flightSim.model : "";
+  const signature = [
+    choices.join("|"),
+    state.flightSim.model,
+    activeFlyModel,
+    state.flightSim.pending ? "pending" : "idle",
+    state.flightSim.editorOpen ? "edit" : "closed",
+    selectedPredict.join("|"),
+  ].join("#");
+  if (menu.dataset.signature !== signature) {
+    menu.dataset.signature = signature;
+    menu.innerHTML = `
+      <div class="model-menu-head" aria-hidden="true">
+        <span>Model</span><span>Fly</span><span>Edit</span><span>Predict</span>
+      </div>
+    `;
+    for (const choice of choices) {
+      const method = predictionMethodForModel(choice);
+      const canPredict = Boolean(method);
+      const row = document.createElement("div");
+      row.className = "model-menu-row";
+      row.classList.toggle("no-predict", !canPredict);
+      row.title = canPredict
+        ? "Use this model for Predict here overlays."
+        : "Prediction is unavailable because this model has no browser-exported rollout stepper yet.";
+      const name = document.createElement("span");
+      name.textContent = choice;
+      const fly = document.createElement("input");
+      fly.type = "checkbox";
+      fly.dataset.role = "fly";
+      fly.dataset.model = choice;
+      fly.checked = activeFlyModel === choice;
+      fly.disabled = state.flightSim.pending && state.flightSim.model === choice;
+      fly.title = "Keyboard flight: W/S throttle, arrows pitch/roll, A/D rudder, Space SAFE, R reset";
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.dataset.role = "edit";
+      edit.dataset.model = choice;
+      edit.textContent = "Edit";
+      edit.classList.toggle("active", state.flightSim.editorOpen && state.flightSim.model === choice);
+      const predict = document.createElement("input");
+      predict.type = "checkbox";
+      predict.dataset.role = "predict";
+      predict.dataset.model = choice;
+      predict.checked = Boolean(method && state.selectedMethods.has(method));
+      predict.disabled = !canPredict;
+      predict.title = canPredict
+        ? "Use this model for Predict here overlays."
+        : "Fly/edit only: no browser prediction export is available for this Modelica baseline.";
+      row.append(name, fly, edit, predict);
+      menu.append(row);
+    }
+  }
+  const predictSuffix = selectedPredict.length > 1 ? ` | ${selectedPredict.length} predict` : "";
+  const flySuffix = state.flightSim.pending
+    ? " | compiling"
+    : state.flightSim.active
+      ? " | flying"
+      : "";
+  summary.textContent = `${state.flightSim.model}${flySuffix}${predictSuffix}`;
+  syncFlightEditorSource();
+  panel.hidden = !state.flightSim.editorOpen;
+  if (replay) {
+    replay.disabled = !state.flightSim.inputLog.length || state.flightSim.pending;
+    replay.classList.toggle("active", state.flightSim.replaying);
+  }
+}
+
+async function startFlightSim({ keepInputLog = false, preserveControls = false } = {}) {
+  const entry = selectedFlightModelicaEntry();
+  if (!entry || state.flightSim.pending) return;
+  const previous = {
+    throttle: state.flightSim.throttle,
+    throttleInput: state.flightSim.throttleInput,
+    roll: state.flightSim.roll,
+    pitch: state.flightSim.pitch,
+    yaw: state.flightSim.yaw,
+    safeEnabled: state.flightSim.safeEnabled,
+  };
+  const editor = document.querySelector("#modelica-flight-source");
+  const source = state.flightSim.editorOpen
+    ? (editor?.value || state.flightSim.source || entry.source)
+    : entry.source;
+  state.flightSim.pending = true;
+  state.flightSim.active = false;
+  setFlightStatus(`Compiling ${entry.modelName}...`);
+  renderFlightSimControls();
+  let diagnostics = [];
+  try {
+    diagnostics = await modelicaDiagnostics(source);
+    const errors = diagnostics.filter((d) => String(d.severity || "").toLowerCase() === "error" || d.severity === 1);
+    if (errors.length) {
+      setFlightStatus(`Rumoca diagnostics: ${errors.map(formatRumocaDiagnostic).filter(Boolean).slice(0, 2).join(" | ")}`, true);
+    }
+    const runner = await createModelicaFlightRunner(entry, source);
+    state.flightSim.runner = runner;
+    state.flightSim.active = true;
+    state.flightSim.x = runner.reset();
+    state.flightSim.source = source;
+    state.flightSim.sourceModel = `${entry.label}:${entry.modelName}:${entry.source.length}:${entry.source.includes("enable_safe")}`;
+    state.flightSim.dt = 1 / 240;
+    state.flightSim.elapsedS = 0;
+    state.flightSim.replaying = false;
+    state.flightSim.replayIndex = 0;
+    state.flightSim.safeEnabled = false;
+    clearFlightTrail(state.playbackScene);
+    ensureFlightAircraft(state.playbackScene);
+    if (preserveControls) {
+      state.flightSim.throttle = previous.throttle;
+      state.flightSim.throttleInput = previous.throttleInput;
+      state.flightSim.roll = previous.roll;
+      state.flightSim.pitch = previous.pitch;
+      state.flightSim.yaw = previous.yaw;
+      state.flightSim.safeEnabled = previous.safeEnabled;
+    }
+    if (!keepInputLog) state.flightSim.inputLog = [];
+    const safeText = runner.supportsSafeToggle ? "Space toggles SAFE" : "SAFE toggle unavailable";
+    setFlightStatus(`${entry.modelName} ready. ${safeText}, W/S throttle, arrows pitch/roll, A/D rudder, R reset.`, !runner.supportsSafeToggle);
+  } catch (error) {
+    console.error(error);
+    state.flightSim.active = false;
+    state.flightSim.runner = null;
+    state.flightSim.x = null;
+    setFlightStatus(compileErrorMessage(error, diagnostics), true);
+  } finally {
+    state.flightSim.pending = false;
+    state.flightSim.step = null;
+    state.flightSim.accumulator = 0;
+    state.playbackPlaying = false;
+    state.playbackLastMs = null;
+    renderFlightSimControls();
+  }
+}
+
+function resetFlightSim() {
+  const sim = state.flightSim;
+  if (!sim.runner) {
+    startFlightSim({ keepInputLog: true });
+    return;
+  }
+  sim.x = sim.runner.reset();
+  state.flightSim.accumulator = 0;
+  state.flightSim.armed = false;
+  state.flightSim.safeEnabled = false;
+  state.flightSim.throttle = 0;
+  state.flightSim.throttleInput = 0;
+  state.flightSim.roll = 0;
+  state.flightSim.pitch = 0;
+  state.flightSim.yaw = 0;
+  state.flightSim.trim.throttle = 0;
+  state.flightSim.trim.pitch = 0;
+  state.flightSim.trim.roll = 0;
+  state.flightSim.trim.yaw = 0;
+  state.flightSim.elapsedS = 0;
+  state.flightSim.replayIndex = 0;
+  state.flightSim.active = true;
+  state.playbackPlaying = false;
+  state.playbackLastMs = null;
+  clearFlightTrail(state.playbackScene);
+  setFlightStatus(`${sim.runner.modelName} reset.`);
+}
+
+function stopFlightSim() {
+  state.flightSim.active = false;
+  state.flightSim.x = null;
+  state.flightSim.accumulator = 0;
+  state.flightSim.replaying = false;
+  hideFlightSimVisuals();
+}
+
+function updateFlightInputs(deltaS) {
+  const sim = state.flightSim;
+  if (sim.replaying && sim.inputLog.length) {
+    while (sim.replayIndex < sim.inputLog.length - 1 && sim.inputLog[sim.replayIndex + 1].t <= sim.elapsedS) {
+      sim.replayIndex += 1;
+    }
+    const sample = sim.inputLog[sim.replayIndex];
+    if (sample) {
+      if (sim.replayIndex >= sim.inputLog.length - 1 && sim.elapsedS > sample.t + 0.5) sim.replaying = false;
+      return sample.stick.slice();
+    }
+  }
+  const decay = Math.pow(0.85, deltaS / 0.016);
+  const held = (key) => sim.keys.has(key);
+  sim.roll = held("ArrowLeft") ? -0.6 : held("ArrowRight") ? 0.6 : sim.roll * decay;
+  sim.pitch = held("ArrowUp") ? 0.5 : held("ArrowDown") ? -0.5 : sim.pitch * decay;
+  sim.yaw = held("a") ? -0.6 : held("d") ? 0.6 : sim.yaw * decay;
+  sim.throttleInput = held("w") ? 1 : held("s") ? -1 : sim.throttleInput * decay;
+  sim.throttle = clamp(sim.throttle + sim.throttleInput * 0.7 * deltaS, 0, 1);
+  const stick = [
+    clamp(sim.throttle + sim.trim.throttle, 0, 1),
+    clamp(sim.pitch + sim.trim.pitch, -1, 1),
+    clamp(sim.roll + sim.trim.roll, -1, 1),
+    clamp(sim.yaw + sim.trim.yaw, -1, 1),
+  ];
+  sim.inputLog.push({ t: sim.elapsedS, stick: stick.slice() });
+  return stick;
+}
+
+function startReplayInputs() {
+  if (!state.flightSim.inputLog.length) return;
+  state.flightSim.replaying = true;
+  state.flightSim.replayIndex = 0;
+  resetFlightSim();
+  state.flightSim.replaying = true;
+  setFlightStatus(`Replaying ${state.flightSim.inputLog.length} recorded input samples.`);
+  renderFlightSimControls();
+}
+
+function interpolatePredictionState(predictionFlight, timeS) {
+  const times = predictionFlight?.time || [];
+  const states = predictionFlight?.state || [];
+  if (!times.length || !states.length) return null;
+  let hi = times.findIndex((time) => time >= timeS);
+  if (hi < 0) hi = times.length - 1;
+  const lo = Math.max(0, hi - 1);
+  const span = times[hi] - times[lo];
+  const w = span > 1e-9 ? clamp((timeS - times[lo]) / span, 0, 1) : 0;
+  const a = states[lo];
+  const b = states[hi] || a;
+  const x = a.map((value, index) => value + (b[index] - value) * w);
+  if (a[6] * b[6] + a[7] * b[7] + a[8] * b[8] + a[9] * b[9] < 0) {
+    for (let index = 6; index < 10; index += 1) x[index] = a[index] + (-b[index] - a[index]) * w;
+  }
+  const q = normQuatWxyz([x[6], x[7], x[8], x[9]]);
+  x[6] = q[0]; x[7] = q[1]; x[8] = q[2]; x[9] = q[3];
+  return x;
+}
+
+async function buildModelicaPrediction(method, detail) {
+  const model = modelForModelicaPrediction(method);
+  const predictionFlight = detail.predictionFlight;
+  const dt = predictionFlight?.dtFull || 1 / 240;
+  const sticks = predictionFlight?.stick || [];
+  const startS = finiteNumber(detail.timeS) ? detail.timeS : 0;
+  const x0 = interpolatePredictionState(predictionFlight, startS);
+  if (!x0 || !sticks.length) throw new Error("No flight state is available for Modelica prediction.");
+  const entry = state.flightSim.catalog.find((item) => item.label === model)
+    || buildModelicaFlightCatalog(state.browserModels, state.externalFlightModels).find((item) => item.label === model);
+  if (!entry) throw new Error(`${model} is not available for Modelica prediction.`);
+  const runner = await createModelicaFlightRunner(entry, entry.source, { initialState: x0 });
+  let x = runner.reset();
+  const startIndex = clamp(Math.round(startS / dt), 0, sticks.length - 1);
+  const stride = Math.max(1, Math.round(0.1 / dt));
+  const times = [];
+  const points = [];
+  const quats = [];
+  for (let index = startIndex; index < sticks.length - 1; index += 1) {
+    if ((index - startIndex) % stride === 0) {
+      times.push(index * dt);
+      points.push(nedStateToEnuPosition(x));
+      quats.push(nedStateToEnuQuat(x));
+    }
+    x = runner.step(sticks[index], dt, { safeEnabled: false });
+    if (!x.every(Number.isFinite)) break;
+  }
+  return {
+    method,
+    color: MODELICA_METHOD_COLORS[method] ?? 0x7dd3fc,
+    points,
+    times,
+    quats,
+  };
+}
+
+async function addModelicaPredictions(detail) {
+  const overlay = detail.overlay;
+  const methods = Array.from(state.selectedMethods).filter(isModelicaPredictionMethod);
+  if (!overlay?.anchored || !methods.length) return;
+  const signature = `${overlay.stamp}#${methods.join("|")}`;
+  state.modelicaPredictionSignature = signature;
+  setFlightStatus(`Compiling ${methods.map(modelForModelicaPrediction).join(", ")} prediction...`);
+  try {
+    const predictions = await Promise.all(methods.map((method) => buildModelicaPrediction(method, detail)));
+    if (state.modelicaPredictionSignature !== signature || state.explorerOverlay?.stamp !== overlay.stamp) return;
+    state.explorerOverlay = {
+      ...overlay,
+      stamp: `${overlay.stamp}#modelica:${methods.join("|")}`,
+      predictions: [
+        ...(overlay.predictions || []).filter((prediction) => !methods.includes(prediction.method)),
+        ...predictions,
+      ],
+    };
+    setFlightStatus(`${methods.map(modelForModelicaPrediction).join(", ")} prediction ready.`);
+    setPlaybackTrack(selectedPlayback());
+    renderPlaybackControls(selectedPlayback());
+  } catch (error) {
+    console.error(error);
+    if (state.modelicaPredictionSignature === signature) {
+      setFlightStatus(error?.message || "Modelica prediction failed.", true);
+    }
+  }
+}
+
+function quatMulWxyz(a, b) {
+  return [
+    a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
+    a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+    a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
+    a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
+  ];
+}
+
+function normQuatWxyz(q) {
+  const n = Math.hypot(q[0], q[1], q[2], q[3]) || 1;
+  return [q[0] / n, q[1] / n, q[2] / n, q[3] / n];
+}
+
+function nedStateToEnuPosition(x) {
+  return [x[1], x[0], -x[2]];
+}
+
+function nedStateToEnuQuat(x) {
+  return normQuatWxyz(quatMulWxyz([0, Math.SQRT1_2, Math.SQRT1_2, 0], [x[6], x[7], x[8], x[9]]));
+}
+
+function flightSimPose(x) {
+  const origin = state.explorerOverlay?.origin || activeSegment(selectedPlayback())?.position_enu_m?.[0] || [0, 0, 0];
+  const absolute = nedStateToEnuPosition(x);
+  const posEnu = [absolute[0] - origin[0], absolute[1] - origin[1], absolute[2] - origin[2]];
+  const qEnu = nedStateToEnuQuat(x);
+  return {
+    position: enuToThree(posEnu),
+    quaternion: attitudeToThree(qEnu),
+  };
+}
+
+function ensureFlightAircraft(playback) {
+  if (!playback) return null;
+  if (!playback.flightAircraft) {
+    playback.flightAircraft = makeTransparentAircraftMesh(0x7dd3fc);
+    playback.flightAircraft.visible = false;
+    playback.scene.add(playback.flightAircraft);
+  }
+  return playback.flightAircraft;
+}
+
+function clearFlightTrail(playback) {
+  if (!playback) return;
+  playback.flightTrailPoints = [];
+  if (playback.flightTrail) {
+    playback.scene.remove(playback.flightTrail);
+    disposeLine(playback.flightTrail);
+    playback.flightTrail = null;
+  }
+}
+
+function hideFlightSimVisuals(playback = state.playbackScene) {
+  if (!playback) return;
+  if (playback.flightAircraft) playback.flightAircraft.visible = false;
+  clearFlightTrail(playback);
+}
+
+function appendFlightTrail(playback, position) {
+  if (!playback || !position) return;
+  playback.flightTrailPoints.push(position.clone());
+  if (playback.flightTrailPoints.length > 3000) playback.flightTrailPoints.shift();
+  if (playback.flightTrailPoints.length < 2) return;
+  if (!playback.flightTrail) {
+    playback.flightTrail = new THREE.Line(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ color: 0x7dd3fc, linewidth: 2, transparent: true, opacity: 0.86 }),
+    );
+    playback.scene.add(playback.flightTrail);
+  } else {
+    playback.flightTrail.geometry.dispose();
+  }
+  playback.flightTrail.geometry = new THREE.BufferGeometry().setFromPoints(playback.flightTrailPoints);
+}
+
+function updateFlightSim(playback, deltaS) {
+  const sim = state.flightSim;
+  if (!sim.active || !sim.x || !sim.runner) return false;
+  const aircraft = ensureFlightAircraft(playback);
+  if (!aircraft) return false;
+  const stick = updateFlightInputs(deltaS);
+  sim.accumulator = Math.min(sim.accumulator + deltaS, sim.dt * 30);
+  let substeps = 0;
+  while (sim.accumulator >= sim.dt && substeps < 30) {
+    const next = sim.runner.step(stick, sim.dt, { safeEnabled: sim.safeEnabled });
+    if (!next?.every(Number.isFinite)) {
+      stopFlightSim();
+      setFlightStatus("Model produced a non-finite state; stopped.", true);
+      return false;
+    }
+    sim.x = next;
+    sim.accumulator -= sim.dt;
+    substeps += 1;
+  }
+  sim.elapsedS += deltaS;
+  const pose = flightSimPose(sim.x);
+  aircraft.visible = true;
+  aircraft.position.copy(pose.position);
+  aircraft.quaternion.copy(pose.quaternion);
+  updateAircraftControls(aircraft, [stick[0], stick[2], stick[1], stick[3]], deltaS);
+  appendFlightTrail(playback, aircraft.position);
+  updateControlHud([stick[0], stick[2], stick[1], stick[3]], sim.safeEnabled ? 1 : 0);
+  updateAircraftCamera(playback, aircraft);
+  return true;
 }
 
 function renderDatasets() {
@@ -1312,6 +1939,7 @@ function updateAircraftControls(aircraft, controls, deltaS) {
 }
 
 function updateControlHud(controls, mode = null) {
+  document.querySelector(".control-hud")?.classList.toggle("flight-active", state.flightSim.active);
   const modeLabel = document.querySelector("#control-mode-value");
   if (modeLabel) {
     if (mode === 1) {
@@ -1334,6 +1962,7 @@ function updateControlHud(controls, mode = null) {
   ];
   ids.forEach((id, index) => {
     const fill = document.querySelector(`#control-${id}`);
+    const marker = document.querySelector(`#control-${id}-trim`);
     const label = document.querySelector(`#control-${id}-value`);
     if (fill) {
       const value = values[index];
@@ -1347,6 +1976,12 @@ function updateControlHud(controls, mode = null) {
         fill.style.width = `${magnitude}%`;
         fill.classList.toggle("negative", value < 0);
       }
+    }
+    if (marker) {
+      const trim = state.flightSim.trim;
+      const trimValue = id === "thrust" ? trim.throttle : id === "aileron" ? trim.roll : id === "elevator" ? trim.pitch : trim.yaw;
+      marker.style.left = id === "thrust" ? `${100 * trimValue}%` : `${50 + 50 * trimValue}%`;
+      marker.title = `${id} trim ${trimValue.toFixed(2)}`;
     }
     if (label) label.textContent = values[index].toFixed(2);
   });
@@ -1454,6 +2089,36 @@ function updatePlaybackCamera(playback) {
   playback.camera.lookAt(controls.target);
 }
 
+function updateAircraftCamera(playback, aircraft) {
+  if (!playback || !aircraft) return;
+  if (state.playbackCameraMode === "observer") return;
+  if (state.playbackCameraMode === "first") {
+    const forward = new THREE.Vector3(1, 0, 0).applyQuaternion(aircraft.quaternion).normalize();
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(aircraft.quaternion).normalize();
+    playback.camera.position.copy(aircraft.position).addScaledVector(forward, 0.28).addScaledVector(up, 0.16);
+    playback.camera.up.copy(up);
+    playback.camera.lookAt(aircraft.position.clone().addScaledVector(forward, 8).addScaledVector(up, 0.08));
+    return;
+  }
+  if (state.playbackCameraMode === "chase") {
+    const forward = new THREE.Vector3(1, 0, 0).applyQuaternion(aircraft.quaternion);
+    forward.y = 0;
+    if (forward.lengthSq() < 1e-8) forward.set(1, 0, 0);
+    forward.normalize();
+    const target = aircraft.position.clone().addScaledVector(forward, 0.8);
+    playback.camera.up.set(0, 1, 0);
+    playback.camera.position
+      .copy(aircraft.position)
+      .addScaledVector(forward, -Math.max(playback.controls.distance * 0.7, 5))
+      .add(new THREE.Vector3(0, Math.max(playback.controls.distance * 0.28, 2), 0));
+    playback.camera.lookAt(target);
+    return;
+  }
+  playback.camera.up.set(0, 1, 0);
+  playback.controls.target.copy(aircraft.position);
+  updatePlaybackCamera(playback);
+}
+
 function bindOrbitControls(host, playback) {
   const controls = playback.controls;
   host.addEventListener("contextmenu", (event) => event.preventDefault());
@@ -1471,9 +2136,9 @@ function bindOrbitControls(host, playback) {
       const panScale = controls.distance * 0.0015;
       const right = new THREE.Vector3().subVectors(playback.camera.position, controls.target).cross(playback.camera.up).normalize();
       const up = playback.camera.up.clone().normalize();
-      controls.target.addScaledVector(right, -dx * panScale).addScaledVector(up, dy * panScale);
+      controls.target.addScaledVector(right, dx * panScale).addScaledVector(up, dy * panScale);
     } else {
-      controls.yaw -= dx * 0.006;
+      controls.yaw += dx * 0.006;
       controls.pitch = clamp(controls.pitch - dy * 0.006, -1.42, 1.42);
     }
     updatePlaybackCamera(playback);
@@ -1520,6 +2185,9 @@ function ensurePlaybackScene() {
     scene,
     camera,
     aircraft,
+    flightAircraft: null,
+    flightTrail: null,
+    flightTrailPoints: [],
     grid,
     axes: null,
     trackLine: null,
@@ -1904,17 +2572,15 @@ function paintScrubLegend(track) {
 
 function renderPlaybackControls(track) {
   const toggle = document.querySelector("#playback-toggle");
-  const follow = document.querySelector("#playback-follow");
+  const camera = document.querySelector("#playback-camera");
   const speed = document.querySelector("#playback-speed");
   const segmentSelect = document.querySelector("#playback-segment");
   if (toggle) {
-    toggle.textContent = state.playbackPlaying ? "||" : ">";
+    toggle.innerHTML = state.playbackPlaying ? "&#10074;&#10074;" : "&#9654;";
     toggle.setAttribute("aria-label", state.playbackPlaying ? "Pause" : "Play");
+    toggle.title = state.playbackPlaying ? "Pause" : "Play";
   }
-  if (follow) {
-    follow.classList.toggle("active", state.playbackFollow);
-    follow.setAttribute("aria-pressed", String(state.playbackFollow));
-  }
+  if (camera) camera.value = state.playbackCameraMode;
   if (speed) speed.value = String(state.playbackSpeed);
   if (segmentSelect) {
     // The flight explorer is the single flight selector while it drives the
@@ -1923,7 +2589,6 @@ function renderPlaybackControls(track) {
     const wrapper = segmentSelect.closest("label");
     if (wrapper) wrapper.style.display = state.playbackTrackOverride ? "none" : "";
   }
-  renderPlaybackMethodPicker();
   const predict = document.querySelector("#playback-predict");
   if (predict) predict.style.display = state.playbackTrackOverride ? "" : "none";
   if (segmentSelect && track && !state.playbackTrackOverride) {
@@ -1951,6 +2616,7 @@ function tickPlayback(nowMs) {
     if (state.playbackPlaying && !state.playbackScrubbing) {
       state.playbackTimeS = (state.playbackTimeS + deltaS * state.playbackSpeed) % playbackDuration(segment);
     }
+    const flightActive = state.flightSim.active;
     const sample = sampleTrack(segment, state.playbackTimeS, { loop: true });
     if (sample) {
       // During a mocap dropout there is no data for where the aircraft is:
@@ -1962,7 +2628,7 @@ function tickPlayback(nowMs) {
         playback.aircraft.quaternion.copy(sample.quaternion);
       }
       updateAircraftControls(playback.aircraft, sample.controls, deltaS);
-      updateControlHud(sample.controls, sample.mode);
+      if (!flightActive) updateControlHud(sample.controls, sample.mode);
       for (const overlay of playback.methodAircraft) {
         const methodSample = sampleTrack(overlay.segment, state.playbackTimeS - (overlay.segment.flightOffsetS || 0));
         // Ghosts hide during dropouts too: a prediction with no measurement
@@ -1973,14 +2639,14 @@ function tickPlayback(nowMs) {
         overlay.mesh.quaternion.copy(methodSample.quaternion);
         updateAircraftControls(overlay.mesh, methodSample.controls, deltaS);
       }
-      if (state.playbackFollow) {
+      if (!flightActive) {
         // Follow the (frozen-during-dropout) aircraft, not the raw sample:
         // the sample path is interpolation during gaps and the camera would
         // glide along it with no aircraft in view.
-        playback.controls.target.copy(playback.aircraft.position);
-        updatePlaybackCamera(playback);
+        updateAircraftCamera(playback, playback.aircraft);
       }
     }
+    if (flightActive) updateFlightSim(playback, deltaS);
     applyTrailWindow(playback, segment);
     updatePlaybackScrub(segment);
     playback.renderer.render(playback.scene, playback.camera);
@@ -2166,6 +2832,7 @@ function render() {
   renderDatasets();
   renderManeuver();
   renderPlayback();
+  renderFlightSimControls();
   renderTimeseries();
 }
 
@@ -2175,6 +2842,7 @@ async function init() {
   state.maneuvers = await loadJson("maneuver_summary.json");
   state.playback = await loadJson("playback.json");
   state.methodTraces = await loadJson("method_traces.json");
+  state.externalFlightModels = await loadExternalFlightModelEntries();
   if (!state.manifest.model_families.includes(state.modelFamily)) {
     state.modelFamily = state.manifest.model_families[0] || "aircraft6dof";
   }

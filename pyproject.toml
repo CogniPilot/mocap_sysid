@@ -12,6 +12,7 @@ dependencies = [
   "matplotlib",
   "numpy",
   "pandas",
+  "rumoca==0.9.8",
   "scipy",
 ]
 
@@ -35,4 +36,4 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-"models.aircraft6dof.modelica" = ["*.mo", "generated/*.json"]
+"models.aircraft6dof.modelica" = ["*.mo"]
